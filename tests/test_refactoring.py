@@ -260,16 +260,22 @@ class TestRendering:
 
 
 class TestDumpVfs:
+    def _mock_agent(self, files: dict):
+        """Create a mock agent whose get_state returns the given files."""
+        agent = MagicMock()
+        state = MagicMock()
+        state.values = {"files": files}
+        agent.get_state.return_value = state
+        return agent
+
     def test_writes_files_and_skips_skills(self, tmp_path):
         from src.runner import dump_vfs
 
-        result = {
-            "files": {
-                "/essay/draft.md": {"content": ["hello", "world"]},
-                "/skills/section-writing/SKILL.md": {"content": ["skip me"]},
-            }
+        files = {
+            "/essay/draft.md": {"content": ["hello", "world"]},
+            "/skills/section-writing/SKILL.md": {"content": ["skip me"]},
         }
-        dump_vfs(result, tmp_path)
+        dump_vfs(self._mock_agent(files), "t1", tmp_path)
         assert (tmp_path / "vfs" / "essay" / "draft.md").read_text() == "hello\nworld"
         assert not (tmp_path / "vfs" / "skills").exists()
 
@@ -277,5 +283,5 @@ class TestDumpVfs:
         from src.runner import dump_vfs
 
         with caplog.at_level(logging.WARNING):
-            dump_vfs({"files": {}}, tmp_path)
+            dump_vfs(self._mock_agent({}), "t1", tmp_path)
         assert "No VFS files" in caplog.text

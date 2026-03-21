@@ -38,6 +38,7 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 from langchain_core.messages import HumanMessage
+from langgraph.graph.state import CompiledStateGraph
 
 logger = logging.getLogger(__name__)
 
@@ -62,16 +63,22 @@ def _setup_file_logging(output_dir: Path) -> logging.FileHandler:
     return handler
 
 
-def dump_vfs(result: dict, output_dir: Path) -> None:
-    """Dump the VFS contents from an agent result to a local directory.
+def dump_vfs(
+    agent: CompiledStateGraph,
+    thread_id: str,
+    output_dir: Path,
+) -> None:
+    """Dump the VFS contents from an agent's graph state to a local directory.
 
     Args:
-        result: The final agent state dict (must contain a 'files' key).
+        agent: The compiled agent graph (used to retrieve full state).
+        thread_id: The thread ID for the run.
         output_dir: Directory to write VFS files into (files go under vfs/ subdirectory).
     """
-    vfs_files = result.get("files", {})
+    state = agent.get_state({"configurable": {"thread_id": thread_id}})
+    vfs_files = state.values.get("files", {})
     if not vfs_files:
-        logger.warning("No VFS files found in agent result.")
+        logger.warning("No VFS files found in agent state.")
         return
 
     vfs_dir = output_dir / "vfs"
@@ -179,7 +186,7 @@ def resume(
     finally:
         ctx.teardown()
 
-    dump_vfs(result, output_dir)
+    dump_vfs(agent, ctx.thread_id, output_dir)
     return result
 
 
@@ -237,7 +244,7 @@ def run(
         ctx.teardown()
 
     if output_dir is not None:
-        dump_vfs(result, output_dir)
+        dump_vfs(agent, ctx.thread_id, output_dir)
 
     return result
 
@@ -275,7 +282,7 @@ def run_prompt(
         ctx.teardown()
 
     if output_dir is not None:
-        dump_vfs(result, output_dir)
+        dump_vfs(agent, ctx.thread_id, output_dir)
 
     return result
 
