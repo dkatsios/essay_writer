@@ -15,17 +15,12 @@ from typing import Annotated
 import httpx
 from langchain_core.tools import tool
 
+from src.tools._http import get_ssl_verify
+
 logger = logging.getLogger(__name__)
 
 _OPENALEX_API = "https://api.openalex.org/works"
 _DEFAULT_MAILTO = "essay-writer@example.com"
-
-
-def _get_ssl_verify() -> str | bool:
-    """Return the CA bundle path if set, otherwise default verification."""
-    return (
-        os.environ.get("SSL_CERT_FILE") or os.environ.get("REQUESTS_CA_BUNDLE") or True
-    )
 
 
 @tool
@@ -47,7 +42,7 @@ def openalex_search(
 
     try:
         resp = httpx.get(
-            _OPENALEX_API, params=params, timeout=30, verify=_get_ssl_verify()
+            _OPENALEX_API, params=params, timeout=30, verify=get_ssl_verify()
         )
         resp.raise_for_status()
     except httpx.HTTPError as exc:

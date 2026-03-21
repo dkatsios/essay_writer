@@ -10,7 +10,7 @@ models:
 
 pipeline:
   checkpoint_after_draft_plan: false
-  checkpoint_after_final_plan: true
+  checkpoint_after_final_plan: false
   checkpoint_after_review: false
   default_mode: "autonomous"
 

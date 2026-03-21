@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from pathlib import Path
-
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph.state import CompiledStateGraph
 
@@ -22,6 +20,7 @@ from src.tools import (
     academic_search,
     build_docx,
     count_words,
+    crossref_search,
     fetch_url,
     openalex_search,
     read_docx,
@@ -88,7 +87,7 @@ def create_essay_agent(
 
     # Tool sets for different agent roles
     common_tools = [read_pdf, read_docx, count_words, fetch_url]
-    research_tools = [academic_search, openalex_search, fetch_url]
+    research_tools = [academic_search, openalex_search, crossref_search, fetch_url]
     builder_tools = [build_docx]
 
     # Render orchestrator system prompt

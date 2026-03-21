@@ -7,7 +7,10 @@ from typing import Literal
 
 from pydantic import BaseModel
 from pydantic_settings import BaseSettings, SettingsConfigDict
-from pydantic_settings.sources import PydanticBaseSettingsSource, YamlConfigSettingsSource
+from pydantic_settings.sources import (
+    PydanticBaseSettingsSource,
+    YamlConfigSettingsSource,
+)
 
 _DEFAULT_YAML = Path(__file__).parent / "default.yaml"
 
@@ -29,7 +32,7 @@ class PipelineConfig(BaseModel):
     """Pipeline behavior settings."""
 
     checkpoint_after_draft_plan: bool = False
-    checkpoint_after_final_plan: bool = True
+    checkpoint_after_final_plan: bool = False
     checkpoint_after_review: bool = False
     default_mode: Literal["autonomous", "interactive"] = "autonomous"
 

@@ -17,6 +17,8 @@ from typing import Annotated
 import httpx
 from langchain_core.tools import tool
 
+from src.tools._http import get_ssl_verify
+
 logger = logging.getLogger(__name__)
 
 _SEMANTIC_SCHOLAR_API = "https://api.semanticscholar.org/graph/v1/paper/search"
@@ -27,13 +29,6 @@ _MIN_REQUEST_INTERVAL = 3.0  # seconds between requests (safe for unauthenticate
 # Thread-safe throttle: parallel subagents share this to avoid bursting
 _request_lock = threading.Lock()
 _last_request_time = 0.0
-
-
-def _get_ssl_verify() -> str | bool:
-    """Return the CA bundle path if set, otherwise default verification."""
-    return (
-        os.environ.get("SSL_CERT_FILE") or os.environ.get("REQUESTS_CA_BUNDLE") or True
-    )
 
 
 def _throttle() -> None:
@@ -80,7 +75,7 @@ def academic_search(
             params=params,
             headers=headers,
             timeout=30,
-            verify=_get_ssl_verify(),
+            verify=get_ssl_verify(),
         )
         if resp.status_code == 429:
             wait = _INITIAL_BACKOFF * (2**attempt)

@@ -105,9 +105,12 @@ def _thread_id_from_dir(output_dir: Path) -> str:
 
 def _create_checkpointer(checkpoint_db: Path):
     """Create a SqliteSaver and eagerly initialize the DB on disk."""
+    import sqlite3
+
     from langgraph.checkpoint.sqlite import SqliteSaver
 
-    checkpointer = SqliteSaver.from_conn_string(str(checkpoint_db))
+    conn = sqlite3.connect(str(checkpoint_db), check_same_thread=False)
+    checkpointer = SqliteSaver(conn)
     checkpointer.setup()
     return checkpointer
 

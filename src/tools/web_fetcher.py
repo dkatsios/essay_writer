@@ -2,22 +2,16 @@
 
 from __future__ import annotations
 
-import os
 import re
 from typing import Annotated
 
 import httpx
 from langchain_core.tools import tool
 
+from src.tools._http import get_ssl_verify
+
 _TAG_RE = re.compile(r"<[^>]+>")
 _WHITESPACE_RE = re.compile(r"\n{3,}")
-
-
-def _get_ssl_verify() -> str | bool:
-    """Return the CA bundle path if set, otherwise default verification."""
-    return (
-        os.environ.get("SSL_CERT_FILE") or os.environ.get("REQUESTS_CA_BUNDLE") or True
-    )
 
 
 def _html_to_text(html: str) -> str:
@@ -31,7 +25,7 @@ def fetch_url(
     url: Annotated[str, "The URL to fetch content from."],
 ) -> str:
     """Fetch content from a URL and return as plain text. Strips HTML tags."""
-    resp = httpx.get(url, follow_redirects=True, timeout=30, verify=_get_ssl_verify())
+    resp = httpx.get(url, follow_redirects=True, timeout=30, verify=get_ssl_verify())
     resp.raise_for_status()
 
     content_type = resp.headers.get("content-type", "")
