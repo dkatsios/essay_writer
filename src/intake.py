@@ -16,6 +16,8 @@ import pymupdf
 from docx import Document as DocxDocument
 from pptx import Presentation
 
+from src.tools.docx_reader import extract_docx_text
+
 # ---------------------------------------------------------------------------
 # File type classification
 # ---------------------------------------------------------------------------
@@ -29,8 +31,15 @@ _DOCX_EXTENSIONS = {".docx"}
 _PPTX_EXTENSIONS = {".pptx"}
 
 _IMAGE_EXTENSIONS = {
-    ".png", ".jpg", ".jpeg", ".gif", ".bmp",
-    ".tiff", ".tif", ".webp", ".svg",
+    ".png",
+    ".jpg",
+    ".jpeg",
+    ".gif",
+    ".bmp",
+    ".tiff",
+    ".tif",
+    ".webp",
+    ".svg",
 }
 
 _UNSUPPORTED_KNOWN = {
@@ -46,30 +55,36 @@ _UNSUPPORTED_KNOWN = {
 }
 
 SUPPORTED_EXTENSIONS = (
-    _TEXT_EXTENSIONS | _PDF_EXTENSIONS | _DOCX_EXTENSIONS
-    | _PPTX_EXTENSIONS | _IMAGE_EXTENSIONS
+    _TEXT_EXTENSIONS
+    | _PDF_EXTENSIONS
+    | _DOCX_EXTENSIONS
+    | _PPTX_EXTENSIONS
+    | _IMAGE_EXTENSIONS
 )
+
+
+_EXTENSION_CATEGORIES: dict[str, str] = {
+    ext: cat
+    for cat, exts in [
+        ("text", _TEXT_EXTENSIONS),
+        ("pdf", _PDF_EXTENSIONS),
+        ("docx", _DOCX_EXTENSIONS),
+        ("pptx", _PPTX_EXTENSIONS),
+        ("image", _IMAGE_EXTENSIONS),
+    ]
+    for ext in exts
+}
 
 
 def _classify(path: Path) -> str:
     """Return the category of a file: 'text', 'pdf', 'docx', 'pptx', 'image', or 'unsupported'."""
-    ext = path.suffix.lower()
-    if ext in _TEXT_EXTENSIONS:
-        return "text"
-    if ext in _PDF_EXTENSIONS:
-        return "pdf"
-    if ext in _DOCX_EXTENSIONS:
-        return "docx"
-    if ext in _PPTX_EXTENSIONS:
-        return "pptx"
-    if ext in _IMAGE_EXTENSIONS:
-        return "image"
-    return "unsupported"
+    return _EXTENSION_CATEGORIES.get(path.suffix.lower(), "unsupported")
 
 
 # ---------------------------------------------------------------------------
 # Content extraction
 # ---------------------------------------------------------------------------
+
 
 def _extract_text(path: Path) -> str:
     return path.read_text(encoding="utf-8")
@@ -109,36 +124,27 @@ def _extract_pdf(path: Path) -> tuple[str | None, list[dict] | None]:
     return None, image_blocks
 
 
+def _make_image_block(image_bytes: bytes, mime: str = "image/png") -> dict:
+    """Encode raw bytes as a base64 multimodal content block."""
+    data = base64.standard_b64encode(image_bytes).decode("ascii")
+    return {
+        "type": "image_url",
+        "image_url": {"url": f"data:{mime};base64,{data}"},
+    }
+
+
 def _render_pdf_pages(doc: pymupdf.Document) -> list[dict]:
     """Render PDF pages as PNG images for multimodal LLM consumption."""
     blocks: list[dict] = []
     for page in doc:
         # Render at 150 DPI — good balance between quality and size
         pix = page.get_pixmap(dpi=150)
-        png_bytes = pix.tobytes("png")
-        data = base64.standard_b64encode(png_bytes).decode("ascii")
-        blocks.append({
-            "type": "image_url",
-            "image_url": {"url": f"data:image/png;base64,{data}"},
-        })
+        blocks.append(_make_image_block(pix.tobytes("png")))
     return blocks
 
 
 def _extract_docx(path: Path) -> str:
-    doc = DocxDocument(str(path))
-    parts: list[str] = []
-    for para in doc.paragraphs:
-        style_name = para.style.name if para.style else ""
-        text = para.text.strip()
-        if not text:
-            continue
-        if style_name.startswith("Heading"):
-            level = style_name.replace("Heading", "").strip()
-            prefix = "#" * (int(level) if level.isdigit() else 1)
-            parts.append(f"{prefix} {text}")
-        else:
-            parts.append(text)
-    return "\n\n".join(parts)
+    return extract_docx_text(DocxDocument(str(path)))
 
 
 def _extract_pptx(path: Path) -> str:
@@ -173,17 +179,13 @@ def _image_mime(path: Path) -> str:
 
 def _load_image_block(path: Path) -> dict:
     """Load an image as a base64 content block for multimodal messages."""
-    data = base64.standard_b64encode(path.read_bytes()).decode("ascii")
-    mime = _image_mime(path)
-    return {
-        "type": "image_url",
-        "image_url": {"url": f"data:{mime};base64,{data}"},
-    }
+    return _make_image_block(path.read_bytes(), _image_mime(path))
 
 
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
+
 
 class InputFile:
     """Represents a discovered input file with its extracted content."""
@@ -219,8 +221,7 @@ def scan(input_path: str | Path) -> list[InputFile]:
         files = [path]
     elif path.is_dir():
         files = sorted(
-            f for f in path.rglob("*")
-            if f.is_file() and not f.name.startswith(".")
+            f for f in path.rglob("*") if f.is_file() and not f.name.startswith(".")
         )
     else:
         raise ValueError(f"Input path is neither a file nor a directory: {path}")
@@ -242,7 +243,9 @@ def scan(input_path: str | Path) -> list[InputFile]:
         elif category == "pptx":
             results.append(InputFile(fp, category, text=_extract_pptx(fp)))
         elif category == "image":
-            results.append(InputFile(fp, category, image_blocks=[_load_image_block(fp)]))
+            results.append(
+                InputFile(fp, category, image_blocks=[_load_image_block(fp)])
+            )
         else:
             ext = fp.suffix.lower()
             hint = _UNSUPPORTED_KNOWN.get(ext, "Unknown file type — skipping")
@@ -292,9 +295,7 @@ def build_message_content(
             warnings.append(f"- {f.path.name}: {f.warning}")
             continue
         if f.text:
-            text_parts.append(
-                f"### File: {f.path.name}\n\n{f.text}"
-            )
+            text_parts.append(f"### File: {f.path.name}\n\n{f.text}")
         if f.image_blocks:
             image_blocks.extend(f.image_blocks)
             n_pages = len(f.image_blocks)

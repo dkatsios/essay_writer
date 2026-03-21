@@ -115,6 +115,40 @@ def _create_checkpointer(checkpoint_db: Path):
     return checkpointer
 
 
+class _ExecutionContext:
+    """Shared checkpoint / logging state for a single run."""
+
+    __slots__ = ("thread_id", "checkpointer", "log_handler")
+
+    def __init__(
+        self,
+        output_dir: Path | None,
+        *,
+        require_checkpoint_db: bool = False,
+    ):
+        self.checkpointer = None
+        self.thread_id = "default"
+        self.log_handler: logging.FileHandler | None = None
+
+        if output_dir is None:
+            return
+
+        output_dir.mkdir(parents=True, exist_ok=True)
+        self.thread_id = _thread_id_from_dir(output_dir)
+
+        checkpoint_db = output_dir / "checkpoints.db"
+        if require_checkpoint_db and not checkpoint_db.exists():
+            raise FileNotFoundError(f"No checkpoint DB found at {checkpoint_db}")
+        self.checkpointer = _create_checkpointer(checkpoint_db)
+        self.log_handler = _setup_file_logging(output_dir)
+
+    def teardown(self) -> None:
+        """Remove the file log handler (if any) from the root logger."""
+        if self.log_handler is not None:
+            logging.getLogger().removeHandler(self.log_handler)
+            self.log_handler.close()
+
+
 def resume(
     output_dir: Path,
     *,
@@ -131,27 +165,19 @@ def resume(
     Returns:
         The final agent state dict.
     """
-    checkpoint_db = output_dir / "checkpoints.db"
-    if not checkpoint_db.exists():
-        raise FileNotFoundError(f"No checkpoint DB found at {checkpoint_db}")
-
-    thread_id = _thread_id_from_dir(output_dir)
+    ctx = _ExecutionContext(output_dir, require_checkpoint_db=True)
     config = load_config(config_path)
-    checkpointer = _create_checkpointer(checkpoint_db)
 
-    agent = create_essay_agent(config, checkpointer=checkpointer)
-
-    log_handler = _setup_file_logging(output_dir)
-    logger.info("Resuming run from %s (thread: %s)", output_dir, thread_id)
+    agent = create_essay_agent(config, checkpointer=ctx.checkpointer)
+    logger.info("Resuming run from %s (thread: %s)", output_dir, ctx.thread_id)
 
     try:
         result = agent.invoke(
             None,
-            config={"configurable": {"thread_id": thread_id}},
+            config={"configurable": {"thread_id": ctx.thread_id}},
         )
     finally:
-        logging.getLogger().removeHandler(log_handler)
-        log_handler.close()
+        ctx.teardown()
 
     dump_vfs(result, output_dir)
     return result
@@ -194,30 +220,21 @@ def run(
 
     # Set up checkpointing and logging BEFORE the slow agent creation
     # so that an early SIGINT still leaves resumable artifacts.
-    checkpointer = None
-    thread_id = "default"
-    log_handler = None
-    if output_dir is not None:
-        output_dir.mkdir(parents=True, exist_ok=True)
-        thread_id = _thread_id_from_dir(output_dir)
-        checkpointer = _create_checkpointer(output_dir / "checkpoints.db")
-        log_handler = _setup_file_logging(output_dir)
+    ctx = _ExecutionContext(output_dir)
 
     # Create and run the agent
     agent = create_essay_agent(
-        config, input_staging_dir=str(staging_dir), checkpointer=checkpointer
+        config, input_staging_dir=str(staging_dir), checkpointer=ctx.checkpointer
     )
 
     try:
         result = agent.invoke(
             {"messages": [HumanMessage(content=content)]},
-            config={"configurable": {"thread_id": thread_id}},
+            config={"configurable": {"thread_id": ctx.thread_id}},
         )
     finally:
         shutil.rmtree(staging_dir, ignore_errors=True)
-        if log_handler is not None:
-            logging.getLogger().removeHandler(log_handler)
-            log_handler.close()
+        ctx.teardown()
 
     if output_dir is not None:
         dump_vfs(result, output_dir)
@@ -245,26 +262,17 @@ def run_prompt(
     config = load_config(config_path)
 
     # Set up checkpointing and logging BEFORE the slow agent creation
-    checkpointer = None
-    thread_id = "default"
-    log_handler = None
-    if output_dir is not None:
-        output_dir.mkdir(parents=True, exist_ok=True)
-        thread_id = _thread_id_from_dir(output_dir)
-        checkpointer = _create_checkpointer(output_dir / "checkpoints.db")
-        log_handler = _setup_file_logging(output_dir)
+    ctx = _ExecutionContext(output_dir)
 
-    agent = create_essay_agent(config, checkpointer=checkpointer)
+    agent = create_essay_agent(config, checkpointer=ctx.checkpointer)
 
     try:
         result = agent.invoke(
             {"messages": [HumanMessage(content=prompt)]},
-            config={"configurable": {"thread_id": thread_id}},
+            config={"configurable": {"thread_id": ctx.thread_id}},
         )
     finally:
-        if log_handler is not None:
-            logging.getLogger().removeHandler(log_handler)
-            log_handler.close()
+        ctx.teardown()
 
     if output_dir is not None:
         dump_vfs(result, output_dir)

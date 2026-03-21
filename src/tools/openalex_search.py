@@ -15,12 +15,11 @@ from typing import Annotated
 import httpx
 from langchain_core.tools import tool
 
-from src.tools._http import get_ssl_verify
+from src.tools._http import DEFAULT_MAILTO, get_ssl_verify, search_error_response
 
 logger = logging.getLogger(__name__)
 
 _OPENALEX_API = "https://api.openalex.org/works"
-_DEFAULT_MAILTO = "essay-writer@example.com"
 
 
 @tool
@@ -33,7 +32,7 @@ def openalex_search(
     Returns structured metadata: title, authors, year, abstract, DOI, URL.
     Good coverage of non-English and European sources.
     """
-    mailto = os.environ.get("OPENALEX_MAILTO", _DEFAULT_MAILTO)
+    mailto = os.environ.get("OPENALEX_MAILTO", DEFAULT_MAILTO)
     params = {
         "search": query,
         "per_page": max_results,
@@ -47,10 +46,7 @@ def openalex_search(
         resp.raise_for_status()
     except httpx.HTTPError as exc:
         logger.error("OpenAlex request failed for query %r: %s", query, exc)
-        return json.dumps(
-            {"error": "request_failed", "message": str(exc), "query": query},
-            ensure_ascii=False,
-        )
+        return search_error_response("openalex", query, exc)
 
     data = resp.json()
 

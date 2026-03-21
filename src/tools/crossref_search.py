@@ -11,17 +11,17 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 from typing import Annotated
 
 import httpx
 from langchain_core.tools import tool
 
-from src.tools._http import get_ssl_verify
+from src.tools._http import DEFAULT_MAILTO, get_ssl_verify, search_error_response
 
 logger = logging.getLogger(__name__)
 
 _CROSSREF_API = "https://api.crossref.org/works"
-_DEFAULT_MAILTO = "essay-writer@example.com"
 
 
 @tool
@@ -34,7 +34,7 @@ def crossref_search(
     Returns structured metadata: title, authors, year, abstract, DOI, URL.
     Broad journal article coverage across all disciplines.
     """
-    mailto = os.environ.get("CROSSREF_MAILTO", _DEFAULT_MAILTO)
+    mailto = os.environ.get("CROSSREF_MAILTO", DEFAULT_MAILTO)
     params = {
         "query": query,
         "rows": max_results,
@@ -49,10 +49,7 @@ def crossref_search(
         resp.raise_for_status()
     except httpx.HTTPError as exc:
         logger.error("Crossref request failed for query %r: %s", query, exc)
-        return json.dumps(
-            {"error": "request_failed", "message": str(exc), "query": query},
-            ensure_ascii=False,
-        )
+        return search_error_response("crossref", query, exc)
 
     data = resp.json()
 
@@ -74,9 +71,7 @@ def crossref_search(
 
         # Crossref abstracts may contain JATS XML tags — strip them
         abstract = item.get("abstract", "") or ""
-        if "<jats:" in abstract or "</" in abstract:
-            import re
-
+        if "<" in abstract:
             abstract = re.sub(r"<[^>]+>", "", abstract).strip()
 
         # Title is a list in Crossref

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from functools import lru_cache
 from pathlib import Path
 
 from jinja2 import Environment, FileSystemLoader
@@ -9,11 +10,11 @@ from jinja2 import Environment, FileSystemLoader
 _TEMPLATES_DIR = Path(__file__).parent / "templates"
 
 
-def create_template_env(templates_dir: str | Path | None = None) -> Environment:
-    """Create a Jinja2 environment for prompt templates."""
-    path = Path(templates_dir) if templates_dir else _TEMPLATES_DIR
+@lru_cache(maxsize=4)
+def _get_env(templates_dir: str) -> Environment:
+    """Return a cached Jinja2 environment for the given directory."""
     return Environment(
-        loader=FileSystemLoader(str(path)),
+        loader=FileSystemLoader(templates_dir),
         trim_blocks=True,
         lstrip_blocks=True,
     )
@@ -21,6 +22,6 @@ def create_template_env(templates_dir: str | Path | None = None) -> Environment:
 
 def render_prompt(template_name: str, **context: object) -> str:
     """Render a Jinja2 template with the given context."""
-    env = create_template_env()
+    env = _get_env(str(_TEMPLATES_DIR))
     template = env.get_template(template_name)
     return template.render(**context)
