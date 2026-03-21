@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph.state import CompiledStateGraph
 
@@ -65,6 +67,7 @@ def _create_backend(config: EssayWriterConfig, input_staging_dir: str | None = N
 def create_essay_agent(
     config: EssayWriterConfig | None = None,
     input_staging_dir: str | None = None,
+    checkpoint_db_path: str | Path | None = None,
 ) -> CompiledStateGraph:
     """Create and return the essay writer agent graph.
 
@@ -72,6 +75,8 @@ def create_essay_agent(
         config: Configuration object. If None, loads from default.yaml.
         input_staging_dir: Temp directory with staged input files (from intake).
             If None, the /input/ backend route is omitted (prompt-only mode).
+        checkpoint_db_path: Path to a SQLite DB for persistent checkpoints.
+            If None, uses in-memory checkpointing (lost on exit).
 
     Returns:
         A compiled LangGraph agent ready to invoke.
@@ -100,8 +105,13 @@ def create_essay_agent(
         make_builder(config, builder_tools),
     ]
 
-    # Checkpointer for multi-turn conversations (needed for human checkpoints)
-    checkpointer = MemorySaver()
+    # Persistent checkpointer if DB path is given, otherwise in-memory
+    if checkpoint_db_path is not None:
+        from langgraph.checkpoint.sqlite import SqliteSaver
+
+        checkpointer = SqliteSaver.from_conn_string(str(checkpoint_db_path))
+    else:
+        checkpointer = MemorySaver()
 
     return create_deep_agent(
         model=config.models.orchestrator,

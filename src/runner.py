@@ -89,6 +89,50 @@ def dump_vfs(result: dict, output_dir: Path) -> None:
     logger.info("VFS dumped to %s (%d files)", vfs_dir, written)
 
 
+def resume(
+    output_dir: Path,
+    *,
+    config_path: str | None = None,
+) -> dict:
+    """Resume a previous run from its checkpoint DB.
+
+    Args:
+        output_dir: The .output/run_<ts>/ directory from a previous run.
+            Must contain checkpoints.db and thread_id files.
+        config_path: Path to the YAML configuration file.
+
+    Returns:
+        The final agent state dict.
+    """
+    checkpoint_db = output_dir / "checkpoints.db"
+    thread_id_file = output_dir / "thread_id"
+
+    if not checkpoint_db.exists():
+        raise FileNotFoundError(f"No checkpoint DB found at {checkpoint_db}")
+    if not thread_id_file.exists():
+        raise FileNotFoundError(f"No thread_id file found at {thread_id_file}")
+
+    thread_id = thread_id_file.read_text().strip()
+    config = load_config(config_path)
+
+    agent = create_essay_agent(config, checkpoint_db_path=checkpoint_db)
+
+    log_handler = _setup_file_logging(output_dir)
+    logger.info("Resuming run from %s (thread: %s)", output_dir, thread_id)
+
+    try:
+        result = agent.invoke(
+            None,
+            config={"configurable": {"thread_id": thread_id}},
+        )
+    finally:
+        logging.getLogger().removeHandler(log_handler)
+        log_handler.close()
+
+    dump_vfs(result, output_dir)
+    return result
+
+
 def run(
     input_path: str,
     *,
@@ -125,15 +169,26 @@ def run(
     # Build the message content (plain text or multimodal)
     content = build_message_content(input_files, extra_prompt=prompt)
 
+    # Use persistent checkpoint DB when output_dir is set
+    checkpoint_db = None
+    if output_dir is not None:
+        output_dir.mkdir(parents=True, exist_ok=True)
+        checkpoint_db = output_dir / "checkpoints.db"
+
     # Create and run the agent
-    agent = create_essay_agent(config, input_staging_dir=str(staging_dir))
+    agent = create_essay_agent(
+        config, input_staging_dir=str(staging_dir), checkpoint_db_path=checkpoint_db
+    )
     if thread_id is None:
         thread_id = uuid.uuid4().hex
+
+    # Save thread_id for resume
+    if output_dir is not None:
+        (output_dir / "thread_id").write_text(thread_id)
 
     # Set up file logging if output directory is requested
     log_handler = None
     if output_dir is not None:
-        output_dir.mkdir(parents=True, exist_ok=True)
         log_handler = _setup_file_logging(output_dir)
 
     try:
@@ -172,15 +227,25 @@ def run_prompt(
         The final agent state dict.
     """
     config = load_config(config_path)
-    agent = create_essay_agent(config)
+
+    # Use persistent checkpoint DB when output_dir is set
+    checkpoint_db = None
+    if output_dir is not None:
+        output_dir.mkdir(parents=True, exist_ok=True)
+        checkpoint_db = output_dir / "checkpoints.db"
+
+    agent = create_essay_agent(config, checkpoint_db_path=checkpoint_db)
 
     if thread_id is None:
         thread_id = uuid.uuid4().hex
 
+    # Save thread_id for resume
+    if output_dir is not None:
+        (output_dir / "thread_id").write_text(thread_id)
+
     # Set up file logging if output directory is requested
     log_handler = None
     if output_dir is not None:
-        output_dir.mkdir(parents=True, exist_ok=True)
         log_handler = _setup_file_logging(output_dir)
 
     try:
@@ -209,6 +274,7 @@ def main() -> None:
             "  %(prog)s /path/to/brief.pdf\n"
             '  %(prog)s /path/to/files/ --prompt "Focus on economic aspects"\n'
             '  %(prog)s --prompt "Write a 3000-word essay on climate change"\n'
+            "  %(prog)s --resume .output/run_20260321_145536/\n"
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
@@ -244,6 +310,15 @@ def main() -> None:
             "If DIR is omitted, creates a timestamped directory under .output/."
         ),
     )
+    parser.add_argument(
+        "--resume",
+        default=None,
+        metavar="DIR",
+        help=(
+            "Resume a previous run from its checkpoint directory "
+            "(e.g., .output/run_20260321_145536/)."
+        ),
+    )
     args = parser.parse_args()
 
     # Resolve output directory for VFS dump and logs
@@ -262,7 +337,11 @@ def main() -> None:
         datefmt="%H:%M:%S",
     )
 
-    if args.input_path is None and args.prompt is None:
+    # Resume mode — continue from a previous checkpoint
+    if args.resume is not None:
+        resume_dir = Path(args.resume)
+        result = resume(resume_dir, config_path=args.config)
+    elif args.input_path is None and args.prompt is None:
         if sys.stdin.isatty():
             parser.print_help()
             sys.exit(1)
