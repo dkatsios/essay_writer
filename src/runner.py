@@ -30,9 +30,9 @@ from __future__ import annotations
 
 import argparse
 import logging
+import re
 import shutil
 import sys
-import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -89,6 +89,29 @@ def dump_vfs(result: dict, output_dir: Path) -> None:
     logger.info("VFS dumped to %s (%d files)", vfs_dir, written)
 
 
+def _thread_id_from_dir(output_dir: Path) -> str:
+    """Extract the thread_id (timestamp) from a run directory name.
+
+    Expects directory names like 'run_20260321_145536'.
+    """
+    match = re.search(r"run_(\d{8}_\d{6})", output_dir.name)
+    if not match:
+        raise ValueError(
+            f"Cannot extract thread_id from directory name: {output_dir.name}. "
+            "Expected format: run_YYYYMMDD_HHMMSS"
+        )
+    return match.group(1)
+
+
+def _create_checkpointer(checkpoint_db: Path):
+    """Create a SqliteSaver and eagerly initialize the DB on disk."""
+    from langgraph.checkpoint.sqlite import SqliteSaver
+
+    checkpointer = SqliteSaver.from_conn_string(str(checkpoint_db))
+    checkpointer.setup()
+    return checkpointer
+
+
 def resume(
     output_dir: Path,
     *,
@@ -98,24 +121,22 @@ def resume(
 
     Args:
         output_dir: The .output/run_<ts>/ directory from a previous run.
-            Must contain checkpoints.db and thread_id files.
+            Must contain checkpoints.db. The thread_id is derived from the
+            directory name (the timestamp portion).
         config_path: Path to the YAML configuration file.
 
     Returns:
         The final agent state dict.
     """
     checkpoint_db = output_dir / "checkpoints.db"
-    thread_id_file = output_dir / "thread_id"
-
     if not checkpoint_db.exists():
         raise FileNotFoundError(f"No checkpoint DB found at {checkpoint_db}")
-    if not thread_id_file.exists():
-        raise FileNotFoundError(f"No thread_id file found at {thread_id_file}")
 
-    thread_id = thread_id_file.read_text().strip()
+    thread_id = _thread_id_from_dir(output_dir)
     config = load_config(config_path)
+    checkpointer = _create_checkpointer(checkpoint_db)
 
-    agent = create_essay_agent(config, checkpoint_db_path=checkpoint_db)
+    agent = create_essay_agent(config, checkpointer=checkpointer)
 
     log_handler = _setup_file_logging(output_dir)
     logger.info("Resuming run from %s (thread: %s)", output_dir, thread_id)
@@ -138,7 +159,6 @@ def run(
     *,
     prompt: str | None = None,
     config_path: str | None = None,
-    thread_id: str | None = None,
     output_dir: Path | None = None,
 ) -> dict:
     """Run the essay writer agent with input from a file or directory.
@@ -147,8 +167,8 @@ def run(
         input_path: Path to a file or directory containing assignment materials.
         prompt: Optional additional instructions to append.
         config_path: Path to the YAML configuration file.
-        thread_id: Optional thread ID for conversation continuity.
         output_dir: If set, dump VFS and logs to this directory after the run.
+            The directory name provides the thread_id for checkpointing.
 
     Returns:
         The final agent state dict.
@@ -169,27 +189,21 @@ def run(
     # Build the message content (plain text or multimodal)
     content = build_message_content(input_files, extra_prompt=prompt)
 
-    # Use persistent checkpoint DB when output_dir is set
-    checkpoint_db = None
+    # Set up checkpointing and logging BEFORE the slow agent creation
+    # so that an early SIGINT still leaves resumable artifacts.
+    checkpointer = None
+    thread_id = "default"
+    log_handler = None
     if output_dir is not None:
         output_dir.mkdir(parents=True, exist_ok=True)
-        checkpoint_db = output_dir / "checkpoints.db"
+        thread_id = _thread_id_from_dir(output_dir)
+        checkpointer = _create_checkpointer(output_dir / "checkpoints.db")
+        log_handler = _setup_file_logging(output_dir)
 
     # Create and run the agent
     agent = create_essay_agent(
-        config, input_staging_dir=str(staging_dir), checkpoint_db_path=checkpoint_db
+        config, input_staging_dir=str(staging_dir), checkpointer=checkpointer
     )
-    if thread_id is None:
-        thread_id = uuid.uuid4().hex
-
-    # Save thread_id for resume
-    if output_dir is not None:
-        (output_dir / "thread_id").write_text(thread_id)
-
-    # Set up file logging if output directory is requested
-    log_handler = None
-    if output_dir is not None:
-        log_handler = _setup_file_logging(output_dir)
 
     try:
         result = agent.invoke(
@@ -212,7 +226,6 @@ def run_prompt(
     prompt: str,
     *,
     config_path: str | None = None,
-    thread_id: str | None = None,
     output_dir: Path | None = None,
 ) -> dict:
     """Run the essay writer agent with a plain text prompt (no files).
@@ -220,33 +233,25 @@ def run_prompt(
     Args:
         prompt: The essay assignment prompt.
         config_path: Path to the YAML configuration file.
-        thread_id: Optional thread ID for conversation continuity.
         output_dir: If set, dump VFS and logs to this directory after the run.
+            The directory name provides the thread_id for checkpointing.
 
     Returns:
         The final agent state dict.
     """
     config = load_config(config_path)
 
-    # Use persistent checkpoint DB when output_dir is set
-    checkpoint_db = None
-    if output_dir is not None:
-        output_dir.mkdir(parents=True, exist_ok=True)
-        checkpoint_db = output_dir / "checkpoints.db"
-
-    agent = create_essay_agent(config, checkpoint_db_path=checkpoint_db)
-
-    if thread_id is None:
-        thread_id = uuid.uuid4().hex
-
-    # Save thread_id for resume
-    if output_dir is not None:
-        (output_dir / "thread_id").write_text(thread_id)
-
-    # Set up file logging if output directory is requested
+    # Set up checkpointing and logging BEFORE the slow agent creation
+    checkpointer = None
+    thread_id = "default"
     log_handler = None
     if output_dir is not None:
+        output_dir.mkdir(parents=True, exist_ok=True)
+        thread_id = _thread_id_from_dir(output_dir)
+        checkpointer = _create_checkpointer(output_dir / "checkpoints.db")
         log_handler = _setup_file_logging(output_dir)
+
+    agent = create_essay_agent(config, checkpointer=checkpointer)
 
     try:
         result = agent.invoke(
@@ -295,20 +300,10 @@ def main() -> None:
         help="Path to a custom YAML config file (default: config/default.yaml).",
     )
     parser.add_argument(
-        "--thread-id",
-        default=None,
-        help="Thread ID for conversation continuity.",
-    )
-    parser.add_argument(
         "--dump-vfs",
-        nargs="?",
-        const="auto",
-        default=None,
-        metavar="DIR",
-        help=(
-            "Dump VFS contents and logs to a directory after the run. "
-            "If DIR is omitted, creates a timestamped directory under .output/."
-        ),
+        action="store_true",
+        default=False,
+        help=("Dump VFS contents and logs to a timestamped directory under .output/."),
     )
     parser.add_argument(
         "--resume",
@@ -323,12 +318,9 @@ def main() -> None:
 
     # Resolve output directory for VFS dump and logs
     output_dir = None
-    if args.dump_vfs is not None:
-        if args.dump_vfs == "auto":
-            timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
-            output_dir = Path(".output") / f"run_{timestamp}"
-        else:
-            output_dir = Path(args.dump_vfs)
+    if args.dump_vfs:
+        timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+        output_dir = Path(".output") / f"run_{timestamp}"
 
     # Configure console logging
     logging.basicConfig(
@@ -353,7 +345,6 @@ def main() -> None:
         result = run_prompt(
             prompt_text,
             config_path=args.config,
-            thread_id=args.thread_id,
             output_dir=output_dir,
         )
     elif args.input_path is None:
@@ -361,7 +352,6 @@ def main() -> None:
         result = run_prompt(
             args.prompt,
             config_path=args.config,
-            thread_id=args.thread_id,
             output_dir=output_dir,
         )
     else:
@@ -370,7 +360,6 @@ def main() -> None:
             args.input_path,
             prompt=args.prompt,
             config_path=args.config,
-            thread_id=args.thread_id,
             output_dir=output_dir,
         )
 
