@@ -8,12 +8,52 @@ integration testing based on reliability and cost.
 from __future__ import annotations
 
 import json
+import logging
+import os
+import threading
+import time
 from typing import Annotated
 
 import httpx
 from langchain_core.tools import tool
 
+logger = logging.getLogger(__name__)
+
 _SEMANTIC_SCHOLAR_API = "https://api.semanticscholar.org/graph/v1/paper/search"
+_MAX_RETRIES = 3
+_INITIAL_BACKOFF = 2  # seconds
+_MIN_REQUEST_INTERVAL = 3.0  # seconds between requests (safe for unauthenticated)
+
+# Thread-safe throttle: parallel subagents share this to avoid bursting
+_request_lock = threading.Lock()
+_last_request_time = 0.0
+
+
+def _get_ssl_verify() -> str | bool:
+    """Return the CA bundle path if set, otherwise default verification."""
+    return (
+        os.environ.get("SSL_CERT_FILE") or os.environ.get("REQUESTS_CA_BUNDLE") or True
+    )
+
+
+def _throttle() -> None:
+    """Ensure at least _MIN_REQUEST_INTERVAL seconds between API calls."""
+    global _last_request_time
+    with _request_lock:
+        now = time.monotonic()
+        elapsed = now - _last_request_time
+        if elapsed < _MIN_REQUEST_INTERVAL:
+            time.sleep(_MIN_REQUEST_INTERVAL - elapsed)
+        _last_request_time = time.monotonic()
+
+
+def _get_headers() -> dict[str, str]:
+    """Build request headers, including API key if available."""
+    headers: dict[str, str] = {}
+    api_key = os.environ.get("SEMANTIC_SCHOLAR_API_KEY")
+    if api_key:
+        headers["x-api-key"] = api_key
+    return headers
 
 
 @tool
@@ -30,21 +70,62 @@ def academic_search(
         "limit": max_results,
         "fields": "title,authors,year,abstract,externalIds,url",
     }
-    resp = httpx.get(_SEMANTIC_SCHOLAR_API, params=params, timeout=30)
-    resp.raise_for_status()
+
+    last_error = None
+    headers = _get_headers()
+    for attempt in range(_MAX_RETRIES):
+        _throttle()
+        resp = httpx.get(
+            _SEMANTIC_SCHOLAR_API,
+            params=params,
+            headers=headers,
+            timeout=30,
+            verify=_get_ssl_verify(),
+        )
+        if resp.status_code == 429:
+            wait = _INITIAL_BACKOFF * (2**attempt)
+            logger.warning(
+                "Semantic Scholar 429 — retrying in %ds (attempt %d/%d)",
+                wait,
+                attempt + 1,
+                _MAX_RETRIES,
+            )
+            last_error = resp
+            time.sleep(wait)
+            continue
+        resp.raise_for_status()
+        break
+    else:
+        # All retries exhausted on 429
+        logger.error(
+            "Semantic Scholar rate limit exceeded after %d retries for query: %s",
+            _MAX_RETRIES,
+            query,
+        )
+        return json.dumps(
+            {
+                "error": "rate_limited",
+                "message": f"Search API rate limit exceeded after {_MAX_RETRIES} retries. Try again later.",
+                "query": query,
+            },
+            ensure_ascii=False,
+        )
+
     data = resp.json()
 
     results: list[dict] = []
     for paper in data.get("data", []):
         authors = [a.get("name", "") for a in paper.get("authors", [])]
         external_ids = paper.get("externalIds") or {}
-        results.append({
-            "title": paper.get("title", ""),
-            "authors": authors,
-            "year": paper.get("year"),
-            "abstract": paper.get("abstract", ""),
-            "doi": external_ids.get("DOI", ""),
-            "url": paper.get("url", ""),
-        })
+        results.append(
+            {
+                "title": paper.get("title", ""),
+                "authors": authors,
+                "year": paper.get("year"),
+                "abstract": paper.get("abstract", ""),
+                "doi": external_ids.get("DOI", ""),
+                "url": paper.get("url", ""),
+            }
+        )
 
     return json.dumps(results, ensure_ascii=False, indent=2)
