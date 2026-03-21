@@ -38,9 +38,9 @@ from langchain_core.messages import HumanMessage
 
 load_dotenv()
 
-from config.schemas import load_config
-from src.agent import create_essay_agent
-from src.intake import build_message_content, scan, stage_files
+from config.schemas import load_config  # noqa: E402
+from src.agent import create_essay_agent  # noqa: E402
+from src.intake import build_message_content, scan, stage_files  # noqa: E402
 
 
 def run(
@@ -142,7 +142,8 @@ def main() -> None:
         help="Path to a file or directory containing assignment materials.",
     )
     parser.add_argument(
-        "--prompt", "-p",
+        "--prompt",
+        "-p",
         default=None,
         help="Additional instructions or a standalone text prompt (if no input path).",
     )
