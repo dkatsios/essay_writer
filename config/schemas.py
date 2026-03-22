@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Literal
 
 from pydantic import BaseModel
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -19,31 +18,15 @@ class ModelsConfig(BaseModel):
     """Model selection per agent role."""
 
     orchestrator: str = "google_genai:gemini-2.5-flash"
-    planner: str = "google_genai:gemini-2.5-flash"
-    researcher: str = "google_genai:gemini-2.5-flash"
-    cataloguer: str = "google_genai:gemini-2.5-flash"
-    extractor: str = "google_genai:gemini-2.5-flash"
-    writer: str = "google_genai:gemini-2.5-flash"
+    intake: str = "google_genai:gemini-2.5-flash"
+    reader: str = "google_genai:gemini-2.5-flash"
     reviewer: str = "google_genai:gemini-2.5-flash"
-    builder: str = "google_genai:gemini-2.5-flash"
-
-
-class PipelineConfig(BaseModel):
-    """Pipeline behavior settings."""
-
-    checkpoint_after_draft_plan: bool = False
-    checkpoint_after_final_plan: bool = False
-    checkpoint_after_review: bool = False
-    default_mode: Literal["autonomous", "interactive"] = "autonomous"
 
 
 class WritingConfig(BaseModel):
     """Writing phase settings."""
 
     word_count_tolerance: float = 0.10
-    max_word_count_retries: int = 2
-    long_essay_threshold: int = 3000
-    intro_strategy: Literal["placeholder", "write_last"] = "placeholder"
 
 
 class FormattingConfig(BaseModel):
@@ -90,7 +73,6 @@ class EssayWriterConfig(BaseSettings):
     )
 
     models: ModelsConfig = ModelsConfig()
-    pipeline: PipelineConfig = PipelineConfig()
     writing: WritingConfig = WritingConfig()
     formatting: FormattingConfig = FormattingConfig()
     search: SearchConfig = SearchConfig()

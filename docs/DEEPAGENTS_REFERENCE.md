@@ -455,14 +455,13 @@ subagents = [
 
 ### 12.5 Skills for Workflow Instructions
 
-Each pipeline phase can have a dedicated skill with detailed instructions:
+Each workflow step can have a dedicated skill with detailed instructions:
 
 ```
 /skills/project/
-├── essay-planning/SKILL.md
-├── source-extraction/SKILL.md
-├── section-writing/SKILL.md
-└── essay-review/SKILL.md
+├── essay-writing/SKILL.md
+├── essay-review/SKILL.md
+└── docx-export/SKILL.md
 ```
 
 The agent reads the relevant skill only when entering that phase — progressive disclosure keeps the system prompt lean.

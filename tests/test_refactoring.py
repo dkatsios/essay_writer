@@ -4,9 +4,8 @@ from __future__ import annotations
 
 import base64
 import logging
-import tempfile
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -115,10 +114,11 @@ class TestMakeSubagent:
                 assert "skills" not in agent
 
     def test_convenience_aliases_match(self, config):
-        from src.subagents import make_builder, make_planner, make_subagent
+        from src.subagents import make_intake, make_reader, make_reviewer, make_subagent
 
-        assert make_planner(config, []) == make_subagent("planner", config, [])
-        assert make_builder(config, []) == make_subagent("builder", config, [])
+        assert make_intake(config, []) == make_subagent("intake", config, [])
+        assert make_reader(config, []) == make_subagent("reader", config, [])
+        assert make_reviewer(config, []) == make_subagent("reviewer", config, [])
 
 
 # ── web_fetcher HTML stripping ────────────────────────────────────────────
@@ -243,7 +243,7 @@ class TestRendering:
         from config.schemas import EssayWriterConfig
 
         config = EssayWriterConfig()
-        result = render_prompt("planner.j2", config=config)
+        result = render_prompt("intake.j2", config=config)
         assert isinstance(result, str)
         assert len(result) > 0
 

@@ -1,24 +1,11 @@
 models:
   orchestrator: "google_genai:gemini-2.5-flash"
-  planner: "google_genai:gemini-2.5-flash"
-  researcher: "google_genai:gemini-2.5-flash"
-  cataloguer: "google_genai:gemini-2.5-flash"
-  extractor: "google_genai:gemini-2.5-flash"
-  writer: "google_genai:gemini-2.5-flash"
+  intake: "google_genai:gemini-2.5-flash"
+  reader: "google_genai:gemini-2.5-flash"
   reviewer: "google_genai:gemini-2.5-flash"
-  builder: "google_genai:gemini-2.5-flash"
-
-pipeline:
-  checkpoint_after_draft_plan: false
-  checkpoint_after_final_plan: false
-  checkpoint_after_review: false
-  default_mode: "autonomous"
 
 writing:
   word_count_tolerance: 0.10
-  max_word_count_retries: 2
-  long_essay_threshold: 3000
-  intro_strategy: "placeholder"
 
 formatting:
   font: "Times New Roman"

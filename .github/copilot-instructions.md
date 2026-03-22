@@ -19,40 +19,50 @@ uv run python -m src.runner -p "Write a 3000-word essay on climate change"
 # Custom config
 uv run python -m src.runner /path/to/files/ --config my_config.yaml
 
-# Import check (no tests yet)
+# Run tests
+uv run python -m pytest tests/ -v
+
+# Import check
 uv run python -c "from src.agent import create_essay_agent"
 ```
 
 ## Architecture
 
-Multi-agent essay writing system built on the `deepagents` framework (LangChain/LangGraph). Produces academic essays in Greek as formatted `.docx` files.
+Single-orchestrator essay writing system built on the `deepagents` framework (LangChain/LangGraph). Produces academic essays in Greek as formatted `.docx` files.
 
-### Pipeline
+### Flow
 
-A single **orchestrator** agent drives an 8-phase pipeline by delegating to 7 specialized **subagents** via the `task` tool:
+The **orchestrator** handles planning, searching, writing, and export directly. It delegates to 3 specialized **subagent** types only when isolated context is needed:
 
-1. **Intake** — parse user input + any provided documents (cataloguer)
-2. **Draft Plan** — section breakdown with word targets (planner)
-3. **Research** — parallel academic source search (researcher, parallel)
-4. **Plan Refinement** — adjust plan based on found sources (planner)
-5. **Extraction** — one-pass per source, fan-out to per-section VFS entries (extractor, parallel)
-6. **Sequential Writing** — sections written one at a time in order (writer, sequential)
-7. **Review** — coherence, citations, polish, intro revision (reviewer)
-8. **Export** — build `.docx` with cover page, TOC, formatting (builder)
+1. **Intake** (subagent) — reads user documents, writes `/brief/assignment.md`
+2. **Plan** — orchestrator plans sections, word targets, research topics → `/plan/plan.md`
+3. **Search** — orchestrator uses `academic_search`, `openalex_search`, `crossref_search` directly
+4. **Read sources** (subagent, parallel) — reader subagents fetch full-text sources, return condensed notes
+5. **Write** — orchestrator writes the complete essay → `/essay/draft.md`
+6. **Review** (subagent) — reviewer polishes the essay → `/essay/final.md`
+7. **Export** — orchestrator calls `build_docx` → `/output/essay.docx`
+
+### Subagents
+
+| Type | Purpose | VFS output |
+|------|---------|------------|
+| **intake** | Synthesize pre-extracted document content into a structured brief | `/brief/assignment.md` |
+| **reader** | Fetch/read a single source, return condensed notes | None (message return) |
+| **reviewer** | Review + polish the draft | `/essay/final.md` |
 
 ### VFS (Virtual File System)
 
-Agents exchange data through backend file operations (`write_file`/`read_file`), not conversation messages. Key paths:
+Key paths:
 
-- `/brief/` — assignment brief
-- `/plan/` — draft and final plans, source mapping
-- `/sources/metadata/` — structured source catalog entries
-- `/sections/section_XX/` — per-section drafts, summaries, and source extracts
-- `/essay/` — assembled and reviewed essay
+- `/brief/assignment.md` — assignment brief (from intake subagent)
+- `/plan/plan.md` — essay plan (from orchestrator)
+- `/essay/draft.md` — complete essay draft (from orchestrator)
+- `/essay/final.md` — polished essay (from reviewer subagent)
 - `/input/` — staged input files (temp dir, routed via `CompositeBackend`)
-- `/output/` — final `.docx` output (routed to real filesystem)
+- `/sources/` — downloaded source PDFs (routed to `.output/run_*/sources/` on disk)
+- `/output/essay.docx` — final formatted document (routed to real filesystem)
 
-**Critical constraint**: `write_file` errors on existing files. Rewrites (e.g., word count retries) must use `edit_file`.
+**Critical constraint**: `write_file` errors on existing files. Modifications must use `edit_file`.
 
 ### Input Handling
 
@@ -75,11 +85,12 @@ Uses `pydantic-settings` (`BaseSettings`) with three layers (highest wins):
 
 ### Key Invariants
 
-- **Jinja2 templates** (`src/templates/*.j2`) render system prompts with config-driven conditionals (checkpoints, intro strategy, long essay thresholds). Templates are rendered *before* subagent creation.
-- **Skills** (`src/skills/*/SKILL.md`) provide detailed phase-specific instructions via progressive disclosure — agents see name/description only, then `read_file` the full skill when needed.
-- **Sequential section writing** is intentional — each writer gets prior sections as context for coherence. For essays > `long_essay_threshold` words, prior sections are passed as summaries instead of full text.
-- **Subagent independence** — subagents have NO conversation history from the parent. Every `task` call must include all necessary context in the `description` parameter. Multiple `task` calls in one message run in parallel. Files written by subagents propagate back to the parent via state updates.
-- **CompositeBackend** routes `/input/` to a temp staging dir and `/output/` to `FilesystemBackend` (real disk); everything else goes to `StateBackend` (LangGraph state, checkpointed).
+- **Jinja2 templates** (`src/templates/*.j2`) render system prompts. 4 templates: `orchestrator.j2`, `intake.j2`, `reader.j2`, `reviewer.j2`.
+- **Skills** (`src/skills/*/SKILL.md`) provide detailed instructions via progressive disclosure — agents read the full skill via `read_file` when needed. 3 skills: essay-writing, essay-review, docx-export.
+- **Single-pass writing** — the orchestrator writes the complete essay in one go, using its own message history (plan, search results, reader notes).
+- **Subagent independence** — subagents have NO conversation history from the parent. Every `task` call must include all necessary context in the `description` parameter. Multiple `task` calls in one message run in parallel.
+- **CompositeBackend** routes `/input/` to a temp staging dir, `/output/` and `/sources/` to `FilesystemBackend` (real disk); everything else goes to `StateBackend` (LangGraph state, checkpointed).
+- **Custom AI endpoint** — when `AI_BASE_URL` is set in `.env`, all models route through an OpenAI-compatible endpoint using `AI_API_KEY` and `AI_MODEL`.
 
 ### Test Fixtures
 

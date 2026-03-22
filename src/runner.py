@@ -175,7 +175,12 @@ def resume(
     ctx = _ExecutionContext(output_dir, require_checkpoint_db=True)
     config = load_config(config_path)
 
-    agent = create_essay_agent(config, checkpointer=ctx.checkpointer)
+    sources_dir = str(output_dir / "sources")
+    agent = create_essay_agent(
+        config,
+        sources_dir=sources_dir,
+        checkpointer=ctx.checkpointer,
+    )
     logger.info("Resuming run from %s (thread: %s)", output_dir, ctx.thread_id)
 
     try:
@@ -229,9 +234,15 @@ def run(
     # so that an early SIGINT still leaves resumable artifacts.
     ctx = _ExecutionContext(output_dir)
 
+    # Sources dir persists downloaded PDFs alongside run artifacts
+    sources_dir = str(output_dir / "sources") if output_dir else None
+
     # Create and run the agent
     agent = create_essay_agent(
-        config, input_staging_dir=str(staging_dir), checkpointer=ctx.checkpointer
+        config,
+        input_staging_dir=str(staging_dir),
+        sources_dir=sources_dir,
+        checkpointer=ctx.checkpointer,
     )
 
     try:
@@ -271,7 +282,13 @@ def run_prompt(
     # Set up checkpointing and logging BEFORE the slow agent creation
     ctx = _ExecutionContext(output_dir)
 
-    agent = create_essay_agent(config, checkpointer=ctx.checkpointer)
+    sources_dir = str(output_dir / "sources") if output_dir else None
+
+    agent = create_essay_agent(
+        config,
+        sources_dir=sources_dir,
+        checkpointer=ctx.checkpointer,
+    )
 
     try:
         result = agent.invoke(

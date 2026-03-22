@@ -52,8 +52,15 @@ def fetch_url(
     url: Annotated[str, "The URL to fetch content from."],
 ) -> str:
     """Fetch content from a URL and return as plain text. Strips HTML tags."""
-    resp = httpx.get(url, follow_redirects=True, timeout=30, verify=get_ssl_verify())
-    resp.raise_for_status()
+    try:
+        resp = httpx.get(
+            url, follow_redirects=True, timeout=30, verify=get_ssl_verify()
+        )
+        resp.raise_for_status()
+    except httpx.HTTPStatusError as exc:
+        return f"Error fetching {url}: HTTP {exc.response.status_code}"
+    except httpx.RequestError as exc:
+        return f"Error fetching {url}: {type(exc).__name__}"
 
     content_type = resp.headers.get("content-type", "")
     if "html" in content_type:

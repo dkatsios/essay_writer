@@ -88,7 +88,20 @@ def academic_search(
             last_error = resp
             time.sleep(wait)
             continue
-        resp.raise_for_status()
+        if resp.is_error:
+            logger.error(
+                "Semantic Scholar HTTP %d for query: %s",
+                resp.status_code,
+                query,
+            )
+            return json.dumps(
+                {
+                    "error": f"http_{resp.status_code}",
+                    "message": f"Search API returned HTTP {resp.status_code}. Try a different query.",
+                    "query": query,
+                },
+                ensure_ascii=False,
+            )
         break
     else:
         # All retries exhausted on 429

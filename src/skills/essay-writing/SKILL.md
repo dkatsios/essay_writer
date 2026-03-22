@@ -1,31 +1,31 @@
 ---
-name: section-writing
-description: Write academic essay sections in Greek with proper source integration, citations, and word count control
+name: essay-writing
+description: Write complete academic essays in Greek with proper source integration, citations, and word count control
 ---
 
-# Section Writing Skill
+# Essay Writing Skill
 
 ## When to Use
-- When writing individual essay sections (Phase 6)
+- When the orchestrator is writing the essay draft (Step 5)
 
 ## Writing Process
 
 1. **Read your materials**:
-   - Read the section's source extracts from `/sections/section_XX/sources/*.md`
-   - Read any prior section context provided in your instructions
-   - Understand the section's role in the overall essay plan
+   - Read the essay plan from `/plan/plan.md` for section structure and word targets
+   - Use the research notes and reader summaries from your conversation history for source material
+   - Read the assignment brief from `/brief/assignment.md` for requirements
 
-2. **Plan the section internally**:
-   - Identify 2-4 key points to make
-   - Determine the best order for your arguments
-   - Map sources to arguments (which source supports which point)
-   - Plan your opening and closing sentences for the section
+2. **Plan internally**:
+   - Map sources to sections (which source supports which argument)
+   - Identify 2-4 key points per section
+   - Plan transitions between sections
 
-3. **Write the draft**:
-   - Open with a clear topic sentence that signals the section's purpose
-   - Develop each argument with evidence from sources
-   - Use transitions between paragraphs
-   - Close with a sentence that connects to the next section (or to the conclusion)
+3. **Write the essay**:
+   - Follow the section structure from the plan
+   - Open each section with a clear topic sentence
+   - Develop arguments with evidence from sources
+   - Use transitions between sections
+   - Include a properly formatted References section at the end
 
 4. **Integrate sources**:
    - Introduce sources before citing them: "Σύμφωνα με τον Παπαδόπουλο (2023)..."
@@ -35,13 +35,12 @@ description: Write academic essay sections in Greek with proper source integrati
 
 5. **Verify word count**:
    - Use the `count_words` tool on your draft
-   - Target: within ±10% of the assigned word count
+   - Target: within ±10% of the assigned total word count
    - If over: tighten prose, remove redundancy, merge similar points
    - If under: develop arguments further, add more source integration, expand analysis
 
 6. **Write to VFS**:
-   - Write the section draft to `/sections/section_XX/draft.md`
-   - For long essays: also write a 3-5 sentence summary to `/sections/section_XX/summary.md`
+   - Write the complete essay to `/essay/draft.md`
 
 ## Academic Greek Style Guide
 

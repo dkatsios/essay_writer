@@ -21,7 +21,10 @@ uv run python -m src.runner -p "Write a 3000-word essay on climate change"
 # Custom config
 uv run python -m src.runner /path/to/files/ --config my_config.yaml
 
-# Import check (no tests yet)
+# Run tests
+uv run python -m pytest tests/ -v
+
+# Import check
 uv run python -c "from src.agent import create_essay_agent"
 ```
 

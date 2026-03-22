@@ -128,6 +128,32 @@ def _add_page_numbers(doc: Document, position: str = "bottom_center") -> None:
 
 
 _HEADING_RE = re.compile(r"^(#{1,4})\s+(.+)$")
+_BULLET_RE = re.compile(r"^[\*\-]\s+(.+)$")
+_NUMBERED_RE = re.compile(r"^\d+\.\s+(.+)$")
+_INLINE_RE = re.compile(r"(\*\*\*(.+?)\*\*\*|\*\*(.+?)\*\*|\*(.+?)\*)")
+
+
+def _add_formatted_runs(paragraph, text: str) -> None:
+    """Parse markdown inline formatting and add runs with bold/italic."""
+    pos = 0
+    for m in _INLINE_RE.finditer(text):
+        # Add plain text before this match
+        if m.start() > pos:
+            paragraph.add_run(text[pos : m.start()])
+        if m.group(2):  # ***bold+italic***
+            run = paragraph.add_run(m.group(2))
+            run.bold = True
+            run.italic = True
+        elif m.group(3):  # **bold**
+            run = paragraph.add_run(m.group(3))
+            run.bold = True
+        elif m.group(4):  # *italic*
+            run = paragraph.add_run(m.group(4))
+            run.italic = True
+        pos = m.end()
+    # Remaining plain text
+    if pos < len(text):
+        paragraph.add_run(text[pos:])
 
 
 def _parse_and_add_content(doc: Document, essay_text: str) -> None:
@@ -138,20 +164,32 @@ def _parse_and_add_content(doc: Document, essay_text: str) -> None:
     def flush_paragraph() -> None:
         if current_paragraph_lines:
             text = " ".join(current_paragraph_lines)
-            doc.add_paragraph(text)
+            p = doc.add_paragraph()
+            _add_formatted_runs(p, text)
             current_paragraph_lines.clear()
 
     for line in lines:
-        heading_match = _HEADING_RE.match(line)
+        stripped = line.strip()
+        heading_match = _HEADING_RE.match(stripped)
         if heading_match:
             flush_paragraph()
             level = len(heading_match.group(1))
             text = heading_match.group(2).strip()
             doc.add_heading(text, level=min(level, 4))
-        elif line.strip() == "":
+        elif stripped == "":
             flush_paragraph()
+        elif _BULLET_RE.match(stripped):
+            flush_paragraph()
+            content = _BULLET_RE.match(stripped).group(1)
+            p = doc.add_paragraph(style="List Bullet")
+            _add_formatted_runs(p, content)
+        elif _NUMBERED_RE.match(stripped):
+            flush_paragraph()
+            content = _NUMBERED_RE.match(stripped).group(1)
+            p = doc.add_paragraph(style="List Number")
+            _add_formatted_runs(p, content)
         else:
-            current_paragraph_lines.append(line.strip())
+            current_paragraph_lines.append(stripped)
 
     flush_paragraph()
 
@@ -167,23 +205,44 @@ def _build_document(essay_text: str, config: dict) -> Document:
     return doc
 
 
-@tool
-def build_docx(
-    essay_text: Annotated[str, "The full essay text in markdown-like format."],
-    output_path: Annotated[str, "Output file path for the .docx file."],
-    config_json: Annotated[
-        str,
-        "JSON string with document config: title, author, institution, "
-        "course, professor, date, font, font_size, line_spacing, "
-        "margins_cm, citation_style, page_numbers, paragraph_indent.",
-    ],
-) -> str:
-    """Build a formatted .docx document from essay text.
+def make_build_docx(output_dir: str):
+    """Create a build_docx tool bound to a real output directory.
 
-    Creates a document with cover page, table of contents, formatted body,
-    and page numbers. Handles Greek characters natively.
+    The LLM passes VFS paths like ``/output/essay.docx``.  This factory
+    resolves them to real filesystem paths under *output_dir* so that
+    ``doc.save()`` writes to disk correctly.
     """
-    config = json.loads(config_json)
-    doc = _build_document(essay_text, config)
-    doc.save(output_path)
-    return f"Document saved to {output_path}"
+    from pathlib import Path
+
+    output_dir_path = Path(output_dir)
+
+    @tool
+    def build_docx(
+        essay_text: Annotated[str, "The full essay text in markdown-like format."],
+        output_path: Annotated[str, "Output file path for the .docx file."],
+        config_json: Annotated[
+            str,
+            "JSON string with document config: title, author, institution, "
+            "course, professor, date, font, font_size, line_spacing, "
+            "margins_cm, citation_style, page_numbers, paragraph_indent.",
+        ],
+    ) -> str:
+        """Build a formatted .docx document from essay text.
+
+        Creates a document with cover page, table of contents, formatted body,
+        and page numbers. Handles Greek characters natively.
+        """
+        config = json.loads(config_json)
+        doc = _build_document(essay_text, config)
+
+        # Resolve VFS path → real filesystem path
+        clean = output_path.lstrip("/")
+        if clean.startswith("output/"):
+            clean = clean[len("output/") :]
+        real_path = output_dir_path / clean
+        real_path.parent.mkdir(parents=True, exist_ok=True)
+
+        doc.save(str(real_path))
+        return f"Document saved to {output_path}"
+
+    return build_docx
