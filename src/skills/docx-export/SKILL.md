@@ -20,21 +20,26 @@ description: Export the final essay to a formatted .docx file with cover page, T
    - **professor**: from the assignment brief (if provided)
    - **date**: from the assignment brief or current date
    - **font**, **font_size**, **line_spacing**, **margins_cm**: from formatting config
-   - **citation_style**: from formatting config
+   - **citation_style**: from formatting config (`apa7` or `footnotes`)
    - **page_numbers**: position setting
    - **paragraph_indent**: whether to indent first lines
-4. Call the `build_docx` tool with:
-   - `essay_text`: the full essay text (with markdown heading markers)
+   - **text_alignment**: text alignment (justified, left, etc.)
+4. Prepare the sources JSON: a mapping of `source_id` to metadata (authors, year, title, source, volume, issue, pages, doi, url, publisher) from your source registry.
+5. Call the `build_docx` tool with:
+   - `essay_text`: the full essay text with `[[source_id]]` markers
    - `output_path`: `/output/essay.docx`
    - `config_json`: the JSON configuration string
+   - `sources_json`: the JSON sources registry string
 
 ## Document Structure
 
 The generated .docx will contain:
 1. **Cover page**: Title (bold, 18pt, centered), followed by author, institution, course, professor, date (14pt, centered)
-2. **Table of contents**: Auto-generated from headings (requires manual update in Word)
+2. **Table of contents**: Native Word TOC field — auto-updates when the document is opened in Word
 3. **Essay body**: Formatted with the specified font, size, spacing, and margins
-4. **References section**: Part of the essay body, formatted as a heading with entries below
+4. **Citations**: `[[source_id]]` markers are replaced with formatted citations based on `citation_style`:
+   - `apa7`: inline `(Author, Year)` + Βιβλιογραφία section
+   - `footnotes`: superscript numbers + Σημειώσεις (endnotes) section
 5. **Page numbers**: In the footer, centered
 
 ## Heading Mapping
@@ -45,5 +50,6 @@ The generated .docx will contain:
 
 ## Important
 - Ensure the essay text uses markdown heading markers (`#`, `##`, etc.) for proper formatting.
-- The TOC is a Word field — it shows a placeholder until the user updates it in Word (Ctrl+A, F9).
+- Ensure the essay uses `[[source_id]]` markers for citations — do NOT write literal APA citations.
+- The TOC is a native Word field that auto-updates on open. No manual update needed.
 - Greek characters are fully supported — no special handling needed.

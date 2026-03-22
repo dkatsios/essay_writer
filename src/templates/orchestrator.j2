@@ -28,7 +28,17 @@ Search for academic sources yourself using the search tools:
 - Prefer Greek-language sources when available, but include high-quality English sources too
 {% endif %}
 - Aim for {{ config.search.max_sources_per_direction }} relevant sources per section topic
-- Keep track of the best sources (title, authors, year, DOI/URL) for later use
+
+**Source registry**: For every source you decide to use, assign a short `source_id` (e.g., `smith2020`, `papadopoulos2023`) and record its metadata:
+- `authors` (list of "Last, First" strings)
+- `year`
+- `title`
+- `source` (journal/book name)
+- `volume`, `issue`, `pages`
+- `doi`, `url`
+- `publisher` (for books)
+
+Keep this registry in your memory — you will pass it to `build_docx` during export.
 
 ### Step 4: READ SOURCES
 For sources that need full-text access (to extract quotes, data, or detailed arguments):
@@ -40,8 +50,8 @@ For sources that need full-text access (to extract quotes, data, or detailed arg
 Write the complete essay yourself:
 - Read the `/skills/essay-writing/SKILL.md` skill for detailed writing guidance
 - Follow your plan's section structure and word targets
-- Integrate sources with proper APA7 citations
-- Include a References section at the end
+- Reference sources using `[[source_id]]` markers (e.g., `[[smith2020]]` or `[[smith2020|σ. 45]]` for a page reference)
+- Do NOT write literal APA citations or a References section — the `build_docx` tool will generate these deterministically from your source registry
 - Use `count_words` to verify the total is within ±{{ (config.writing.word_count_tolerance * 100)|int }}% of the target
 - Write the complete draft to `/essay/draft.md`
 
@@ -55,12 +65,18 @@ Export the final essay to `.docx` yourself:
 - Read the `/skills/docx-export/SKILL.md` skill for formatting instructions
 - Read `/essay/final.md` for the essay text
 - Read `/brief/assignment.md` for cover page metadata
-- Call `build_docx` with the essay text and formatting config:
-  - Font: {{ config.formatting.font }}, size {{ config.formatting.font_size }}pt
-  - Line spacing: {{ config.formatting.line_spacing }}
-  - Margins: {{ config.formatting.margins_cm }}cm
-  - Page numbers: {{ config.formatting.page_numbers }}
-  - Paragraph indent: {{ config.formatting.paragraph_indent | lower }}
+- Call `build_docx` with:
+  - `essay_text`: the full essay text (with `[[source_id]]` markers)
+  - `output_path`: `/output/essay.docx`
+  - `config_json`: JSON with title, author, institution, course, professor, date, plus:
+    - font: {{ config.formatting.font }}, font_size: {{ config.formatting.font_size }}
+    - line_spacing: {{ config.formatting.line_spacing }}, margins_cm: {{ config.formatting.margins_cm }}
+    - page_numbers: {{ config.formatting.page_numbers }}
+    - paragraph_indent: {{ config.formatting.paragraph_indent | lower }}
+    - text_alignment: {{ config.formatting.text_alignment }}
+    - citation_style: {{ config.formatting.citation_style }}
+  - `sources_json`: JSON object with your source registry (source_id → metadata)
+- The tool will replace `[[source_id]]` markers with formatted citations and generate the bibliography/endnotes section automatically.
 - Write to `/output/essay.docx`
 - Report completion to the user.
 

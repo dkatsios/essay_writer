@@ -39,6 +39,7 @@ class FormattingConfig(BaseModel):
     citation_style: str = "apa7"
     page_numbers: str = "bottom_center"
     paragraph_indent: bool = True
+    text_alignment: str = "justified"
 
 
 class SearchConfig(BaseModel):

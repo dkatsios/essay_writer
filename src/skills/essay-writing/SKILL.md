@@ -27,11 +27,12 @@ description: Write complete academic essays in Greek with proper source integrat
    - Use transitions between sections
    - Include a properly formatted References section at the end
 
-4. **Integrate sources**:
-   - Introduce sources before citing them: "Σύμφωνα με τον Παπαδόπουλο (2023)..."
-   - Use a mix of direct quotes and paraphrasing
-   - After each citation, explain its significance — don't let quotes stand alone
-   - Cross-reference sources where they agree or disagree
+4. **Reference sources with markers**:
+   - Use `[[source_id]]` markers where a citation belongs: "Σύμφωνα με τους ερευνητές [[smith2020]], η ηγεσία..."
+   - For page references: `[[source_id|σ. 45]]` or `[[source_id|σσ. 45-50]]`
+   - The `build_docx` tool will replace these with formatted citations and generate the bibliography/endnotes automatically
+   - Do NOT write literal `(Author, Year)` citations or a References/Βιβλιογραφία section — those are generated deterministically
+   - Direct quotes must include a page reference: `[[papadopoulos2023|σ. 15]]`
 
 5. **Verify word count**:
    - Use the `count_words` tool on your draft
@@ -56,12 +57,14 @@ description: Write complete academic essays in Greek with proper source integrat
 - Logical connectors: "Επιπλέον", "Ωστόσο", "Εν κατακλείδι", "Αντιθέτως", "Συνεπώς"
 - Build arguments progressively — from evidence to analysis to synthesis
 
-### Citations (APA7)
-- In-text: (Παπαδόπουλος, 2023) or Παπαδόπουλος (2023)
-- With page: (Παπαδόπουλος, 2023, σ. 45)
-- Two authors: (Παπαδόπουλος & Ιωάννου, 2023)
-- Three or more: (Παπαδόπουλος κ.ά., 2023)
-- Direct quote: must include page number
+### Source Markers
+- Basic: `[[hersey2011]]` → becomes `(Hersey & Blanchard, 2011)` in APA mode
+- With page: `[[hersey2011|σ. 42]]` → `(Hersey & Blanchard, 2011, σ. 42)`
+- Narrative intro: "Ο Hersey [[hersey2011]] υποστηρίζει ότι..."
+- Multiple sources: "...[[smith2020]] [[jones2019]]"
+- Use `source_id` format: `authorlastname + year` (e.g., `papadopoulos2023`, `bass2006`)
+- For multiple authors use first author: `graen1995` for Graen & Uhl-Bien (1995)
+- Ensure every claim has at least one `[[source_id]]` marker
 
 ### Common Pitfalls
 - Don't start paragraphs with citations

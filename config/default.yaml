@@ -15,6 +15,7 @@ formatting:
   citation_style: "apa7"
   page_numbers: "bottom_center"
   paragraph_indent: true
+  text_alignment: "justified"
 
 search:
   max_sources_per_direction: 5
