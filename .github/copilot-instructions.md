@@ -89,7 +89,7 @@ Uses `pydantic-settings` (`BaseSettings`) with three layers (highest wins):
 - **Retry middleware** (`_RetryMalformedMiddleware` in `src/agent.py`) — retries model calls that return `MALFORMED_FUNCTION_CALL` or zero-output-token `STOP` from Google Gemini. Applied to all agents.
 - **Single-pass writing** — the orchestrator writes the complete essay in one go, using its plan, search results, and source notes from `/sources/notes/`.
 - **Subagent independence** — subagents have NO conversation history from the parent. Every `task` call must include all necessary context in the `description` parameter. Multiple `task` calls in one message run in parallel.
-- **CompositeBackend** routes `/input/` to a temp staging dir, `/output/` and `/sources/` to `FilesystemBackend` (real disk); everything else goes to `StateBackend` (LangGraph state, checkpointed).
+- **CompositeBackend** routes `/input/` to a temp staging dir, `/output/` and `/sources/` to `FilesystemBackend` (real disk); everything else goes to `StateBackend` (in-memory LangGraph state).
 - **Custom AI endpoint** — when `AI_BASE_URL` is set in `.env`, all models route through an OpenAI-compatible endpoint using `AI_API_KEY` and `AI_MODEL`.
 - **Deterministic docx fallback** — if the orchestrator doesn't call `build_docx`, the runner nudges it and, as a last resort, calls `_build_document` directly from `/essay/draft.md`.
 

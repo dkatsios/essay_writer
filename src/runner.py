@@ -31,7 +31,6 @@ from __future__ import annotations
 import argparse
 import json
 import logging
-import re
 import shutil
 import sys
 from datetime import datetime, timezone
@@ -151,64 +150,7 @@ def dump_vfs(
     logger.info("VFS dumped to %s (%d files)", vfs_dir, written)
 
 
-def _thread_id_from_dir(output_dir: Path) -> str:
-    """Extract the thread_id (timestamp) from a run directory name.
-
-    Expects directory names like 'run_20260321_145536'.
-    """
-    match = re.search(r"run_(\d{8}_\d{6})", output_dir.name)
-    if not match:
-        raise ValueError(
-            f"Cannot extract thread_id from directory name: {output_dir.name}. "
-            "Expected format: run_YYYYMMDD_HHMMSS"
-        )
-    return match.group(1)
-
-
-def _create_checkpointer(checkpoint_db: Path):
-    """Create a SqliteSaver and eagerly initialize the DB on disk."""
-    import sqlite3
-
-    from langgraph.checkpoint.sqlite import SqliteSaver
-
-    conn = sqlite3.connect(str(checkpoint_db), check_same_thread=False)
-    checkpointer = SqliteSaver(conn)
-    checkpointer.setup()
-    return checkpointer
-
-
-class _ExecutionContext:
-    """Shared checkpoint / logging state for a single run."""
-
-    __slots__ = ("thread_id", "checkpointer", "log_handler")
-
-    def __init__(
-        self,
-        output_dir: Path | None,
-        *,
-        require_checkpoint_db: bool = False,
-    ):
-        self.checkpointer = None
-        self.thread_id = "default"
-        self.log_handler: logging.FileHandler | None = None
-
-        if output_dir is None:
-            return
-
-        output_dir.mkdir(parents=True, exist_ok=True)
-        self.thread_id = _thread_id_from_dir(output_dir)
-
-        checkpoint_db = output_dir / "checkpoints.db"
-        if require_checkpoint_db and not checkpoint_db.exists():
-            raise FileNotFoundError(f"No checkpoint DB found at {checkpoint_db}")
-        self.checkpointer = _create_checkpointer(checkpoint_db)
-        self.log_handler = _setup_file_logging(output_dir)
-
-    def teardown(self) -> None:
-        """Remove the file log handler (if any) from the root logger."""
-        if self.log_handler is not None:
-            logging.getLogger().removeHandler(self.log_handler)
-            self.log_handler.close()
+_THREAD_ID = "essay_run"
 
 
 # ---------------------------------------------------------------------------
@@ -298,6 +240,15 @@ def _docx_mtime(config) -> float | None:
     """Return the mtime of essay.docx if it exists, else None."""
     p = Path(config.paths.output_dir) / "essay.docx"
     return p.stat().st_mtime if p.exists() else None
+
+
+def _copy_docx_to_run_dir(config, output_dir: Path) -> None:
+    """Copy essay.docx into the timestamped run directory."""
+    src = Path(config.paths.output_dir) / "essay.docx"
+    if src.exists():
+        dest = output_dir / "essay.docx"
+        shutil.copy2(str(src), str(dest))
+        logger.info("Copied essay.docx to %s", dest)
 
 
 def _ensure_docx_output(
@@ -398,49 +349,6 @@ def _direct_build_docx(
     print(f"✓ essay.docx saved to {output_path}", file=sys.stderr)
 
 
-def resume(
-    output_dir: Path,
-    *,
-    config_path: str | None = None,
-) -> dict:
-    """Resume a previous run from its checkpoint DB.
-
-    Args:
-        output_dir: The .output/run_<ts>/ directory from a previous run.
-            Must contain checkpoints.db. The thread_id is derived from the
-            directory name (the timestamp portion).
-        config_path: Path to the YAML configuration file.
-
-    Returns:
-        The final agent state dict.
-    """
-    ctx = _ExecutionContext(output_dir, require_checkpoint_db=True)
-    config = load_config(config_path)
-
-    sources_dir = str(output_dir / "sources")
-    agent = create_essay_agent(
-        config,
-        sources_dir=sources_dir,
-        checkpointer=ctx.checkpointer,
-    )
-    logger.info("Resuming run from %s (thread: %s)", output_dir, ctx.thread_id)
-
-    timer = _StepTimer()
-    callbacks = _make_callbacks(timer)
-    mtime_before = _docx_mtime(config)
-
-    try:
-        result = _invoke_with_retry(agent, None, ctx.thread_id, callbacks)
-        _ensure_docx_output(
-            agent, ctx.thread_id, config, sources_dir, callbacks, mtime_before
-        )
-    finally:
-        ctx.teardown()
-
-    dump_vfs(agent, ctx.thread_id, output_dir)
-    return result
-
-
 def run(
     input_path: str,
     *,
@@ -455,7 +363,6 @@ def run(
         prompt: Optional additional instructions to append.
         config_path: Path to the YAML configuration file.
         output_dir: If set, dump VFS and logs to this directory after the run.
-            The directory name provides the thread_id for checkpointing.
 
     Returns:
         The final agent state dict.
@@ -476,19 +383,18 @@ def run(
     # Build the message content (plain text or multimodal)
     content = build_message_content(input_files, extra_prompt=prompt)
 
-    # Set up checkpointing and logging BEFORE the slow agent creation
-    # so that an early SIGINT still leaves resumable artifacts.
-    ctx = _ExecutionContext(output_dir)
-
     # Sources dir persists downloaded PDFs alongside run artifacts
+    if output_dir:
+        output_dir.mkdir(parents=True, exist_ok=True)
     sources_dir = str(output_dir / "sources") if output_dir else None
+
+    log_handler = _setup_file_logging(output_dir) if output_dir else None
 
     # Create and run the agent
     agent = create_essay_agent(
         config,
         input_staging_dir=str(staging_dir),
         sources_dir=sources_dir,
-        checkpointer=ctx.checkpointer,
     )
 
     timer = _StepTimer()
@@ -499,18 +405,21 @@ def run(
         result = _invoke_with_retry(
             agent,
             {"messages": [HumanMessage(content=content)]},
-            ctx.thread_id,
+            _THREAD_ID,
             callbacks,
         )
         _ensure_docx_output(
-            agent, ctx.thread_id, config, sources_dir, callbacks, mtime_before
+            agent, _THREAD_ID, config, sources_dir, callbacks, mtime_before
         )
     finally:
         shutil.rmtree(staging_dir, ignore_errors=True)
-        ctx.teardown()
+        if log_handler:
+            logging.getLogger().removeHandler(log_handler)
+            log_handler.close()
 
     if output_dir is not None:
-        dump_vfs(agent, ctx.thread_id, output_dir)
+        dump_vfs(agent, _THREAD_ID, output_dir)
+        _copy_docx_to_run_dir(config, output_dir)
 
     return result
 
@@ -527,22 +436,21 @@ def run_prompt(
         prompt: The essay assignment prompt.
         config_path: Path to the YAML configuration file.
         output_dir: If set, dump VFS and logs to this directory after the run.
-            The directory name provides the thread_id for checkpointing.
 
     Returns:
         The final agent state dict.
     """
     config = load_config(config_path)
 
-    # Set up checkpointing and logging BEFORE the slow agent creation
-    ctx = _ExecutionContext(output_dir)
-
+    if output_dir:
+        output_dir.mkdir(parents=True, exist_ok=True)
     sources_dir = str(output_dir / "sources") if output_dir else None
+
+    log_handler = _setup_file_logging(output_dir) if output_dir else None
 
     agent = create_essay_agent(
         config,
         sources_dir=sources_dir,
-        checkpointer=ctx.checkpointer,
     )
 
     timer = _StepTimer()
@@ -553,17 +461,20 @@ def run_prompt(
         result = _invoke_with_retry(
             agent,
             {"messages": [HumanMessage(content=prompt)]},
-            ctx.thread_id,
+            _THREAD_ID,
             callbacks,
         )
         _ensure_docx_output(
-            agent, ctx.thread_id, config, sources_dir, callbacks, mtime_before
+            agent, _THREAD_ID, config, sources_dir, callbacks, mtime_before
         )
     finally:
-        ctx.teardown()
+        if log_handler:
+            logging.getLogger().removeHandler(log_handler)
+            log_handler.close()
 
     if output_dir is not None:
-        dump_vfs(agent, ctx.thread_id, output_dir)
+        dump_vfs(agent, _THREAD_ID, output_dir)
+        _copy_docx_to_run_dir(config, output_dir)
 
     return result
 
@@ -578,7 +489,6 @@ def main() -> None:
             "  %(prog)s /path/to/brief.pdf\n"
             '  %(prog)s /path/to/files/ --prompt "Focus on economic aspects"\n'
             '  %(prog)s --prompt "Write a 3000-word essay on climate change"\n'
-            "  %(prog)s --resume .output/run_20260321_145536/\n"
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
@@ -604,15 +514,6 @@ def main() -> None:
         default=False,
         help=("Dump VFS contents and logs to a timestamped directory under .output/."),
     )
-    parser.add_argument(
-        "--resume",
-        default=None,
-        metavar="DIR",
-        help=(
-            "Resume a previous run from its checkpoint directory "
-            "(e.g., .output/run_20260321_145536/)."
-        ),
-    )
     args = parser.parse_args()
 
     # Resolve output directory for VFS dump and logs
@@ -628,11 +529,7 @@ def main() -> None:
         datefmt="%H:%M:%S",
     )
 
-    # Resume mode — continue from a previous checkpoint
-    if args.resume is not None:
-        resume_dir = Path(args.resume)
-        result = resume(resume_dir, config_path=args.config)
-    elif args.input_path is None and args.prompt is None:
+    if args.input_path is None and args.prompt is None:
         if sys.stdin.isatty():
             parser.print_help()
             sys.exit(1)

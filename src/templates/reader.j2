@@ -28,10 +28,20 @@ Write the following to `/sources/notes/{source_id}.md`:
 - ...
 ```
 
+For inaccessible sources, write:
+
+```
+# {source_id}
+
+## Status: INACCESSIBLE
+- **Reason**: [e.g., 404 Not Found / Paywall / Timeout / etc.]
+- **URL**: [the URL that was attempted]
+```
+
 ## Important
 - The `source_id` will be provided in the task description — use it exactly as given for the VFS path.
 - Focus ONLY on content relevant to the given topic.
 - Keep extracts concise — aim for 200-500 words total per source.
 - Include page numbers for direct quotes when available.
-- If the source is inaccessible (paywall, 404, etc.), report that clearly in your status message. Do NOT write a notes file for inaccessible sources.
+- If the source is inaccessible (paywall, 404, etc.), still write a notes file to `/sources/notes/{source_id}.md` documenting the failure reason, then return "FAIL: {source_id} — {reason}".
 - Do NOT fabricate content. Only include what is actually in the source.

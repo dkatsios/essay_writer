@@ -232,7 +232,7 @@ Templates are rendered at agent creation time. The rendered output becomes the `
 
 The VFS is used for persistent artifacts that need to survive across agent turns and be inspectable after runs. A `CompositeBackend` routes paths to different backends:
 
-- **Default** → `StateBackend` — intermediate VFS artifacts (brief, plan, essay) live in LangGraph state, checkpointed automatically.
+- **Default** → `StateBackend` — intermediate VFS artifacts (brief, plan, essay) live in LangGraph state (in-memory).
 - `/input/` → `FilesystemBackend` — user-provided files staged in a temp directory (read-only access for agents).
 - `/output/` → `FilesystemBackend` — the final `.docx` is written to disk.
 - `/sources/` → `FilesystemBackend` — downloaded source PDFs are persisted to `.output/run_*/sources/` on disk.
@@ -254,7 +254,6 @@ The VFS is used for persistent artifacts that need to survive across agent turns
 
 - **Simplicity**: Only essential artifacts go to VFS. Search results stay in message history.
 - **Inspectability**: VFS contents are dumped to disk with `--dump-vfs`, providing a full audit trail.
-- **Resumability**: VFS state is checkpointed via LangGraph. Interrupted runs can be resumed from the last checkpoint.
 - **Critical constraint**: `write_file` errors on existing files. Modifications must use `edit_file`.
 
 ---

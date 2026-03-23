@@ -164,7 +164,6 @@ def create_essay_agent(
     config: EssayWriterConfig | None = None,
     input_staging_dir: str | None = None,
     sources_dir: str | None = None,
-    checkpointer=None,
 ) -> CompiledStateGraph:
     """Create and return the essay writer agent graph.
 
@@ -174,8 +173,6 @@ def create_essay_agent(
             If None, the /input/ backend route is omitted (prompt-only mode).
         sources_dir: Directory to persist downloaded source PDFs.
             If None, /sources/ lives in VFS state only.
-        checkpointer: A LangGraph checkpointer instance (e.g. SqliteSaver).
-            If None, uses in-memory checkpointing (lost on exit).
 
     Returns:
         A compiled LangGraph agent ready to invoke.
@@ -217,9 +214,6 @@ def create_essay_agent(
         sa["model"] = _resolve_model(sa["model"])
         sa.setdefault("middleware", []).append(retry_middleware)
 
-    if checkpointer is None:
-        checkpointer = MemorySaver()
-
     return create_deep_agent(
         model=_resolve_model(config.models.orchestrator),
         tools=all_tools,
@@ -227,7 +221,7 @@ def create_essay_agent(
         subagents=subagents,
         skills=[config.paths.skills_dir],
         backend=_create_backend(config, input_staging_dir, sources_dir),
-        checkpointer=checkpointer,
+        checkpointer=MemorySaver(),
         name="essay-orchestrator",
         middleware=[retry_middleware],
     )

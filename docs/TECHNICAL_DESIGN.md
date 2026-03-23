@@ -167,7 +167,7 @@ def _create_backend(config, input_staging_dir=None, sources_dir=None):
 - `/input/` → `FilesystemBackend` — user-provided files staged in a temp directory
 - `/output/` → `FilesystemBackend` — the final `.docx` is written to disk
 - `/sources/` → `FilesystemBackend` — downloaded source PDFs persist to `.output/run_*/sources/`
-- Everything else (`/brief/`, `/plan/`, `/essay/`, `/skills/`) → `StateBackend` — VFS artifacts in LangGraph state, checkpointed automatically
+- Everything else (`/brief/`, `/plan/`, `/essay/`, `/skills/`) → `StateBackend` — VFS artifacts in LangGraph state (in-memory)
 
 ### 3.2 Input Handling
 
@@ -285,7 +285,7 @@ Rendered from `templates/orchestrator.j2`. Defines the 7-step workflow where the
 ### 7.2 Agent Assembly (`src/agent.py`)
 
 ```python
-def create_essay_agent(config, input_staging_dir=None, sources_dir=None, checkpointer=None):
+def create_essay_agent(config, input_staging_dir=None, sources_dir=None):
     all_tools = [academic_search, openalex_search, crossref_search,
                  fetch_url, read_pdf, read_docx, count_words, build_docx]
     doc_tools = [read_pdf, read_docx, fetch_url, count_words]
@@ -302,7 +302,7 @@ def create_essay_agent(config, input_staging_dir=None, sources_dir=None, checkpo
         subagents=subagents,
         skills=[config.paths.skills_dir],
         backend=_create_backend(config, input_staging_dir, sources_dir),
-        checkpointer=checkpointer,
+        checkpointer=MemorySaver(),
         name="essay-orchestrator",
     )
 ```
@@ -337,14 +337,13 @@ Export instructions for the orchestrator (Step 7). Covers: metadata extraction, 
 uv run python -m src.runner /path/to/files/              # File/directory input
 uv run python -m src.runner -p "Write an essay on X"      # Prompt-only mode
 uv run python -m src.runner /path/ --dump-vfs             # With VFS dump
-uv run python -m src.runner --resume .output/run_*/       # Resume from checkpoint
 ```
 
 ### 9.2 Run Flow
 
 1. `scan()` and `build_message_content()` extract content from input files
 2. `stage_files()` copies files to a temp directory for `/input/` route
-3. `_ExecutionContext` sets up checkpointing (SqliteSaver) and file logging
+3. File logging set up if `--dump-vfs` is used
 4. `create_essay_agent()` builds the agent with the appropriate backend routes
 5. `agent.invoke()` runs the orchestrator
 6. `dump_vfs()` writes VFS contents to disk (if `--dump-vfs`)
@@ -353,9 +352,9 @@ uv run python -m src.runner --resume .output/run_*/       # Resume from checkpoi
 
 - `--dump-vfs` creates a timestamped directory under `.output/` with:
   - `run.log` — full debug log
-  - `checkpoints.db` — SQLite checkpoint DB (for resume)
   - `sources/` — downloaded source PDFs
   - `vfs/` — dumped VFS contents (brief, plan, essay, etc.)
+  - `essay.docx` — copy of the final document
 
 ---
 

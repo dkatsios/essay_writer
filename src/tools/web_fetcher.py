@@ -112,7 +112,3 @@ def make_fetch_url(sources_dir: str | None = None):
         return resp.text
 
     return fetch_url
-
-
-# Default instance (no PDF saving) for backward compatibility
-fetch_url = make_fetch_url()
