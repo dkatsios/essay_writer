@@ -66,7 +66,6 @@ def academic_search(
         "fields": "title,authors,year,abstract,externalIds,url",
     }
 
-    last_error = None
     headers = _get_headers()
     for attempt in range(_MAX_RETRIES):
         _throttle()
@@ -85,7 +84,6 @@ def academic_search(
                 attempt + 1,
                 _MAX_RETRIES,
             )
-            last_error = resp
             time.sleep(wait)
             continue
         if resp.is_error:
