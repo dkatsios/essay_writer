@@ -2,15 +2,19 @@
 
 from __future__ import annotations
 
+import logging
 import os
+import time
+from typing import TYPE_CHECKING
 
+from langchain.agents.middleware import AgentMiddleware
 from langchain_core.language_models import BaseChatModel
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph.state import CompiledStateGraph
 
 from config.schemas import EssayWriterConfig, load_config
 from src.rendering import render_prompt
-from src.subagents import make_intake, make_reader, make_reviewer
+from src.subagents import make_intake, make_reader
 from src.tools import (
     academic_search,
     count_words,
@@ -21,6 +25,62 @@ from src.tools import (
     read_docx,
     read_pdf,
 )
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
+
+    from langchain.agents.middleware.types import (
+        ModelRequest,
+        ModelResponse,
+    )
+
+logger = logging.getLogger(__name__)
+
+_MALFORMED = "MALFORMED_FUNCTION_CALL"
+_RETRY_MAX = 3
+_RETRY_DELAY = 1.0
+
+
+class _RetryMalformedMiddleware(AgentMiddleware):
+    """Middleware that retries model calls returning MALFORMED_FUNCTION_CALL.
+
+    Google Gemini sometimes returns finish_reason=MALFORMED_FUNCTION_CALL with
+    0 output tokens.  This is non-deterministic; retrying the same request
+    usually succeeds.
+    """
+
+    def wrap_model_call(
+        self,
+        request: ModelRequest,
+        handler: Callable[[ModelRequest], ModelResponse],
+    ) -> ModelResponse:
+        for attempt in range(_RETRY_MAX + 1):
+            response = handler(request)
+            msgs = response.result if hasattr(response, "result") else []
+            if not msgs:
+                return response
+            last = msgs[-1]
+            finish = getattr(last, "response_metadata", {}).get("finish_reason")
+            usage = getattr(last, "usage_metadata", None) or {}
+            output_tokens = (
+                usage.get("output_tokens", -1) if isinstance(usage, dict) else -1
+            )
+            # Retry on MALFORMED_FUNCTION_CALL or zero-output STOP (Gemini glitch)
+            needs_retry = finish == _MALFORMED or (
+                finish == "STOP" and output_tokens == 0
+            )
+            if not needs_retry:
+                return response
+            if attempt < _RETRY_MAX:
+                logger.warning(
+                    "%s (output_tokens=%s) on model call — retrying (%d/%d)",
+                    finish,
+                    output_tokens,
+                    attempt + 1,
+                    _RETRY_MAX,
+                )
+                time.sleep(_RETRY_DELAY)
+        return response
 
 
 def _resolve_model(model_spec: str) -> str | BaseChatModel:
@@ -125,7 +185,7 @@ def create_essay_agent(
     if config is None:
         config = load_config()
 
-    # Orchestrator gets all tools — it does planning, searching, writing, and export
+    # Orchestrator gets search, fetch, read, count, and build_docx tools
     build_docx = make_build_docx(config.paths.output_dir)
     fetch_url = make_fetch_url(sources_dir)
     all_tools = [
@@ -145,16 +205,17 @@ def create_essay_agent(
     # Render orchestrator system prompt
     orchestrator_prompt = render_prompt("orchestrator.j2", config=config)
 
-    # 3 subagent types: intake, reader, reviewer
+    # 2 subagent types: intake, reader
+    retry_middleware = _RetryMalformedMiddleware()
     subagents = [
         make_intake(config, []),
         make_reader(config, doc_tools),
-        make_reviewer(config, doc_tools),
     ]
 
     # Pre-resolve models when AI_BASE_URL is set so they use the custom endpoint
     for sa in subagents:
         sa["model"] = _resolve_model(sa["model"])
+        sa.setdefault("middleware", []).append(retry_middleware)
 
     if checkpointer is None:
         checkpointer = MemorySaver()
@@ -168,4 +229,5 @@ def create_essay_agent(
         backend=_create_backend(config, input_staging_dir, sources_dir),
         checkpointer=checkpointer,
         name="essay-orchestrator",
+        middleware=[retry_middleware],
     )

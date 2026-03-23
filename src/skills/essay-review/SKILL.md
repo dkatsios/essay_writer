@@ -6,7 +6,7 @@ description: Review and polish academic essays for coherence, language quality, 
 # Essay Review Skill
 
 ## When to Use
-- When reviewing the essay draft before final export (Step 6)
+- After writing the complete draft in Step 5, before exporting in Step 7.
 
 ## Review Process
 
@@ -30,12 +30,11 @@ description: Review and polish academic essays for coherence, language quality, 
 - Check for unnecessary repetition across sections
 
 ### Step 4: Citation Audit
-- Every factual claim must have a citation
-- All in-text citations must appear in the references section
-- All references must be cited at least once in the text
-- Citation format must be consistent (APA7 or as specified)
-- Direct quotes must include page numbers
-- Greek citation conventions: use "κ.ά." for "et al.", "σ." for "p."
+- Every factual claim must have a `[[source_id]]` marker
+- Verify markers reference valid source IDs from `/sources/registry.json`
+- Direct quotes must include page numbers: `[[source_id|σ. 45]]`
+- Do NOT replace `[[source_id]]` markers with literal citations — `build_docx` handles that
+- Greek citation conventions: use "σ." for page, "σσ." for page range
 
 ### Step 5: Completeness Check
 - Does the essay address all aspects of the assignment brief?
@@ -44,14 +43,9 @@ description: Review and polish academic essays for coherence, language quality, 
 - Are there any gaps in the argumentation?
 
 ### Step 6: References Section
-- Verify all references are complete (authors, year, title, source, DOI/URL)
-- Format according to the specified citation style
-- Sort alphabetically by first author's last name
-- Greek references: follow the same format as English, using Greek characters
+- Do NOT write a References/Βιβλιογραφία section in the essay — it is generated automatically by `build_docx` from `/sources/registry.json`
+- If the draft contains a hand-written references section, remove it
 
-## Output
+## Applying Fixes
 
-Write the polished essay to `/essay/final.md`:
-- The complete, corrected essay with all improvements applied
-- Must be a standalone, final version ready for document export
-- Include the full References section at the end
+Use `edit_file` on `/essay/draft.md` to apply targeted corrections. Do NOT rewrite the entire draft — make surgical fixes for each issue found.

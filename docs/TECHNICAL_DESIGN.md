@@ -34,13 +34,12 @@ essay_writer/
 │   ├── templates/
 │   │   ├── orchestrator.j2          # Orchestrator system prompt
 │   │   ├── intake.j2                # Intake subagent system prompt
-│   │   ├── reader.j2                # Reader subagent system prompt
-│   │   └── reviewer.j2              # Reviewer subagent system prompt
+│   │   └── reader.j2                # Reader subagent system prompt
 │   └── skills/
 │       ├── essay-writing/
 │       │   └── SKILL.md             # Writing guidance for the orchestrator
 │       ├── essay-review/
-│       │   └── SKILL.md             # Review checklist for the reviewer
+│       │   └── SKILL.md             # Review checklist for the orchestrator
 │       └── docx-export/
 │           └── SKILL.md             # Export instructions for the orchestrator
 ├── tests/
@@ -74,7 +73,6 @@ models:
   orchestrator: "google_genai:gemini-2.5-flash"
   intake: "google_genai:gemini-2.5-flash"
   reader: "google_genai:gemini-2.5-flash"
-  reviewer: "google_genai:gemini-2.5-flash"
 
 writing:
   word_count_tolerance: 0.10        # ±10%
@@ -105,7 +103,6 @@ class ModelsConfig(BaseModel):
     orchestrator: str = "google_genai:gemini-2.5-flash"
     intake: str = "google_genai:gemini-2.5-flash"
     reader: str = "google_genai:gemini-2.5-flash"
-    reviewer: str = "google_genai:gemini-2.5-flash"
 
 class WritingConfig(BaseModel):
     word_count_tolerance: float = 0.10
@@ -220,7 +217,6 @@ All subagents are defined in `src/subagents.py` via a data-driven spec table. Ea
 _SUBAGENT_SPECS = [
     ("intake",   "intake.j2",   "intake",   "Synthesizes pre-extracted document content...", False),
     ("reader",   "reader.j2",   "reader",   "Reads a single academic source...",             False),
-    ("reviewer", "reviewer.j2", "reviewer", "Reviews and polishes the essay draft...",        True),
 ]
 ```
 
@@ -245,8 +241,7 @@ def make_subagent(name, config, tools):
 ### 5.3 Tool Assignment
 
 - **intake**: No custom tools (`tools=[]`). Receives all content via task description. VFS tools (read_file, write_file) are added by framework middleware.
-- **reader**: Document reading tools (`read_pdf`, `read_docx`, `fetch_url`, `count_words`).
-- **reviewer**: Same document reading tools plus skills access for the review checklist.
+- **reader**: Document reading tools (`read_pdf`, `read_docx`, `fetch_url`, `count_words`). Writes notes to `/sources/notes/{source_id}.md`.
 
 ---
 
@@ -298,7 +293,6 @@ def create_essay_agent(config, input_staging_dir=None, sources_dir=None, checkpo
     subagents = [
         make_intake(config, []),
         make_reader(config, doc_tools),
-        make_reviewer(config, doc_tools),
     ]
 
     return create_deep_agent(
@@ -327,7 +321,7 @@ Writing guidance for the orchestrator (Step 5). Covers: reading materials, sourc
 
 ### 8.2 essay-review
 
-Review checklist for the reviewer subagent (Step 6). Covers: structural review, language review, citation audit, completeness check, references formatting. Output: polished essay at `/essay/final.md`.
+Review checklist for the orchestrator's self-review step (Step 6). Covers: structural review, language review, citation audit, completeness check. The orchestrator applies fixes via `edit_file` on `/essay/draft.md`.
 
 ### 8.3 docx-export
 

@@ -18,6 +18,14 @@ from docx.shared import Cm, Pt
 from langchain_core.tools import tool
 
 
+def _safe_json_loads(s: str) -> dict:
+    """Parse JSON, handling double-escaped strings from LLM output."""
+    try:
+        return json.loads(s)
+    except json.JSONDecodeError:
+        return json.loads(s.encode().decode("unicode_escape"))
+
+
 def _set_document_defaults(doc: Document, config: dict) -> None:
     """Apply default formatting to the document."""
     style = doc.styles["Normal"]
@@ -389,7 +397,7 @@ def make_build_docx(output_dir: str):
         citation_style in config).
         """
         config = json.loads(config_json)
-        sources = json.loads(sources_json) if sources_json else {}
+        sources = _safe_json_loads(sources_json) if sources_json else {}
         doc = _build_document(essay_text, config, sources)
 
         # Resolve VFS path → real filesystem path

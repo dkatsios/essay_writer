@@ -20,7 +20,6 @@ class ModelsConfig(BaseModel):
     orchestrator: str = "google_genai:gemini-2.5-flash"
     intake: str = "google_genai:gemini-2.5-flash"
     reader: str = "google_genai:gemini-2.5-flash"
-    reviewer: str = "google_genai:gemini-2.5-flash"
 
 
 class WritingConfig(BaseModel):

@@ -29,6 +29,7 @@ Configuration priority (highest wins):
 from __future__ import annotations
 
 import argparse
+import json
 import logging
 import re
 import shutil
@@ -210,6 +211,193 @@ class _ExecutionContext:
             self.log_handler.close()
 
 
+# ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# Resilient invoke — retry on malformed_function_call from proxy
+# ---------------------------------------------------------------------------
+
+_MAX_RETRIES = 5
+
+
+def _invoke_with_retry(
+    agent: CompiledStateGraph,
+    initial_input,
+    thread_id: str,
+    callbacks: list,
+) -> dict:
+    """Invoke the agent, retrying on malformed_function_call finish reasons.
+
+    The PwC proxy sometimes returns ``finish_reason: malformed_function_call``
+    with ``completion_tokens: 0``, causing the agent to stop prematurely.
+    When this happens, we re-invoke via ``agent.invoke(None, ...)`` which
+    continues from the last checkpoint.
+    """
+    invoke_config = {
+        "configurable": {"thread_id": thread_id},
+        "callbacks": callbacks,
+    }
+
+    result = agent.invoke(initial_input, config=invoke_config)
+
+    for attempt in range(1, _MAX_RETRIES + 1):
+        msgs = result.get("messages", [])
+        if not msgs:
+            break
+        last = msgs[-1]
+        resp_meta = getattr(last, "response_metadata", {})
+        finish = resp_meta.get("finish_reason", "")
+        usage = getattr(last, "usage_metadata", None) or {}
+        output_tokens = (
+            usage.get("output_tokens", -1) if isinstance(usage, dict) else -1
+        )
+        needs_retry = finish.lower() == "malformed_function_call" or (
+            finish == "STOP" and output_tokens == 0
+        )
+        if not needs_retry:
+            break
+
+        print(
+            f"\n⚠ {finish} (output_tokens={output_tokens}) — retrying ({attempt}/{_MAX_RETRIES})…",
+            file=sys.stderr,
+        )
+        logger.warning(
+            "%s (output_tokens=%s, attempt %d/%d, %d msgs). Retrying.",
+            finish,
+            output_tokens,
+            attempt,
+            _MAX_RETRIES,
+            len(msgs),
+        )
+        # Continue from checkpoint with a nudge message
+        result = agent.invoke(
+            {
+                "messages": [
+                    HumanMessage(content="Continue. Complete your current step.")
+                ]
+            },
+            config=invoke_config,
+        )
+
+    return result
+
+
+# ---------------------------------------------------------------------------
+# Deterministic fallback — ensure review + export always happens
+# ---------------------------------------------------------------------------
+
+_NUDGE_MSG = (
+    "STOP. Step 6 (EXPORT) was not completed. "
+    "You MUST call build_docx NOW. "
+    "Read /essay/draft.md and /sources/registry.json, then call build_docx "
+    "with essay_text, output_path='/output/essay.docx', config_json, and sources_json. "
+    "This is MANDATORY — do it immediately."
+)
+
+
+def _docx_mtime(config) -> float | None:
+    """Return the mtime of essay.docx if it exists, else None."""
+    p = Path(config.paths.output_dir) / "essay.docx"
+    return p.stat().st_mtime if p.exists() else None
+
+
+def _ensure_docx_output(
+    agent: CompiledStateGraph,
+    thread_id: str,
+    config,
+    sources_dir: str | None,
+    callbacks: list,
+    docx_mtime_before: float | None = None,
+) -> None:
+    """Check if essay.docx was produced; if not, nudge then direct-build.
+
+    Args:
+        docx_mtime_before: mtime of essay.docx before the run started.
+            Used to detect whether this run (vs. a prior run) created the file.
+    """
+    docx_path = Path(config.paths.output_dir) / "essay.docx"
+    if docx_path.exists():
+        current_mtime = docx_path.stat().st_mtime
+        if docx_mtime_before is None or current_mtime > docx_mtime_before:
+            return  # This run produced the file
+
+    state = agent.get_state({"configurable": {"thread_id": thread_id}})
+    vfs = state.values.get("files", {})
+    if "/essay/draft.md" not in vfs:
+        logger.warning("No draft in VFS — cannot produce docx fallback.")
+        return
+
+    # Tier 1: nudge the agent to call build_docx
+    print("\n⚠ essay.docx missing — nudging agent…", file=sys.stderr)
+    try:
+        agent.invoke(
+            {"messages": [HumanMessage(content=_NUDGE_MSG)]},
+            config={
+                "configurable": {"thread_id": thread_id},
+                "callbacks": callbacks,
+            },
+        )
+    except Exception:
+        logger.exception("Nudge invocation failed")
+
+    if docx_path.exists():
+        return
+
+    # Tier 2: build docx directly from the draft (skip review)
+    # Re-read state in case the nudge updated VFS
+    state = agent.get_state({"configurable": {"thread_id": thread_id}})
+    vfs = state.values.get("files", {})
+    _direct_build_docx(vfs, config, sources_dir)
+
+
+def _direct_build_docx(
+    vfs: dict,
+    config,
+    sources_dir: str | None,
+) -> None:
+    """Last-resort fallback: call _build_document directly from Python."""
+    from src.tools.docx_builder import _build_document
+
+    # Use draft.md for the essay text
+    final_data = vfs.get("/essay/draft.md")
+    if not final_data:
+        logger.error("No essay text found in VFS for direct build.")
+        return
+    essay_text = "\n".join(final_data.get("content", []))
+
+    # Read source registry from disk
+    sources: dict = {}
+    if sources_dir:
+        registry_path = Path(sources_dir) / "registry.json"
+        if registry_path.exists():
+            raw = registry_path.read_text(encoding="utf-8")
+            try:
+                sources = json.loads(raw)
+            except json.JSONDecodeError:
+                # LLMs sometimes write double-escaped JSON (\n, \")
+                sources = json.loads(raw.encode().decode("unicode_escape"))
+
+    # Build config dict from settings + cover page info from brief
+    fmt = config.formatting
+    doc_config = fmt.model_dump()
+
+    brief_data = vfs.get("/brief/assignment.md")
+    if brief_data:
+        brief_text = "\n".join(brief_data.get("content", []))
+        for line in brief_text.split("\n"):
+            if line.startswith("# "):
+                doc_config.setdefault("title", line[2:].strip())
+                break
+
+    print("⚠ Building docx directly from draft (review skipped)…", file=sys.stderr)
+    doc = _build_document(essay_text, doc_config, sources)
+
+    output_path = Path(config.paths.output_dir) / "essay.docx"
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    doc.save(str(output_path))
+    logger.info("Fallback: essay.docx saved to %s", output_path)
+    print(f"✓ essay.docx saved to {output_path}", file=sys.stderr)
+
+
 def resume(
     output_dir: Path,
     *,
@@ -239,14 +427,12 @@ def resume(
 
     timer = _StepTimer()
     callbacks = _make_callbacks(timer)
+    mtime_before = _docx_mtime(config)
 
     try:
-        result = agent.invoke(
-            None,
-            config={
-                "configurable": {"thread_id": ctx.thread_id},
-                "callbacks": callbacks,
-            },
+        result = _invoke_with_retry(agent, None, ctx.thread_id, callbacks)
+        _ensure_docx_output(
+            agent, ctx.thread_id, config, sources_dir, callbacks, mtime_before
         )
     finally:
         ctx.teardown()
@@ -307,14 +493,17 @@ def run(
 
     timer = _StepTimer()
     callbacks = _make_callbacks(timer)
+    mtime_before = _docx_mtime(config)
 
     try:
-        result = agent.invoke(
+        result = _invoke_with_retry(
+            agent,
             {"messages": [HumanMessage(content=content)]},
-            config={
-                "configurable": {"thread_id": ctx.thread_id},
-                "callbacks": callbacks,
-            },
+            ctx.thread_id,
+            callbacks,
+        )
+        _ensure_docx_output(
+            agent, ctx.thread_id, config, sources_dir, callbacks, mtime_before
         )
     finally:
         shutil.rmtree(staging_dir, ignore_errors=True)
@@ -358,14 +547,17 @@ def run_prompt(
 
     timer = _StepTimer()
     callbacks = _make_callbacks(timer)
+    mtime_before = _docx_mtime(config)
 
     try:
-        result = agent.invoke(
+        result = _invoke_with_retry(
+            agent,
             {"messages": [HumanMessage(content=prompt)]},
-            config={
-                "configurable": {"thread_id": ctx.thread_id},
-                "callbacks": callbacks,
-            },
+            ctx.thread_id,
+            callbacks,
+        )
+        _ensure_docx_output(
+            agent, ctx.thread_id, config, sources_dir, callbacks, mtime_before
         )
     finally:
         ctx.teardown()

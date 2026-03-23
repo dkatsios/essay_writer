@@ -5,7 +5,7 @@ AI-powered academic essay generator for Greek university students. Uses an AI or
 ## Features
 
 - Single orchestrator that plans, searches, writes, and exports — delegates only when isolated context is needed
-- 3 subagent types: intake (document reading), reader (source extraction), reviewer (essay polishing)
+- 2 subagent types: intake (document reading), reader (source extraction) — orchestrator self-reviews using the essay-review skill
 - Academic source research via Semantic Scholar, OpenAlex, and Crossref
 - Formatted `.docx` output with cover page, table of contents, and page numbers
 - Supports multiple input formats: PDF, DOCX, PPTX, images, text files

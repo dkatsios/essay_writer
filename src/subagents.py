@@ -21,20 +21,11 @@ _SUBAGENT_SPECS: list[tuple[str, str, str, str, bool]] = [
         "reader",
         "reader.j2",
         "reader",
-        "Reads a single academic source (URL or document) and returns "
-        "condensed notes with relevant quotes and bibliographic data. "
-        "Use for full-text extraction to keep large documents out of "
-        "the orchestrator's context.",
+        "Reads a single academic source (URL or document) and writes "
+        "condensed notes to /sources/notes/{source_id}.md. Returns a "
+        "short OK/FAIL status message. Use for full-text extraction "
+        "to keep large documents out of the orchestrator's context.",
         False,
-    ),
-    (
-        "reviewer",
-        "reviewer.j2",
-        "reviewer",
-        "Reviews and polishes the essay draft. Reads /brief/assignment.md "
-        "and /essay/draft.md, checks coherence, citations, language quality, "
-        "and writes the final polished essay to /essay/final.md.",
-        True,
     ),
 ]
 
@@ -63,7 +54,3 @@ def make_intake(config: EssayWriterConfig, tools: list) -> SubAgent:
 
 def make_reader(config: EssayWriterConfig, tools: list) -> SubAgent:
     return make_subagent("reader", config, tools)
-
-
-def make_reviewer(config: EssayWriterConfig, tools: list) -> SubAgent:
-    return make_subagent("reviewer", config, tools)

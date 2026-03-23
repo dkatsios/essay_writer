@@ -46,7 +46,7 @@ One or more input documents that may include:
 
 The essay production follows a 7-step workflow driven by a single **orchestrator** agent. The orchestrator handles planning, searching, writing, and export directly. It delegates to **3 specialized subagent types** only when isolated context is needed — to keep large documents out of the orchestrator's context window.
 
-Agents exchange data through a **Virtual File System (VFS)** — a shared, structured storage layer. Search results and reader notes flow via the orchestrator's message history (not VFS), keeping the design simple and efficient.
+Agents exchange data through a **Virtual File System (VFS)** — a shared, structured storage layer. Search results flow via the orchestrator's message history (not VFS), keeping the design simple and efficient. Reader notes are written to VFS at `/sources/notes/` for inspectability and future per-section writer access.
 
 ### Step 1: INTAKE (subagent)
 - The CLI scans input files, extracts text from PDFs/DOCX/PPTX, and encodes images as base64 before the agent starts.
@@ -67,24 +67,25 @@ Agents exchange data through a **Virtual File System (VFS)** — a shared, struc
 
 ### Step 4: READ SOURCES (subagent, parallel)
 - For sources that need full-text access (to extract quotes, data, or detailed arguments), the orchestrator calls **reader** subagents.
-- Each reader fetches a single source (URL or document), extracts relevant content, and returns condensed notes (200-500 words).
+- Each reader fetches a single source (URL or document), extracts relevant content, and writes condensed notes (200-500 words) to `/sources/notes/{source_id}.md`.
 - Multiple readers can run in parallel (multiple `task` calls in one message).
-- Reader notes return as messages — they stay in the orchestrator's history for use during writing.
+- The orchestrator reads notes from `/sources/notes/` before writing the essay.
 
 ### Step 5: WRITE (orchestrator)
-- The orchestrator writes the complete essay in a single pass, using its own message history (plan, search results, reader notes).
+- The orchestrator writes the complete essay in a single pass, using its plan, search results, and source notes from `/sources/notes/`.
 - Follows the plan's section structure and word targets.
 - Integrates sources with APA7 citations and includes a References section.
 - Uses `count_words` to verify the total is within ±10% (configurable) of the target.
 - Written to VFS at `/essay/draft.md`.
 
-### Step 6: REVIEW (subagent)
-- The **reviewer** subagent reads `/brief/assignment.md` and `/essay/draft.md`.
-- It checks structure, thesis, language quality, citations, completeness, and introduction coherence.
-- It applies corrections and writes the polished essay to `/essay/final.md`.
+### Step 6: REVIEW (orchestrator)
+- The orchestrator reads the `/skills/essay-review/SKILL.md` skill for the review checklist.
+- It re-reads `/essay/draft.md` and `/brief/assignment.md`.
+- It checks structure, thesis, language quality, citations, and completeness.
+- It applies targeted fixes using `edit_file` on `/essay/draft.md`.
 
 ### Step 7: EXPORT (orchestrator)
-- The orchestrator reads `/essay/final.md` and `/brief/assignment.md`.
+- The orchestrator reads `/essay/draft.md` and `/brief/assignment.md`.
 - It calls `build_docx` with the essay text and formatting configuration.
 - The `.docx` is written to `/output/essay.docx` (routed to real filesystem).
 
@@ -96,17 +97,16 @@ Agents exchange data through a **Virtual File System (VFS)** — a shared, struc
 The single orchestrator agent. It:
 - Receives the user's message (with pre-extracted document content).
 - Plans the essay, searches for sources, writes the draft, and exports the `.docx` — all directly.
-- Delegates to subagents only for: intake (synthesize assignment brief), reading sources (isolate large documents from context), and review (fresh context with structured evaluation).
-- Holds search results and reader notes in its message history.
-- Reads/writes VFS for persistent artifacts (brief, plan, draft, final essay).
+- Delegates to subagents only for: intake (synthesize assignment brief) and reading sources (isolate large documents from context). Self-reviews using the essay-review skill.
+- Holds search results in its message history.
+- Reads/writes VFS for persistent artifacts (brief, plan, source notes, draft).
 
 ### 5.2 Subagents
 
 | Subagent | Purpose | Parallelism |
 |---|---|---|
 | **intake** | Synthesizes pre-extracted document content into a structured assignment brief at `/brief/assignment.md`. | Single instance, once at start |
-| **reader** | Reads a single academic source (URL or document), returns condensed notes as a message. Keeps large source text out of the orchestrator's context. | Multiple in parallel, one per source |
-| **reviewer** | Reviews and polishes the essay draft. Reads `/brief/assignment.md` and `/essay/draft.md`, writes `/essay/final.md`. | Single instance, once after writing |
+| **reader** | Reads a single academic source (URL or document), writes condensed notes to `/sources/notes/{source_id}.md`. Keeps large source text out of the orchestrator's context. | Multiple in parallel, one per source |
 
 ### 5.3 Tools
 
@@ -119,7 +119,7 @@ The single orchestrator agent. It:
 | **read_pdf** | Orchestrator, Reader | Extracts text from PDF files |
 | **read_docx** | Orchestrator, Reader | Extracts text and structure from Word documents |
 | **build_docx** | Orchestrator | Constructs the final `.docx` with formatting |
-| **count_words** | Orchestrator, Reviewer | Counts words in text |
+| **count_words** | Orchestrator | Counts words in text |
 | **VFS tools** | All agents (via framework) | `read_file`, `write_file`, `edit_file`, `ls` — provided by `deepagents` middleware |
 
 ---
@@ -206,7 +206,7 @@ The project uses a centralized configuration system (`pydantic-settings`) with t
 3. **Field defaults** — in the Pydantic models at `config/schemas.py`
 
 Configuration covers:
-- **Model selection** per agent role (orchestrator, intake, reader, reviewer).
+- **Model selection** per agent role (orchestrator, intake, reader).
 - **Formatting defaults** — font, spacing, margins, citation style.
 - **Search settings** — max sources per direction, language preferences.
 - **Writing settings** — word count tolerance.
@@ -220,7 +220,7 @@ When `AI_BASE_URL` is set (with `AI_API_KEY` and optionally `AI_MODEL`), all mod
 
 All agent system prompts use **Jinja2 templates** (`.j2` files) rather than static markdown. This provides variable injection, conditional logic, and loops for dynamic prompt construction.
 
-4 templates: `orchestrator.j2`, `intake.j2`, `reader.j2`, `reviewer.j2`.
+3 templates: `orchestrator.j2`, `intake.j2`, `reader.j2`.
 
 Templates are rendered at agent creation time. The rendered output becomes the `system_prompt` string in each agent's definition. Jinja is purely a build-time mechanism, invisible to the agents themselves.
 
@@ -243,7 +243,7 @@ The VFS is used for persistent artifacts that need to survive across agent turns
 /brief/assignment.md       — Assignment brief (written by intake)
 /plan/plan.md              — Essay plan (written by orchestrator)
 /essay/draft.md            — Complete essay draft (written by orchestrator)
-/essay/final.md            — Polished essay (written by reviewer)
+/sources/notes/            — Reader notes, one file per source (written by reader)
 /input/                    — User-provided documents (read-only, temp dir)
 /sources/                  — Downloaded source PDFs (persisted to disk)
 /output/essay.docx         — Final formatted document (persisted to disk)
@@ -252,7 +252,7 @@ The VFS is used for persistent artifacts that need to survive across agent turns
 
 ### 11.2 Design Principles
 
-- **Simplicity**: Only essential artifacts go to VFS. Search results and reader notes stay in message history.
+- **Simplicity**: Only essential artifacts go to VFS. Search results stay in message history.
 - **Inspectability**: VFS contents are dumped to disk with `--dump-vfs`, providing a full audit trail.
 - **Resumability**: VFS state is checkpointed via LangGraph. Interrupted runs can be resumed from the last checkpoint.
 - **Critical constraint**: `write_file` errors on existing files. Modifications must use `edit_file`.

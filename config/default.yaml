@@ -2,7 +2,6 @@ models:
   orchestrator: "google_genai:gemini-2.5-flash"
   intake: "google_genai:gemini-2.5-flash"
   reader: "google_genai:gemini-2.5-flash"
-  reviewer: "google_genai:gemini-2.5-flash"
 
 writing:
   word_count_tolerance: 0.10

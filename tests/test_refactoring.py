@@ -114,11 +114,10 @@ class TestMakeSubagent:
                 assert "skills" not in agent
 
     def test_convenience_aliases_match(self, config):
-        from src.subagents import make_intake, make_reader, make_reviewer, make_subagent
+        from src.subagents import make_intake, make_reader, make_subagent
 
         assert make_intake(config, []) == make_subagent("intake", config, [])
         assert make_reader(config, []) == make_subagent("reader", config, [])
-        assert make_reviewer(config, []) == make_subagent("reviewer", config, [])
 
 
 # ── web_fetcher HTML stripping ────────────────────────────────────────────

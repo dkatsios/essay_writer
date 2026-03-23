@@ -6,12 +6,13 @@ description: Export the final essay to a formatted .docx file with cover page, T
 # DOCX Export Skill
 
 ## When to Use
-- When the orchestrator exports the final essay to .docx (Step 7)
+- When the orchestrator exports the essay to .docx (Step 7)
 
 ## Process
 
-1. Read the final essay from `/essay/final.md`.
-2. Read the assignment brief from `/brief/assignment.md` to extract cover page metadata.
+1. Read the essay from `/essay/draft.md`.
+2. Read `/sources/registry.json` — the source metadata.
+3. Read the assignment brief from `/brief/assignment.md` to extract cover page metadata.
 3. Prepare the document configuration JSON with:
    - **title**: extracted from the essay or assignment brief
    - **author**: from the assignment brief (if provided)
