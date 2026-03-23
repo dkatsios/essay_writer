@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import re
 from html.parser import HTMLParser
+from pathlib import Path
 from typing import Annotated
+from urllib.parse import urlparse
 
 import httpx
 from langchain_core.tools import tool
@@ -47,22 +49,70 @@ def _html_to_text(html: str) -> str:
     return parser.get_text()
 
 
-@tool
-def fetch_url(
-    url: Annotated[str, "The URL to fetch content from."],
-) -> str:
-    """Fetch content from a URL and return as plain text. Strips HTML tags."""
-    try:
-        resp = httpx.get(
-            url, follow_redirects=True, timeout=30, verify=get_ssl_verify()
-        )
-        resp.raise_for_status()
-    except httpx.HTTPStatusError as exc:
-        return f"Error fetching {url}: HTTP {exc.response.status_code}"
-    except httpx.RequestError as exc:
-        return f"Error fetching {url}: {type(exc).__name__}"
+def _slugify_url(url: str) -> str:
+    """Turn a URL into a safe filename stem (max 80 chars)."""
+    parsed = urlparse(url)
+    slug = re.sub(r"[^a-zA-Z0-9]+", "_", parsed.netloc + parsed.path)
+    return slug.strip("_")[:80]
 
-    content_type = resp.headers.get("content-type", "")
-    if "html" in content_type:
-        return _html_to_text(resp.text)
-    return resp.text
+
+def _extract_pdf_text(data: bytes) -> str:
+    """Extract text from PDF bytes using pymupdf."""
+    import pymupdf
+
+    doc = pymupdf.open(stream=data, filetype="pdf")
+    parts = []
+    total = len(doc)
+    for i in range(total):
+        text = doc[i].get_text()
+        parts.append(f"--- Page {i + 1} of {total} ---\n{text}")
+    doc.close()
+    return "\n\n".join(parts)
+
+
+def make_fetch_url(sources_dir: str | None = None):
+    """Create a fetch_url tool, optionally saving PDFs to sources_dir."""
+    sources_path = Path(sources_dir) if sources_dir else None
+
+    @tool
+    def fetch_url(
+        url: Annotated[str, "The URL to fetch content from."],
+    ) -> str:
+        """Fetch content from a URL and return as plain text.
+
+        Strips HTML tags from web pages. For PDFs, extracts text and saves
+        the original PDF to the sources directory.
+        """
+        try:
+            resp = httpx.get(
+                url, follow_redirects=True, timeout=30, verify=get_ssl_verify()
+            )
+            resp.raise_for_status()
+        except httpx.HTTPStatusError as exc:
+            return f"Error fetching {url}: HTTP {exc.response.status_code}"
+        except httpx.RequestError as exc:
+            return f"Error fetching {url}: {type(exc).__name__}"
+
+        content_type = resp.headers.get("content-type", "")
+
+        if "pdf" in content_type or url.lower().endswith(".pdf"):
+            # Save PDF to sources dir
+            if sources_path is not None:
+                sources_path.mkdir(parents=True, exist_ok=True)
+                filename = _slugify_url(url) + ".pdf"
+                pdf_path = sources_path / filename
+                pdf_path.write_bytes(resp.content)
+            try:
+                return _extract_pdf_text(resp.content)
+            except Exception:
+                return f"Downloaded PDF from {url} but could not extract text."
+
+        if "html" in content_type:
+            return _html_to_text(resp.text)
+        return resp.text
+
+    return fetch_url
+
+
+# Default instance (no PDF saving) for backward compatibility
+fetch_url = make_fetch_url()

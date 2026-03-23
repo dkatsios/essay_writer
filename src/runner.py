@@ -49,6 +49,60 @@ from src.agent import create_essay_agent  # noqa: E402
 from src.intake import build_message_content, scan, stage_files  # noqa: E402
 
 
+# ---------------------------------------------------------------------------
+# Simple step timer — prints elapsed time for each tool / subagent call
+# ---------------------------------------------------------------------------
+
+
+class _StepTimer:
+    """Callback handler that prints elapsed time for tool and subagent calls."""
+
+    def __init__(self) -> None:
+        from time import monotonic
+
+        self._t0 = monotonic()
+        self._tool_starts: dict[str, float] = {}
+        self._monotonic = monotonic
+
+    def _elapsed(self) -> str:
+        secs = self._monotonic() - self._t0
+        m, s = divmod(int(secs), 60)
+        return f"{m:02d}:{s:02d}"
+
+    def on_tool_start(self, tool_name: str, run_id: str) -> None:
+        self._tool_starts[run_id] = self._monotonic()
+        print(f"  [{self._elapsed()}] ▶ {tool_name}", file=sys.stderr)
+
+    def on_tool_end(self, tool_name: str, run_id: str) -> None:
+        start = self._tool_starts.pop(run_id, None)
+        dur = f" ({self._monotonic() - start:.1f}s)" if start else ""
+        print(f"  [{self._elapsed()}] ✓ {tool_name}{dur}", file=sys.stderr)
+
+    def on_tool_error(self, tool_name: str, run_id: str) -> None:
+        start = self._tool_starts.pop(run_id, None)
+        dur = f" ({self._monotonic() - start:.1f}s)" if start else ""
+        print(f"  [{self._elapsed()}] ✗ {tool_name}{dur}", file=sys.stderr)
+
+
+def _make_callbacks(timer: _StepTimer) -> list:
+    """Build a LangChain callback handler list from a StepTimer."""
+    from langchain_core.callbacks import BaseCallbackHandler
+
+    class _Handler(BaseCallbackHandler):
+        def on_tool_start(self, serialized, input_str, *, run_id, **kw):
+            name = serialized.get("name", "unknown")
+            timer.on_tool_start(name, str(run_id))
+
+        def on_tool_end(self, output, *, run_id, **kw):
+            name = getattr(output, "name", None) or "tool"
+            timer.on_tool_end(name, str(run_id))
+
+        def on_tool_error(self, error, *, run_id, **kw):
+            timer.on_tool_error("tool", str(run_id))
+
+    return [_Handler()]
+
+
 def _setup_file_logging(output_dir: Path) -> logging.FileHandler:
     """Attach a DEBUG-level file handler to the root logger."""
     log_path = output_dir / "run.log"
@@ -183,10 +237,16 @@ def resume(
     )
     logger.info("Resuming run from %s (thread: %s)", output_dir, ctx.thread_id)
 
+    timer = _StepTimer()
+    callbacks = _make_callbacks(timer)
+
     try:
         result = agent.invoke(
             None,
-            config={"configurable": {"thread_id": ctx.thread_id}},
+            config={
+                "configurable": {"thread_id": ctx.thread_id},
+                "callbacks": callbacks,
+            },
         )
     finally:
         ctx.teardown()
@@ -245,10 +305,16 @@ def run(
         checkpointer=ctx.checkpointer,
     )
 
+    timer = _StepTimer()
+    callbacks = _make_callbacks(timer)
+
     try:
         result = agent.invoke(
             {"messages": [HumanMessage(content=content)]},
-            config={"configurable": {"thread_id": ctx.thread_id}},
+            config={
+                "configurable": {"thread_id": ctx.thread_id},
+                "callbacks": callbacks,
+            },
         )
     finally:
         shutil.rmtree(staging_dir, ignore_errors=True)
@@ -290,10 +356,16 @@ def run_prompt(
         checkpointer=ctx.checkpointer,
     )
 
+    timer = _StepTimer()
+    callbacks = _make_callbacks(timer)
+
     try:
         result = agent.invoke(
             {"messages": [HumanMessage(content=prompt)]},
-            config={"configurable": {"thread_id": ctx.thread_id}},
+            config={
+                "configurable": {"thread_id": ctx.thread_id},
+                "callbacks": callbacks,
+            },
         )
     finally:
         ctx.teardown()

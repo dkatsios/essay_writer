@@ -15,8 +15,8 @@ from src.tools import (
     academic_search,
     count_words,
     crossref_search,
-    fetch_url,
     make_build_docx,
+    make_fetch_url,
     openalex_search,
     read_docx,
     read_pdf,
@@ -127,6 +127,7 @@ def create_essay_agent(
 
     # Orchestrator gets all tools — it does planning, searching, writing, and export
     build_docx = make_build_docx(config.paths.output_dir)
+    fetch_url = make_fetch_url(sources_dir)
     all_tools = [
         academic_search,
         openalex_search,
