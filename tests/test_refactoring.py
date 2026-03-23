@@ -41,7 +41,7 @@ class TestMakeSubagent:
     def test_skills_key_present_only_when_expected(self, config):
         from src.subagents import _SUBAGENT_SPECS, make_subagent
 
-        for name, _, _, _, has_skills in _SUBAGENT_SPECS:
+        for name, _, _, has_skills in _SUBAGENT_SPECS:
             agent = make_subagent(name, config, tools=[])
             if has_skills:
                 assert "skills" in agent
@@ -49,10 +49,20 @@ class TestMakeSubagent:
                 assert "skills" not in agent
 
     def test_convenience_aliases_match(self, config):
-        from src.subagents import make_intake, make_reader, make_subagent
+        from src.subagents import (
+            make_intake,
+            make_reader,
+            make_researcher,
+            make_reviewer,
+            make_subagent,
+            make_writer,
+        )
 
         assert make_intake(config, []) == make_subagent("intake", config, [])
+        assert make_researcher(config, []) == make_subagent("researcher", config, [])
         assert make_reader(config, []) == make_subagent("reader", config, [])
+        assert make_writer(config, []) == make_subagent("writer", config, [])
+        assert make_reviewer(config, []) == make_subagent("reviewer", config, [])
 
 
 # ── web_fetcher HTML stripping ────────────────────────────────────────────

@@ -6,13 +6,13 @@ description: Write complete academic essays in Greek with proper source integrat
 # Essay Writing Skill
 
 ## When to Use
-- When the orchestrator is writing the essay draft (Step 5)
+- When writing the essay draft (Step 5)
 
 ## Writing Process
 
 1. **Read your materials**:
    - Read the essay plan from `/plan/plan.md` for section structure and word targets
-   - Use the research notes and reader summaries from your conversation history for source material
+   - Read source notes from `/sources/notes/` (use `ls` then `read_file` for each)
    - Read the assignment brief from `/brief/assignment.md` for requirements
 
 2. **Plan internally**:

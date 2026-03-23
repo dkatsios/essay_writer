@@ -14,7 +14,13 @@ from langgraph.graph.state import CompiledStateGraph
 
 from config.schemas import EssayWriterConfig, load_config
 from src.rendering import render_prompt
-from src.subagents import make_intake, make_reader
+from src.subagents import (
+    make_intake,
+    make_reader,
+    make_researcher,
+    make_reviewer,
+    make_writer,
+)
 from src.tools import (
     academic_search,
     count_words,
@@ -182,31 +188,28 @@ def create_essay_agent(
     if config is None:
         config = load_config()
 
-    # Orchestrator gets search, fetch, read, count, and build_docx tools
+    # Orchestrator only needs build_docx and count_words (lightweight coordinator)
     build_docx = make_build_docx(config.paths.output_dir)
     fetch_url = make_fetch_url(sources_dir)
-    all_tools = [
-        academic_search,
-        openalex_search,
-        crossref_search,
-        fetch_url,
-        read_pdf,
-        read_docx,
-        count_words,
-        build_docx,
-    ]
+    orchestrator_tools = [count_words, build_docx]
 
-    # Document reading tools for intake and reader subagents
+    # Search tools for researcher subagent
+    search_tools = [academic_search, openalex_search, crossref_search]
+
+    # Document reading tools for reader subagent
     doc_tools = [read_pdf, read_docx, fetch_url, count_words]
 
     # Render orchestrator system prompt
     orchestrator_prompt = render_prompt("orchestrator.j2", config=config)
 
-    # 2 subagent types: intake, reader
+    # 5 subagent types
     retry_middleware = _RetryMalformedMiddleware()
     subagents = [
         make_intake(config, []),
+        make_researcher(config, search_tools),
         make_reader(config, doc_tools),
+        make_writer(config, [count_words]),
+        make_reviewer(config, [count_words]),
     ]
 
     # Pre-resolve models when AI_BASE_URL is set so they use the custom endpoint
@@ -216,7 +219,7 @@ def create_essay_agent(
 
     return create_deep_agent(
         model=_resolve_model(config.models.orchestrator),
-        tools=all_tools,
+        tools=orchestrator_tools,
         system_prompt=orchestrator_prompt,
         subagents=subagents,
         skills=[config.paths.skills_dir],

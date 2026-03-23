@@ -215,8 +215,11 @@ All subagents are defined in `src/subagents.py` via a data-driven spec table. Ea
 
 ```python
 _SUBAGENT_SPECS = [
-    ("intake",   "intake.j2",   "intake",   "Synthesizes pre-extracted document content...", False),
-    ("reader",   "reader.j2",   "reader",   "Reads a single academic source...",             False),
+    ("intake",      "intake.j2",      "Synthesizes pre-extracted document content...",  False),
+    ("researcher",  "researcher.j2",  "Searches for academic sources...",               False),
+    ("reader",      "reader.j2",      "Reads a single academic source...",              False),
+    ("writer",      "writer.j2",      "Writes the complete essay...",                   True),
+    ("reviewer",    "reviewer.j2",    "Reviews and polishes the draft...",              True),
 ]
 ```
 
@@ -240,8 +243,11 @@ def make_subagent(name, config, tools):
 
 ### 5.3 Tool Assignment
 
-- **intake**: No custom tools (`tools=[]`). Receives all content via task description. VFS tools (read_file, write_file) are added by framework middleware.
+- **intake**: No custom tools (`tools=[]`). Receives all content via task description.
+- **researcher**: Search tools (`academic_search`, `openalex_search`, `crossref_search`). Writes `/sources/registry.json`.
 - **reader**: Document reading tools (`read_pdf`, `read_docx`, `fetch_url`, `count_words`). Writes notes to `/sources/notes/{source_id}.md`.
+- **writer**: `count_words` only. Reads plan + notes from VFS, writes `/essay/draft.md`. Has skills.
+- **reviewer**: `count_words` only. Reads draft from VFS, applies edits via `edit_file`. Has skills.
 
 ---
 
@@ -274,30 +280,33 @@ All search tools handle HTTP errors gracefully (return JSON error response inste
 
 ### 7.1 System Prompt
 
-Rendered from `templates/orchestrator.j2`. Defines the 7-step workflow where the orchestrator handles planning, searching, writing, and export directly. Key sections:
+Rendered from `templates/orchestrator.j2`. Defines a thin coordinator workflow where the orchestrator delegates heavy work to specialized subagents. Key sections:
 
-- **Role definition**: Academic essay writing agent producing Greek essays.
-- **Workflow steps**: Detailed instructions for all 7 steps.
-- **Subagent reference**: When to call each of the 3 subagent types.
+- **Role definition**: Academic essay coordinator.
+- **Workflow steps**: 7 steps — intake (subagent), plan (self), research (subagent), read sources (subagent), write (subagent), review (subagent), export (self).
+- **Subagent reference**: When to call each of the 5 subagent types.
 - **VFS structure**: Directory layout and file naming.
-- **Rules**: Language, source integrity, word discipline, file operations, efficiency.
+- **Rules**: Language, source integrity, file operations, efficiency.
 
 ### 7.2 Agent Assembly (`src/agent.py`)
 
 ```python
 def create_essay_agent(config, input_staging_dir=None, sources_dir=None):
-    all_tools = [academic_search, openalex_search, crossref_search,
-                 fetch_url, read_pdf, read_docx, count_words, build_docx]
+    orchestrator_tools = [count_words, build_docx]
+    search_tools = [academic_search, openalex_search, crossref_search]
     doc_tools = [read_pdf, read_docx, fetch_url, count_words]
 
     subagents = [
         make_intake(config, []),
+        make_researcher(config, search_tools),
         make_reader(config, doc_tools),
+        make_writer(config, [count_words]),
+        make_reviewer(config, [count_words]),
     ]
 
     return create_deep_agent(
         model=_resolve_model(config.models.orchestrator),
-        tools=all_tools,
+        tools=orchestrator_tools,
         system_prompt=render_prompt("orchestrator.j2", config=config),
         subagents=subagents,
         skills=[config.paths.skills_dir],
@@ -307,7 +316,7 @@ def create_essay_agent(config, input_staging_dir=None, sources_dir=None):
     )
 ```
 
-The orchestrator gets ALL tools (search + document + export). Subagents get only what they need.
+The orchestrator only gets `count_words` and `build_docx`. Heavy tools go to their respective subagents.
 
 ---
 
