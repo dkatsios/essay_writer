@@ -17,14 +17,6 @@ _SUBAGENT_SPECS: list[tuple[str, str, str, bool]] = [
         False,
     ),
     (
-        "researcher",
-        "researcher.j2",
-        "Searches for academic sources using search tools and writes "
-        "the source registry to /sources/registry.json. Returns a "
-        "short OK status with source count.",
-        False,
-    ),
-    (
         "reader",
         "reader.j2",
         "Reads a single academic source (URL or document) and writes "
@@ -70,10 +62,6 @@ def make_subagent(name: str, config: EssayWriterConfig, tools: list) -> SubAgent
 # Convenience aliases
 def make_intake(config: EssayWriterConfig, tools: list) -> SubAgent:
     return make_subagent("intake", config, tools)
-
-
-def make_researcher(config: EssayWriterConfig, tools: list) -> SubAgent:
-    return make_subagent("researcher", config, tools)
 
 
 def make_reader(config: EssayWriterConfig, tools: list) -> SubAgent:

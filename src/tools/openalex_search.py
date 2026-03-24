@@ -22,16 +22,8 @@ logger = logging.getLogger(__name__)
 _OPENALEX_API = "https://api.openalex.org/works"
 
 
-@tool
-def openalex_search(
-    query: Annotated[str, "The search query for finding academic papers."],
-    max_results: Annotated[int, "Maximum number of results to return."] = 5,
-) -> str:
-    """Search OpenAlex for academic papers.
-
-    Returns structured metadata: title, authors, year, abstract, DOI, URL.
-    Good coverage of non-English and European sources.
-    """
+def search_openalex(query: str, max_results: int = 5) -> list[dict]:
+    """Search OpenAlex and return a list of result dicts."""
     mailto = os.environ.get("OPENALEX_MAILTO", DEFAULT_MAILTO)
     params = {
         "search": query,
@@ -46,19 +38,17 @@ def openalex_search(
         resp.raise_for_status()
     except httpx.HTTPError as exc:
         logger.error("OpenAlex request failed for query %r: %s", query, exc)
-        return search_error_response("openalex", query, exc)
+        return []
 
     data = resp.json()
 
     results: list[dict] = []
     for work in data.get("results", []):
-        # Extract author names
         authors = [
             authorship.get("author", {}).get("display_name", "")
             for authorship in work.get("authorships", [])
         ]
 
-        # Reconstruct abstract from inverted index if available
         abstract = ""
         abstract_index = work.get("abstract_inverted_index")
         if abstract_index:
@@ -70,7 +60,6 @@ def openalex_search(
             abstract = " ".join(w for _, w in word_positions)
 
         doi = work.get("doi", "") or ""
-        # OpenAlex DOIs are full URLs like "https://doi.org/10.1234/..."
         if doi.startswith("https://doi.org/"):
             doi = doi[len("https://doi.org/") :]
 
@@ -82,8 +71,21 @@ def openalex_search(
                 "abstract": abstract,
                 "doi": doi,
                 "url": work.get("id", ""),
-                "source": "openalex",
             }
         )
 
+    return results
+
+
+@tool
+def openalex_search(
+    query: Annotated[str, "The search query for finding academic papers."],
+    max_results: Annotated[int, "Maximum number of results to return."] = 5,
+) -> str:
+    """Search OpenAlex for academic papers.
+
+    Returns structured metadata: title, authors, year, abstract, DOI, URL.
+    Good coverage of non-English and European sources.
+    """
+    results = search_openalex(query, max_results)
     return json.dumps(results, ensure_ascii=False, indent=2)

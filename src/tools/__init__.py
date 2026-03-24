@@ -1,21 +1,17 @@
 """Essay writer tools."""
 
-from src.tools.academic_search import academic_search
-from src.tools.crossref_search import crossref_search
 from src.tools.docx_builder import make_build_docx
 from src.tools.docx_reader import read_docx
-from src.tools.openalex_search import openalex_search
-from src.tools.pdf_reader import read_pdf
+from src.tools.pdf_reader import make_read_pdf
+from src.tools.research_sources import make_research_sources
 from src.tools.web_fetcher import make_fetch_url
 from src.tools.word_counter import count_words
 
 __all__ = [
-    "academic_search",
     "make_build_docx",
     "count_words",
-    "crossref_search",
     "make_fetch_url",
-    "openalex_search",
+    "make_read_pdf",
     "read_docx",
-    "read_pdf",
+    "make_research_sources",
 ]

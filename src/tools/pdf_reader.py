@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Annotated
 
 import pymupdf
@@ -25,28 +26,37 @@ def _parse_page_range(pages: str, total: int) -> list[int]:
     return sorted(set(result))
 
 
-@tool
-def read_pdf(
-    file_path: Annotated[str, "Path to the PDF file to read."],
-    pages: Annotated[
-        str | None,
-        "Optional page range, e.g. '1-5' or '3,7-10'. If omitted, reads all pages.",
-    ] = None,
-) -> str:
-    """Extract text from a PDF file. Returns text with page markers."""
-    doc = pymupdf.open(file_path)
-    total = len(doc)
+def make_read_pdf(sources_dir: str | None = None):
+    """Create a read_pdf tool that resolves VFS /sources/ paths to disk."""
+    sources_path = Path(sources_dir) if sources_dir else None
 
-    if pages:
-        indices = _parse_page_range(pages, total)
-    else:
-        indices = list(range(total))
+    @tool
+    def read_pdf(
+        file_path: Annotated[str, "Path to the PDF file to read."],
+        pages: Annotated[
+            str | None,
+            "Optional page range, e.g. '1-5' or '3,7-10'. If omitted, reads all pages.",
+        ] = None,
+    ) -> str:
+        """Extract text from a PDF file. Returns text with page markers."""
+        resolved = file_path
+        if sources_path and file_path.startswith("/sources/"):
+            resolved = str(sources_path / file_path[len("/sources/") :])
+        doc = pymupdf.open(resolved)
+        total = len(doc)
 
-    parts: list[str] = []
-    for i in indices:
-        page = doc[i]
-        text = page.get_text()
-        parts.append(f"--- Page {i + 1} of {total} ---\n{text}")
+        if pages:
+            indices = _parse_page_range(pages, total)
+        else:
+            indices = list(range(total))
 
-    doc.close()
-    return "\n\n".join(parts)
+        parts: list[str] = []
+        for i in indices:
+            page = doc[i]
+            text = page.get_text()
+            parts.append(f"--- Page {i + 1} of {total} ---\n{text}")
+
+        doc.close()
+        return "\n\n".join(parts)
+
+    return read_pdf

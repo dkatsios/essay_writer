@@ -33,8 +33,8 @@ Coordinator-subagent essay writing system built on the `deepagents` framework (L
 ### Flow
 
 1. **Intake** (subagent) — reads user documents, writes `/brief/assignment.md`
-2. **Plan** — orchestrator plans sections, word targets, research topics → `/plan/plan.md`
-3. **Research** (subagent) — searches for academic sources → `/sources/registry.json`
+2. **Plan** — orchestrator plans sections, word targets, research queries → `/plan/plan.md`
+3. **Research** (tool) — orchestrator calls `research_sources` with queries from the plan → `/sources/registry.json`
 4. **Read sources** (subagent, parallel) — reader subagents fetch full-text sources → `/sources/notes/{source_id}.md`
 5. **Write** (subagent) — writes the complete essay → `/essay/draft.md`
 6. **Review** (subagent) — reviews and polishes draft via `edit_file`
@@ -45,7 +45,6 @@ Coordinator-subagent essay writing system built on the `deepagents` framework (L
 | Type | Purpose | VFS output |
 |------|---------|------------|
 | **intake** | Synthesize pre-extracted document content into a structured brief | `/brief/assignment.md` |
-| **researcher** | Search for academic sources, build source registry | `/sources/registry.json` |
 | **reader** | Fetch/read a single source, write condensed notes | `/sources/notes/{source_id}.md` |
 | **writer** | Write the complete essay using plan and source notes | `/essay/draft.md` |
 | **reviewer** | Review and polish the draft with targeted edits | `/essay/draft.md` (via `edit_file`) |
@@ -56,7 +55,7 @@ Key paths:
 
 - `/brief/assignment.md` — assignment brief (from intake subagent)
 - `/plan/plan.md` — essay plan (from orchestrator)
-- `/sources/registry.json` — source metadata (from researcher subagent)
+- `/sources/registry.json` — source metadata (from `research_sources` tool)
 - `/essay/draft.md` — complete essay draft (from writer, polished by reviewer)
 - `/sources/notes/{source_id}.md` — reader notes, one file per source
 - `/input/` — staged input files (temp dir, routed via `CompositeBackend`)
@@ -86,10 +85,11 @@ Uses `pydantic-settings` (`BaseSettings`) with three layers (highest wins):
 
 ### Key Invariants
 
-- **Jinja2 templates** (`src/templates/*.j2`) render system prompts. 6 templates: `orchestrator.j2`, `intake.j2`, `researcher.j2`, `reader.j2`, `writer.j2`, `reviewer.j2`.
+- **Jinja2 templates** (`src/templates/*.j2`) render system prompts. 5 templates: `orchestrator.j2`, `intake.j2`, `reader.j2`, `writer.j2`, `reviewer.j2`.
 - **Skills** (`src/skills/*/SKILL.md`) provide detailed instructions via progressive disclosure — agents read the full skill via `read_file` when needed. 3 skills: essay-writing, essay-review, docx-export.
 - **Retry middleware** (`_RetryMalformedMiddleware` in `src/agent.py`) — retries model calls that return `MALFORMED_FUNCTION_CALL` or zero-output-token `STOP` from Google Gemini. Applied to all agents.
-- **Thin orchestrator** — the orchestrator is a lightweight coordinator. Heavy work (research, writing, review) is delegated to subagents that each get a clean context. This prevents token accumulation across phases.
+- **Thin orchestrator** — the orchestrator is a lightweight coordinator. Research is handled by the `research_sources` tool (deterministic Python, no LLM). Heavy writing and review work is delegated to subagents that each get a clean context.
+- **`research_sources` tool** — replaces the former researcher subagent. Fans out LLM-generated queries across Semantic Scholar, OpenAlex, and Crossref in parallel, deduplicates by DOI/title, and returns a registry JSON. Zero LLM tokens consumed.
 - **Subagent independence** — subagents have NO conversation history from the parent. They read what they need from VFS. Multiple `task` calls in one message run in parallel.
 - **CompositeBackend** routes `/input/` to a temp staging dir, `/output/` and `/sources/` to `FilesystemBackend` (real disk); everything else goes to `StateBackend` (in-memory LangGraph state).
 - **Custom AI endpoint** — when `AI_BASE_URL` is set in `.env`, all models route through an OpenAI-compatible endpoint using `AI_API_KEY` and `AI_MODEL`.

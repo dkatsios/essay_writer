@@ -35,6 +35,7 @@ import shutil
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
+from time import monotonic
 
 from dotenv import load_dotenv
 from langchain_core.messages import HumanMessage
@@ -58,30 +59,66 @@ class _StepTimer:
     """Callback handler that prints elapsed time for tool and subagent calls."""
 
     def __init__(self) -> None:
-        from time import monotonic
-
         self._t0 = monotonic()
-        self._tool_starts: dict[str, float] = {}
-        self._monotonic = monotonic
+        self._tool_starts: dict[str, tuple[float, str]] = {}  # run_id -> (time, name)
+        self._steps: list[tuple[str, float]] = []  # (tool_name, duration)
 
     def _elapsed(self) -> str:
-        secs = self._monotonic() - self._t0
+        secs = monotonic() - self._t0
         m, s = divmod(int(secs), 60)
         return f"{m:02d}:{s:02d}"
 
     def on_tool_start(self, tool_name: str, run_id: str) -> None:
-        self._tool_starts[run_id] = self._monotonic()
+        self._tool_starts[run_id] = (monotonic(), tool_name)
         print(f"  [{self._elapsed()}] ▶ {tool_name}", file=sys.stderr)
 
     def on_tool_end(self, tool_name: str, run_id: str) -> None:
-        start = self._tool_starts.pop(run_id, None)
-        dur = f" ({self._monotonic() - start:.1f}s)" if start else ""
-        print(f"  [{self._elapsed()}] ✓ {tool_name}{dur}", file=sys.stderr)
+        start_info = self._tool_starts.pop(run_id, None)
+        if start_info:
+            start_time, original_name = start_info
+            dur = monotonic() - start_time
+            self._steps.append((original_name, dur))
+            print(
+                f"  [{self._elapsed()}] ✓ {original_name} ({dur:.1f}s)",
+                file=sys.stderr,
+            )
+        else:
+            print(f"  [{self._elapsed()}] ✓ {tool_name}", file=sys.stderr)
 
     def on_tool_error(self, tool_name: str, run_id: str) -> None:
-        start = self._tool_starts.pop(run_id, None)
-        dur = f" ({self._monotonic() - start:.1f}s)" if start else ""
-        print(f"  [{self._elapsed()}] ✗ {tool_name}{dur}", file=sys.stderr)
+        start_info = self._tool_starts.pop(run_id, None)
+        if start_info:
+            start_time, original_name = start_info
+            dur = monotonic() - start_time
+            self._steps.append((f"{original_name} [ERR]", dur))
+            print(
+                f"  [{self._elapsed()}] ✗ {original_name} ({dur:.1f}s)",
+                file=sys.stderr,
+            )
+        else:
+            print(f"  [{self._elapsed()}] ✗ {tool_name}", file=sys.stderr)
+
+    def summary(self) -> str:
+        total = monotonic() - self._t0
+        if not self._steps:
+            return f"\nTotal wall-clock: {total:.1f}s"
+        lines = [
+            "",
+            "── Step Timing ─────────────────────────────────",
+            f"{'#':<4} {'Tool':<25} {'Duration':>10}",
+            "─" * 48,
+        ]
+        for i, (name, dur) in enumerate(self._steps, 1):
+            lines.append(f"{i:<4} {name:<25} {dur:>9.1f}s")
+
+        lines.append("─" * 48)
+        sum_tools = sum(d for _, d in self._steps)
+        overhead = total - sum_tools
+        lines.append(f"{'':4} {'Tool time':<25} {sum_tools:>9.1f}s")
+        lines.append(f"{'':4} {'Orchestrator thinking':<25} {overhead:>9.1f}s")
+        m, s = divmod(int(total), 60)
+        lines.append(f"{'':4} {'Total':<25} {m}m {s}s")
+        return "\n".join(lines)
 
 
 def _make_callbacks(timer: _StepTimer) -> list:
@@ -166,6 +203,7 @@ def _invoke_with_retry(
     initial_input,
     thread_id: str,
     callbacks: list,
+    run_tags: list[str] | None = None,
 ) -> dict:
     """Invoke the agent, retrying on malformed_function_call finish reasons.
 
@@ -178,6 +216,8 @@ def _invoke_with_retry(
         "configurable": {"thread_id": thread_id},
         "callbacks": callbacks,
     }
+    if run_tags:
+        invoke_config["tags"] = run_tags
 
     result = agent.invoke(initial_input, config=invoke_config)
 
@@ -251,6 +291,13 @@ def _copy_docx_to_run_dir(config, output_dir: Path) -> None:
         logger.info("Copied essay.docx to %s", dest)
 
 
+def _print_summary(timer: _StepTimer) -> None:
+    """Print step timing summary to stderr and log."""
+    summary = timer.summary()
+    print(summary, file=sys.stderr)
+    logger.info("Run summary:\n%s", summary)
+
+
 def _ensure_docx_output(
     agent: CompiledStateGraph,
     thread_id: str,
@@ -258,6 +305,7 @@ def _ensure_docx_output(
     sources_dir: str | None,
     callbacks: list,
     docx_mtime_before: float | None = None,
+    run_tags: list[str] | None = None,
 ) -> None:
     """Check if essay.docx was produced; if not, nudge then direct-build.
 
@@ -279,13 +327,16 @@ def _ensure_docx_output(
 
     # Tier 1: nudge the agent to call build_docx
     print("\n⚠ essay.docx missing — nudging agent…", file=sys.stderr)
+    nudge_config = {
+        "configurable": {"thread_id": thread_id},
+        "callbacks": callbacks,
+    }
+    if run_tags:
+        nudge_config["tags"] = run_tags
     try:
         agent.invoke(
             {"messages": [HumanMessage(content=_NUDGE_MSG)]},
-            config={
-                "configurable": {"thread_id": thread_id},
-                "callbacks": callbacks,
-            },
+            config=nudge_config,
         )
     except Exception:
         logger.exception("Nudge invocation failed")
@@ -400,6 +451,8 @@ def run(
     timer = _StepTimer()
     callbacks = _make_callbacks(timer)
     mtime_before = _docx_mtime(config)
+    run_tag = output_dir.name if output_dir else None
+    run_tags = [run_tag] if run_tag else None
 
     try:
         result = _invoke_with_retry(
@@ -407,9 +460,16 @@ def run(
             {"messages": [HumanMessage(content=content)]},
             _THREAD_ID,
             callbacks,
+            run_tags=run_tags,
         )
         _ensure_docx_output(
-            agent, _THREAD_ID, config, sources_dir, callbacks, mtime_before
+            agent,
+            _THREAD_ID,
+            config,
+            sources_dir,
+            callbacks,
+            mtime_before,
+            run_tags=run_tags,
         )
     finally:
         shutil.rmtree(staging_dir, ignore_errors=True)
@@ -420,6 +480,13 @@ def run(
     if output_dir is not None:
         dump_vfs(agent, _THREAD_ID, output_dir)
         _copy_docx_to_run_dir(config, output_dir)
+
+    _print_summary(timer)
+
+    if output_dir and run_tag:
+        from src.analysis import generate_run_report
+
+        generate_run_report(output_dir, run_tag)
 
     return result
 
@@ -456,6 +523,8 @@ def run_prompt(
     timer = _StepTimer()
     callbacks = _make_callbacks(timer)
     mtime_before = _docx_mtime(config)
+    run_tag = output_dir.name if output_dir else None
+    run_tags = [run_tag] if run_tag else None
 
     try:
         result = _invoke_with_retry(
@@ -463,9 +532,16 @@ def run_prompt(
             {"messages": [HumanMessage(content=prompt)]},
             _THREAD_ID,
             callbacks,
+            run_tags=run_tags,
         )
         _ensure_docx_output(
-            agent, _THREAD_ID, config, sources_dir, callbacks, mtime_before
+            agent,
+            _THREAD_ID,
+            config,
+            sources_dir,
+            callbacks,
+            mtime_before,
+            run_tags=run_tags,
         )
     finally:
         if log_handler:
@@ -475,6 +551,13 @@ def run_prompt(
     if output_dir is not None:
         dump_vfs(agent, _THREAD_ID, output_dir)
         _copy_docx_to_run_dir(config, output_dir)
+
+    _print_summary(timer)
+
+    if output_dir and run_tag:
+        from src.analysis import generate_run_report
+
+        generate_run_report(output_dir, run_tag)
 
     return result
 

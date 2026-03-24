@@ -61,7 +61,7 @@ description: Write complete academic essays in Greek with proper source integrat
 - Basic: `[[hersey2011]]` → becomes `(Hersey & Blanchard, 2011)` in APA mode
 - With page: `[[hersey2011|σ. 42]]` → `(Hersey & Blanchard, 2011, σ. 42)`
 - Narrative intro: "Ο Hersey [[hersey2011]] υποστηρίζει ότι..."
-- Multiple sources: "...[[smith2020]] [[jones2019]]"
+- Multiple sources: "...[[smith2020]] [[jones2019]]" — each in SEPARATE `[[]]`, NEVER `[[smith2020], [jones2019]]`
 - Use `source_id` format: `authorlastname + year` (e.g., `papadopoulos2023`, `bass2006`)
 - For multiple authors use first author: `graen1995` for Graen & Uhl-Bien (1995)
 - Ensure every claim has at least one `[[source_id]]` marker

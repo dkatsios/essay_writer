@@ -51,15 +51,8 @@ def _get_headers() -> dict[str, str]:
     return headers
 
 
-@tool
-def academic_search(
-    query: Annotated[str, "The search query for finding academic papers."],
-    max_results: Annotated[int, "Maximum number of results to return."] = 5,
-) -> str:
-    """Search Semantic Scholar for academic papers.
-
-    Returns structured metadata: title, authors, year, abstract, DOI, URL.
-    """
+def search_semantic_scholar(query: str, max_results: int = 5) -> list[dict]:
+    """Search Semantic Scholar and return a list of result dicts."""
     params = {
         "query": query,
         "limit": max_results,
@@ -92,30 +85,15 @@ def academic_search(
                 resp.status_code,
                 query,
             )
-            return json.dumps(
-                {
-                    "error": f"http_{resp.status_code}",
-                    "message": f"Search API returned HTTP {resp.status_code}. Try a different query.",
-                    "query": query,
-                },
-                ensure_ascii=False,
-            )
+            return []
         break
     else:
-        # All retries exhausted on 429
         logger.error(
             "Semantic Scholar rate limit exceeded after %d retries for query: %s",
             _MAX_RETRIES,
             query,
         )
-        return json.dumps(
-            {
-                "error": "rate_limited",
-                "message": f"Search API rate limit exceeded after {_MAX_RETRIES} retries. Try again later.",
-                "query": query,
-            },
-            ensure_ascii=False,
-        )
+        return []
 
     data = resp.json()
 
@@ -134,4 +112,17 @@ def academic_search(
             }
         )
 
+    return results
+
+
+@tool
+def academic_search(
+    query: Annotated[str, "The search query for finding academic papers."],
+    max_results: Annotated[int, "Maximum number of results to return."] = 5,
+) -> str:
+    """Search Semantic Scholar for academic papers.
+
+    Returns structured metadata: title, authors, year, abstract, DOI, URL.
+    """
+    results = search_semantic_scholar(query, max_results)
     return json.dumps(results, ensure_ascii=False, indent=2)

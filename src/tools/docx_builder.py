@@ -161,6 +161,21 @@ _NUMBERED_RE = re.compile(r"^\d+\.\s+(.+)$")
 _INLINE_RE = re.compile(r"(\*\*\*(.+?)\*\*\*|\*\*(.+?)\*\*|\*(.+?)\*|\^\^(\d+)\^\^)")
 
 # Citation markers: [[source_id]] or [[source_id|σ. 15]]
+# Normalize [[a], [b], [c]] → [[a]] [[b]] [[c]] (common LLM mistake)
+_MULTI_CITE_RE = re.compile(r"\[\[([^\]|]+?)(?:\],\s*\[([^\]|]+?))+\]\]")
+
+
+def _normalize_citations(text: str) -> str:
+    """Fix grouped citation markers into separate ones."""
+
+    def _split(m: re.Match) -> str:
+        inner = m.group(0)[2:-2]  # strip outer [[ and ]]
+        ids = re.split(r"\],\s*\[", inner)
+        return " ".join(f"[[{cid.strip()}]]" for cid in ids)
+
+    return _MULTI_CITE_RE.sub(_split, text)
+
+
 _CITE_RE = re.compile(r"\[\[([^\]|]+?)(?:\|([^\]]+?))?\]\]")
 
 
@@ -254,6 +269,8 @@ def _process_citations(essay_text: str, sources: dict, style: str) -> str:
     """
     if not sources:
         return essay_text
+
+    essay_text = _normalize_citations(essay_text)
 
     used: list[tuple[str, str | None]] = []  # (source_id, page_info)
     seen: dict[str, int] = {}

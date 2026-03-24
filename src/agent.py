@@ -17,19 +17,16 @@ from src.rendering import render_prompt
 from src.subagents import (
     make_intake,
     make_reader,
-    make_researcher,
     make_reviewer,
     make_writer,
 )
 from src.tools import (
-    academic_search,
     count_words,
-    crossref_search,
     make_build_docx,
     make_fetch_url,
-    openalex_search,
+    make_read_pdf,
+    make_research_sources,
     read_docx,
-    read_pdf,
 )
 
 if TYPE_CHECKING:
@@ -188,13 +185,12 @@ def create_essay_agent(
     if config is None:
         config = load_config()
 
-    # Orchestrator only needs build_docx and count_words (lightweight coordinator)
+    # Orchestrator tools: research_sources replaces the researcher subagent
     build_docx = make_build_docx(config.paths.output_dir)
     fetch_url = make_fetch_url(sources_dir)
-    orchestrator_tools = [count_words, build_docx]
-
-    # Search tools for researcher subagent
-    search_tools = [academic_search, openalex_search, crossref_search]
+    read_pdf = make_read_pdf(sources_dir)
+    research_sources = make_research_sources(sources_dir)
+    orchestrator_tools = [count_words, build_docx, research_sources]
 
     # Document reading tools for reader subagent
     doc_tools = [read_pdf, read_docx, fetch_url, count_words]
@@ -202,11 +198,10 @@ def create_essay_agent(
     # Render orchestrator system prompt
     orchestrator_prompt = render_prompt("orchestrator.j2", config=config)
 
-    # 5 subagent types
+    # 4 subagent types (researcher replaced by research_sources tool)
     retry_middleware = _RetryMalformedMiddleware()
     subagents = [
         make_intake(config, []),
-        make_researcher(config, search_tools),
         make_reader(config, doc_tools),
         make_writer(config, [count_words]),
         make_reviewer(config, [count_words]),
