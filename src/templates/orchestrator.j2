@@ -20,7 +20,7 @@ Write the plan to `/plan/plan.md`. Include a `## Research Queries` section with 
 ### Step 3: RESEARCH
 Read `/plan/plan.md` to extract the research queries, then call `research_sources` with:
 - `queries_json`: a JSON array of the query strings from the plan
-- `max_sources`: 15 (or as appropriate)
+- `max_sources`: 10 (or as appropriate)
 
 The tool searches Semantic Scholar, OpenAlex, and Crossref in parallel, deduplicates, and writes `/sources/registry.json` directly. It returns a short summary with source IDs — do NOT write the registry yourself.
 
