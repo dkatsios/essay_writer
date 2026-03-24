@@ -268,10 +268,10 @@ def _invoke_with_retry(
 # ---------------------------------------------------------------------------
 
 _NUDGE_MSG = (
-    "STOP. Step 6 (EXPORT) was not completed. "
+    "STOP. Step 7 (EXPORT) was not completed. "
     "You MUST call build_docx NOW. "
-    "Read /essay/draft.md and /sources/registry.json, then call build_docx "
-    "with essay_text, output_path='/output/essay.docx', config_json, and sources_json. "
+    "Call build_docx with output_path='/output/essay.docx' and config_json. "
+    "The tool reads the essay and sources automatically. "
     "This is MANDATORY — do it immediately."
 )
 
@@ -321,9 +321,15 @@ def _ensure_docx_output(
 
     state = agent.get_state({"configurable": {"thread_id": thread_id}})
     vfs = state.values.get("files", {})
-    if "/essay/draft.md" not in vfs:
-        logger.warning("No draft in VFS — cannot produce docx fallback.")
-        return
+
+    # Essay now lives on disk via FilesystemBackend
+    essay_dir = str(Path(sources_dir).parent / "essay") if sources_dir else None
+    essay_path = Path(essay_dir) / "draft.md" if essay_dir else None
+    if not (essay_path and essay_path.exists()):
+        # Fall back to VFS state check (prompt-only mode)
+        if "/essay/draft.md" not in vfs:
+            logger.warning("No draft found — cannot produce docx fallback.")
+            return
 
     # Tier 1: nudge the agent to call build_docx
     print("\n⚠ essay.docx missing — nudging agent…", file=sys.stderr)
@@ -359,12 +365,19 @@ def _direct_build_docx(
     """Last-resort fallback: call _build_document directly from Python."""
     from src.tools.docx_builder import _build_document
 
-    # Use draft.md for the essay text
-    final_data = vfs.get("/essay/draft.md")
-    if not final_data:
-        logger.error("No essay text found in VFS for direct build.")
-        return
-    essay_text = "\n".join(final_data.get("content", []))
+    # Read essay from disk (FilesystemBackend route) first, fall back to VFS state
+    essay_text = None
+    essay_dir = str(Path(sources_dir).parent / "essay") if sources_dir else None
+    if essay_dir:
+        essay_path = Path(essay_dir) / "draft.md"
+        if essay_path.exists():
+            essay_text = essay_path.read_text(encoding="utf-8")
+    if not essay_text:
+        final_data = vfs.get("/essay/draft.md")
+        if not final_data:
+            logger.error("No essay text found for direct build.")
+            return
+        essay_text = "\n".join(final_data.get("content", []))
 
     # Read source registry from disk
     sources: dict = {}

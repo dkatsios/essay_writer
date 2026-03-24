@@ -375,20 +375,25 @@ def _build_document(
     return doc
 
 
-def make_build_docx(output_dir: str):
-    """Create a build_docx tool bound to a real output directory.
+def make_build_docx(
+    output_dir: str,
+    sources_dir: str | None = None,
+    essay_dir: str | None = None,
+):
+    """Create a build_docx tool bound to real directories.
 
-    The LLM passes VFS paths like ``/output/essay.docx``.  This factory
-    resolves them to real filesystem paths under *output_dir* so that
-    ``doc.save()`` writes to disk correctly.
+    The tool reads essay text from *essay_dir*/draft.md and source metadata
+    from *sources_dir*/registry.json so the LLM never needs to pass these
+    large blobs as tool arguments (keeping them out of conversation history).
     """
     from pathlib import Path
 
     output_dir_path = Path(output_dir)
+    _sources_path = Path(sources_dir) / "registry.json" if sources_dir else None
+    _essay_path = Path(essay_dir) / "draft.md" if essay_dir else None
 
     @tool
     def build_docx(
-        essay_text: Annotated[str, "The full essay text in markdown-like format."],
         output_path: Annotated[str, "Output file path for the .docx file."],
         config_json: Annotated[
             str,
@@ -396,25 +401,26 @@ def make_build_docx(output_dir: str):
             "course, professor, date, font, font_size, line_spacing, "
             "margins_cm, citation_style, page_numbers, paragraph_indent.",
         ],
-        sources_json: Annotated[
-            str,
-            "JSON object mapping source_id to metadata. Each source has: "
-            "authors (list), year, title, source (journal name), volume, "
-            "issue, pages, doi, url, publisher. Pass '{}' if the essay "
-            "already contains formatted citations.",
-        ] = "{}",
     ) -> str:
-        """Build a formatted .docx document from essay text.
+        """Build a formatted .docx document.
 
-        Creates a document with cover page, table of contents, formatted body,
-        and page numbers. Handles Greek characters natively.
-
-        If sources_json is provided, replaces [[source_id]] markers in the
-        essay text with formatted citations (APA7 or footnotes, based on
-        citation_style in config).
+        Reads the essay from /essay/draft.md and source metadata from
+        /sources/registry.json automatically.  Creates a document with cover
+        page, table of contents, formatted body, and page numbers.
         """
+        # Read essay text from disk
+        if _essay_path and _essay_path.exists():
+            essay_text = _essay_path.read_text(encoding="utf-8")
+        else:
+            return "ERROR: /essay/draft.md not found on disk."
+
+        # Read source registry from disk
+        sources: dict = {}
+        if _sources_path and _sources_path.exists():
+            raw = _sources_path.read_text(encoding="utf-8")
+            sources = _safe_json_loads(raw)
+
         config = json.loads(config_json)
-        sources = _safe_json_loads(sources_json) if sources_json else {}
         doc = _build_document(essay_text, config, sources)
 
         # Resolve VFS path → real filesystem path

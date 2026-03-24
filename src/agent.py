@@ -120,6 +120,7 @@ def _create_backend(
     config: EssayWriterConfig,
     input_staging_dir: str | None = None,
     sources_dir: str | None = None,
+    essay_dir: str | None = None,
 ):
     """Return a backend factory for create_deep_agent.
 
@@ -129,6 +130,8 @@ def _create_backend(
             If None, the /input/ route is omitted (prompt-only mode).
         sources_dir: Directory to persist downloaded source PDFs.
             If None, /sources/ lives in VFS state only.
+        essay_dir: Directory to persist essay drafts.
+            If None, /essay/ lives in VFS state only.
     """
     from pathlib import Path
 
@@ -153,6 +156,12 @@ def _create_backend(
             Path(sources_dir).mkdir(parents=True, exist_ok=True)
             routes["/sources/"] = FilesystemBackend(
                 root_dir=sources_dir,
+                virtual_mode=True,
+            )
+        if essay_dir is not None:
+            Path(essay_dir).mkdir(parents=True, exist_ok=True)
+            routes["/essay/"] = FilesystemBackend(
+                root_dir=essay_dir,
                 virtual_mode=True,
             )
         return CompositeBackend(
@@ -181,12 +190,18 @@ def create_essay_agent(
         A compiled LangGraph agent ready to invoke.
     """
     from deepagents import create_deep_agent
+    from pathlib import Path
 
     if config is None:
         config = load_config()
 
+    # Essay dir persists drafts alongside run artifacts
+    essay_dir = str(Path(sources_dir).parent / "essay") if sources_dir else None
+
     # Orchestrator tools: research_sources replaces the researcher subagent
-    build_docx = make_build_docx(config.paths.output_dir)
+    build_docx = make_build_docx(
+        config.paths.output_dir, sources_dir=sources_dir, essay_dir=essay_dir
+    )
     fetch_url = make_fetch_url(sources_dir)
     read_pdf = make_read_pdf(sources_dir)
     research_sources = make_research_sources(sources_dir)
@@ -218,7 +233,7 @@ def create_essay_agent(
         system_prompt=orchestrator_prompt,
         subagents=subagents,
         skills=[config.paths.skills_dir],
-        backend=_create_backend(config, input_staging_dir, sources_dir),
+        backend=_create_backend(config, input_staging_dir, sources_dir, essay_dir),
         checkpointer=MemorySaver(),
         name="essay-orchestrator",
         middleware=[retry_middleware],

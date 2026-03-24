@@ -10,10 +10,8 @@ description: Export the final essay to a formatted .docx file with cover page, T
 
 ## Process
 
-1. Read the essay from `/essay/draft.md`.
-2. Read `/sources/registry.json` — the source metadata.
-3. Read the assignment brief from `/brief/assignment.md` to extract cover page metadata.
-3. Prepare the document configuration JSON with:
+1. Read the assignment brief from `/brief/assignment.md` to extract cover page metadata (title, author, institution, course, professor, date).
+2. Prepare the document configuration JSON with:
    - **title**: extracted from the essay or assignment brief
    - **author**: from the assignment brief (if provided)
    - **institution**: from the assignment brief (if provided)
@@ -25,12 +23,11 @@ description: Export the final essay to a formatted .docx file with cover page, T
    - **page_numbers**: position setting
    - **paragraph_indent**: whether to indent first lines
    - **text_alignment**: text alignment (justified, left, etc.)
-4. Prepare the sources JSON: a mapping of `source_id` to metadata (authors, year, title, source, volume, issue, pages, doi, url, publisher) from your source registry.
-5. Call the `build_docx` tool with:
-   - `essay_text`: the full essay text with `[[source_id]]` markers
+3. Call the `build_docx` tool with:
    - `output_path`: `/output/essay.docx`
    - `config_json`: the JSON configuration string
-   - `sources_json`: the JSON sources registry string
+
+The tool reads `/essay/draft.md` and `/sources/registry.json` automatically — do NOT read them yourself or pass them as arguments.
 
 ## Document Structure
 

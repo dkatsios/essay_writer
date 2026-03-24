@@ -39,32 +39,29 @@ Call the **reviewer** subagent to review and polish the draft.
 - After it completes, the reviewed draft will be at `/essay/draft.md`.
 
 ### Step 7: EXPORT
-Read `/skills/docx-export/SKILL.md` for export guidance. Then:
-1. Read `/essay/draft.md` to get the essay text
-2. Read `/sources/registry.json` to get the source metadata
-3. Call `build_docx` with:
-   - `essay_text`: the full essay text from `/essay/draft.md`
-   - `output_path`: `/output/essay.docx`
-   - `config_json`: JSON string with formatting config and cover page metadata:
-     ```json
-     {
-       "font": "{{ config.formatting.font }}",
-       "font_size": {{ config.formatting.font_size }},
-       "line_spacing": {{ config.formatting.line_spacing }},
-       "margins_cm": {{ config.formatting.margins_cm }},
-       "page_numbers": "{{ config.formatting.page_numbers }}",
-       "paragraph_indent": {{ config.formatting.paragraph_indent | lower }},
-       "text_alignment": "{{ config.formatting.text_alignment }}",
-       "citation_style": "{{ config.formatting.citation_style }}",
-       "title": "<from brief>",
-       "author": "<from brief>",
-       "institution": "<from brief>",
-       "course": "<from brief>",
-       "professor": "<from brief>",
-       "date": "<from brief>"
-     }
-     ```
-   - `sources_json`: the JSON string from `/sources/registry.json`
+Read `/brief/assignment.md` (if not already known) to extract cover page metadata, then call `build_docx` with:
+- `output_path`: `/output/essay.docx`
+- `config_json`: JSON string with formatting config and cover page metadata:
+  ```json
+  {
+    "font": "{{ config.formatting.font }}",
+    "font_size": {{ config.formatting.font_size }},
+    "line_spacing": {{ config.formatting.line_spacing }},
+    "margins_cm": {{ config.formatting.margins_cm }},
+    "page_numbers": "{{ config.formatting.page_numbers }}",
+    "paragraph_indent": {{ config.formatting.paragraph_indent | lower }},
+    "text_alignment": "{{ config.formatting.text_alignment }}",
+    "citation_style": "{{ config.formatting.citation_style }}",
+    "title": "<from brief>",
+    "author": "<from brief>",
+    "institution": "<from brief>",
+    "course": "<from brief>",
+    "professor": "<from brief>",
+    "date": "<from brief>"
+  }
+  ```
+
+The tool reads `/essay/draft.md` and `/sources/registry.json` automatically — do NOT read them yourself or pass essay text/sources as arguments.
 
 After `build_docx` completes, report completion to the user.
 
