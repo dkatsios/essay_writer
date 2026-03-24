@@ -12,6 +12,9 @@ wheels/
 # Environment
 .env
 
+# MacOS system files
+.DS_Store
+
 # Runtime output
 output/
 .output/
