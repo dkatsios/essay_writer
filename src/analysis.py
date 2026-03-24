@@ -11,7 +11,7 @@ logger = logging.getLogger(__name__)
 
 # Pipeline steps in execution order.
 # Update this list when adding, removing, or renaming subagents.
-STEPS = ["intake", "reader", "writer", "reviewer"]
+STEPS = ["intake", "planner", "reader", "writer", "reviewer"]
 
 
 def generate_run_report(output_dir: Path, run_tag: str) -> Path | None:

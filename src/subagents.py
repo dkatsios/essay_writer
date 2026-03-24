@@ -17,6 +17,13 @@ _SUBAGENT_SPECS: list[tuple[str, str, str, bool]] = [
         False,
     ),
     (
+        "planner",
+        "planner.j2",
+        "Creates a structured essay plan with sections, word targets, and "
+        "research queries. Writes /plan/plan.md. Returns a short OK status.",
+        True,
+    ),
+    (
         "reader",
         "reader.j2",
         "Reads a single academic source (URL or document) and writes "
@@ -62,6 +69,10 @@ def make_subagent(name: str, config: EssayWriterConfig, tools: list) -> SubAgent
 # Convenience aliases
 def make_intake(config: EssayWriterConfig, tools: list) -> SubAgent:
     return make_subagent("intake", config, tools)
+
+
+def make_planner(config: EssayWriterConfig, tools: list) -> SubAgent:
+    return make_subagent("planner", config, tools)
 
 
 def make_reader(config: EssayWriterConfig, tools: list) -> SubAgent:

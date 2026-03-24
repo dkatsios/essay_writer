@@ -7,7 +7,7 @@ import os
 import time
 from typing import TYPE_CHECKING
 
-from langchain.agents.middleware import AgentMiddleware
+from langchain.agents.middleware import AgentMiddleware, ModelRetryMiddleware
 from langchain_core.language_models import BaseChatModel
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph.state import CompiledStateGraph
@@ -16,6 +16,7 @@ from config.schemas import EssayWriterConfig, load_config
 from src.rendering import render_prompt
 from src.subagents import (
     make_intake,
+    make_planner,
     make_reader,
     make_reviewer,
     make_writer,
@@ -84,6 +85,36 @@ class _RetryMalformedMiddleware(AgentMiddleware):
                 )
                 time.sleep(_RETRY_DELAY)
         return response
+
+
+def _is_retryable_api_error(exc: Exception) -> bool:
+    """Return True for transient API errors (503, 429)."""
+    exc_str = str(exc)
+    # Google genai ServerError (503)
+    if type(exc).__name__ == "ServerError":
+        return True
+    # LangChain-wrapped Google errors (429 rate limit, 503 unavailable)
+    if "RESOURCE_EXHAUSTED" in exc_str or "429" in exc_str:
+        return True
+    if "UNAVAILABLE" in exc_str or "503" in exc_str:
+        return True
+    status = getattr(exc, "status_code", None)
+    if status and (status == 429 or 500 <= status < 600):
+        return True
+    return False
+
+
+def _make_server_retry_middleware() -> ModelRetryMiddleware:
+    """Create a middleware that retries model calls on transient API errors."""
+    return ModelRetryMiddleware(
+        max_retries=5,
+        retry_on=_is_retryable_api_error,
+        backoff_factor=2.0,
+        initial_delay=10.0,
+        max_delay=120.0,
+        jitter=True,
+        on_failure="error",
+    )
 
 
 def _resolve_model(model_spec: str) -> str | BaseChatModel:
@@ -213,10 +244,12 @@ def create_essay_agent(
     # Render orchestrator system prompt
     orchestrator_prompt = render_prompt("orchestrator.j2", config=config)
 
-    # 4 subagent types (researcher replaced by research_sources tool)
-    retry_middleware = _RetryMalformedMiddleware()
+    # 5 subagent types (researcher replaced by research_sources tool)
+    malformed_retry = _RetryMalformedMiddleware()
+    server_retry = _make_server_retry_middleware()
     subagents = [
         make_intake(config, []),
+        make_planner(config, []),
         make_reader(config, doc_tools),
         make_writer(config, [count_words]),
         make_reviewer(config, [count_words]),
@@ -225,7 +258,7 @@ def create_essay_agent(
     # Pre-resolve models when AI_BASE_URL is set so they use the custom endpoint
     for sa in subagents:
         sa["model"] = _resolve_model(sa["model"])
-        sa.setdefault("middleware", []).append(retry_middleware)
+        sa.setdefault("middleware", []).extend([server_retry, malformed_retry])
 
     return create_deep_agent(
         model=_resolve_model(config.models.orchestrator),
@@ -236,5 +269,5 @@ def create_essay_agent(
         backend=_create_backend(config, input_staging_dir, sources_dir, essay_dir),
         checkpointer=MemorySaver(),
         name="essay-orchestrator",
-        middleware=[retry_middleware],
+        middleware=[server_retry, malformed_retry],
     )

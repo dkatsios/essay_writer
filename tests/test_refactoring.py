@@ -51,6 +51,7 @@ class TestMakeSubagent:
     def test_convenience_aliases_match(self, config):
         from src.subagents import (
             make_intake,
+            make_planner,
             make_reader,
             make_reviewer,
             make_subagent,
@@ -58,6 +59,7 @@ class TestMakeSubagent:
         )
 
         assert make_intake(config, []) == make_subagent("intake", config, [])
+        assert make_planner(config, []) == make_subagent("planner", config, [])
         assert make_reader(config, []) == make_subagent("reader", config, [])
         assert make_writer(config, []) == make_subagent("writer", config, [])
         assert make_reviewer(config, []) == make_subagent("reviewer", config, [])

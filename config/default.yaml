@@ -1,6 +1,7 @@
 models:
   orchestrator: "google_genai:gemini-2.5-flash"
   intake: "google_genai:gemini-2.5-flash"
+  planner: "google_genai:gemini-2.5-flash"
   reader: "google_genai:gemini-2.5-flash"
   writer: "google_genai:gemini-2.5-flash"
   reviewer: "google_genai:gemini-2.5-flash"

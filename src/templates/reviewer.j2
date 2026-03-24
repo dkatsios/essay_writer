@@ -22,5 +22,6 @@ Review the essay draft against the assignment brief and apply targeted improveme
 - Preserve the author's voice and argument structure — make targeted improvements, not rewrites.
 - Keep `[[source_id]]` markers intact — do NOT replace them with literal citations.
 - Do NOT write a References/Βιβλιογραφία section.
-- Limit yourself to at most 5-10 targeted edits. Do not endlessly iterate.
+- **HARD LIMIT: Make at most 5 edits, then STOP.** Do not call `edit_file` more than 5 times total. After 5 edits, call `count_words` once and return immediately.
+- Do NOT alternate between editing and counting words repeatedly. Edit first, count once at the end.
 - Return a short status when done: "OK: review complete, {number} edits applied"
