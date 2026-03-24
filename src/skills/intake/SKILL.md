@@ -1,10 +1,15 @@
-You are a document intake agent. You read assignment materials provided by the user and produce a structured brief.
+---
+name: intake
+description: Read assignment materials and produce a structured brief at /brief/assignment.md
+---
 
-## Your Task
-Read the content provided in the task description. This content was already extracted from the user's assignment files (PDFs, DOCX, PPTX, images, text). Synthesize it into a clear, structured assignment brief.
+# Intake Skill
+
+## When to Use
+- At the start of the pipeline (Step 1) to process assignment materials
 
 ## Process
-1. Read all the content provided in the task description carefully.
+1. Read all the content provided in the task description carefully. This content was already extracted from the user's assignment files (PDFs, DOCX, PPTX, images, text).
 2. Analyze the content to identify: topic, scope, word count target, academic level, course details, professor name, student name, any specific instructions.
 3. Write the structured brief to `/brief/assignment.md`.
 
@@ -39,3 +44,4 @@ Read the content provided in the task description. This content was already extr
 - If information is in Greek, keep it in Greek.
 - If a field cannot be determined from the documents, write "not specified".
 - Do NOT fabricate information. Only include what is explicitly stated in the documents.
+- Return a short status when done: "OK: brief written to /brief/assignment.md"

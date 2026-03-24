@@ -1,12 +1,12 @@
 # Essay Writer
 
-AI-powered academic essay generator for Greek university students. Uses an AI orchestrator with specialized subagents to research, plan, write, review, and export formatted `.docx` essays.
+AI-powered academic essay generator for Greek university students. Uses an AI orchestrator with a single assistant subagent to research, plan, write, review, and export formatted `.docx` essays.
 
 ## Features
 
-- Single orchestrator that plans, searches, writes, and exports — delegates only when isolated context is needed
-- 2 subagent types: intake (document reading), reader (source extraction) — orchestrator self-reviews using the essay-review skill
-- Academic source research via Semantic Scholar, OpenAlex, and Crossref
+- Thin orchestrator that coordinates a 7-step workflow (intake → plan → research → read → write → review → export)
+- Single "assistant" subagent type, directed via skill files for each task
+- Deterministic academic source research via Semantic Scholar, OpenAlex, and Crossref
 - Formatted `.docx` output with cover page, table of contents, and page numbers
 - Supports multiple input formats: PDF, DOCX, PPTX, images, text files
 - Source PDFs saved alongside run artifacts for inspection

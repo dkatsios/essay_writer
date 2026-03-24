@@ -13,8 +13,8 @@ import pytest
 # ── subagents ─────────────────────────────────────────────────────────────
 
 
-class TestMakeSubagent:
-    """Tests for the data-driven subagent factory."""
+class TestMakeAssistant:
+    """Tests for the assistant subagent factory."""
 
     @pytest.fixture()
     def config(self):
@@ -22,47 +22,29 @@ class TestMakeSubagent:
 
         return EssayWriterConfig()
 
-    def test_all_names_are_valid(self, config):
-        from src.subagents import _SUBAGENT_SPECS, make_subagent
+    def test_returns_valid_subagent(self, config):
+        from src.subagents import make_assistant
 
-        for name, *_ in _SUBAGENT_SPECS:
-            agent = make_subagent(name, config, tools=[])
-            assert agent["name"] == name
-            assert "description" in agent
-            assert "system_prompt" in agent
-            assert "model" in agent
+        agent = make_assistant(config, tools=[])
+        assert agent["name"] == "assistant"
+        assert "description" in agent
+        assert "system_prompt" in agent
+        assert "model" in agent
+        assert "skills" in agent
+        assert "tools" in agent
 
-    def test_unknown_name_raises(self, config):
-        from src.subagents import make_subagent
+    def test_tools_passed_through(self, config):
+        from src.subagents import make_assistant
 
-        with pytest.raises(ValueError, match="Unknown subagent"):
-            make_subagent("nonexistent", config, tools=[])
+        tools = ["tool1", "tool2"]
+        agent = make_assistant(config, tools=tools)
+        assert agent["tools"] == tools
 
-    def test_skills_key_present_only_when_expected(self, config):
-        from src.subagents import _SUBAGENT_SPECS, make_subagent
+    def test_uses_assistant_model(self, config):
+        from src.subagents import make_assistant
 
-        for name, _, _, has_skills in _SUBAGENT_SPECS:
-            agent = make_subagent(name, config, tools=[])
-            if has_skills:
-                assert "skills" in agent
-            else:
-                assert "skills" not in agent
-
-    def test_convenience_aliases_match(self, config):
-        from src.subagents import (
-            make_intake,
-            make_planner,
-            make_reader,
-            make_reviewer,
-            make_subagent,
-            make_writer,
-        )
-
-        assert make_intake(config, []) == make_subagent("intake", config, [])
-        assert make_planner(config, []) == make_subagent("planner", config, [])
-        assert make_reader(config, []) == make_subagent("reader", config, [])
-        assert make_writer(config, []) == make_subagent("writer", config, [])
-        assert make_reviewer(config, []) == make_subagent("reviewer", config, [])
+        agent = make_assistant(config, tools=[])
+        assert agent["model"] == config.models.assistant
 
 
 # ── web_fetcher HTML stripping ────────────────────────────────────────────
@@ -187,7 +169,7 @@ class TestRendering:
         from config.schemas import EssayWriterConfig
 
         config = EssayWriterConfig()
-        result = render_prompt("intake.j2", config=config)
+        result = render_prompt("assistant.j2", config=config)
         assert isinstance(result, str)
         assert len(result) > 0
 

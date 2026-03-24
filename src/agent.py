@@ -14,13 +14,7 @@ from langgraph.graph.state import CompiledStateGraph
 
 from config.schemas import EssayWriterConfig, load_config
 from src.rendering import render_prompt
-from src.subagents import (
-    make_intake,
-    make_planner,
-    make_reader,
-    make_reviewer,
-    make_writer,
-)
+from src.subagents import make_assistant
 from src.tools import (
     count_words,
     make_build_docx,
@@ -229,42 +223,33 @@ def create_essay_agent(
     # Essay dir persists drafts alongside run artifacts
     essay_dir = str(Path(sources_dir).parent / "essay") if sources_dir else None
 
-    # Orchestrator tools: research_sources replaces the researcher subagent
+    # Orchestrator tools (research_sources is deterministic Python, not LLM)
     build_docx = make_build_docx(
         config.paths.output_dir, sources_dir=sources_dir, essay_dir=essay_dir
     )
-    fetch_url = make_fetch_url(sources_dir)
-    read_pdf = make_read_pdf(sources_dir)
     research_sources = make_research_sources(sources_dir)
     orchestrator_tools = [count_words, build_docx, research_sources]
 
-    # Document reading tools for reader subagent
-    doc_tools = [read_pdf, read_docx, fetch_url, count_words]
+    # Assistant tools — union of all tools any task might need
+    fetch_url = make_fetch_url(sources_dir)
+    read_pdf = make_read_pdf(sources_dir)
+    assistant_tools = [read_pdf, read_docx, fetch_url, count_words]
 
     # Render orchestrator system prompt
     orchestrator_prompt = render_prompt("orchestrator.j2", config=config)
 
-    # 5 subagent types (researcher replaced by research_sources tool)
+    # Single assistant subagent — orchestrator directs it via skill references
     malformed_retry = _RetryMalformedMiddleware()
     server_retry = _make_server_retry_middleware()
-    subagents = [
-        make_intake(config, []),
-        make_planner(config, []),
-        make_reader(config, doc_tools),
-        make_writer(config, [count_words]),
-        make_reviewer(config, [count_words]),
-    ]
-
-    # Pre-resolve models when AI_BASE_URL is set so they use the custom endpoint
-    for sa in subagents:
-        sa["model"] = _resolve_model(sa["model"])
-        sa.setdefault("middleware", []).extend([server_retry, malformed_retry])
+    assistant = make_assistant(config, assistant_tools)
+    assistant["model"] = _resolve_model(assistant["model"])
+    assistant.setdefault("middleware", []).extend([server_retry, malformed_retry])
 
     return create_deep_agent(
         model=_resolve_model(config.models.orchestrator),
         tools=orchestrator_tools,
         system_prompt=orchestrator_prompt,
-        subagents=subagents,
+        subagents=[assistant],
         skills=[config.paths.skills_dir],
         backend=_create_backend(config, input_staging_dir, sources_dir, essay_dir),
         checkpointer=MemorySaver(),

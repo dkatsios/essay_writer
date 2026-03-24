@@ -30,4 +30,7 @@ def read_docx(
     file_path: Annotated[str, "Path to the .docx file to read."],
 ) -> str:
     """Extract text and structure from a .docx file. Preserves heading markers."""
-    return extract_docx_text(Document(file_path))
+    try:
+        return extract_docx_text(Document(file_path))
+    except Exception as exc:
+        return f"ERROR: Could not read '{file_path}': {exc}"
