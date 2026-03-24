@@ -24,7 +24,7 @@ logger = logging.getLogger(__name__)
 _SEMANTIC_SCHOLAR_API = "https://api.semanticscholar.org/graph/v1/paper/search"
 _MAX_RETRIES = 3
 _INITIAL_BACKOFF = 2  # seconds
-_MIN_REQUEST_INTERVAL = 3.0  # seconds between requests (safe for unauthenticated)
+_MIN_REQUEST_INTERVAL = 1.0  # seconds between requests (unauthenticated limit: 1 req/s)
 
 # Thread-safe throttle: parallel subagents share this to avoid bursting
 _request_lock = threading.Lock()
