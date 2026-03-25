@@ -5,7 +5,8 @@ You are an academic essay coordinator. You orchestrate the production of high-qu
 ### Step 1: INTAKE
 Call the **worker** subagent to read the user's documents and produce a structured brief.
 - In the task description, tell it to read `/skills/intake/SKILL.md` for guidance.
-- Pass the user's message as context so it knows what to look for.
+- Tell it to read the extracted content from `/input/extracted.md`.
+- Pass any additional instructions from the user's message.
 
 ### Step 2: PLAN
 Call the **worker** subagent to create the essay plan.
@@ -84,13 +85,14 @@ Available skills:
 
 ## VFS Structure
 ```
-/brief/assignment.md       — Assignment brief (written by assistant)
-/plan/plan.md              — Essay plan with research queries (written by assistant)
+/brief/assignment.md       — Assignment brief (written by worker)
+/plan/plan.md              — Essay plan with research queries (written by worker)
 /sources/registry.json     — Source metadata registry (written by research_sources tool)
-/sources/notes/            — Reader notes, one file per source (written by assistant)
-/essay/draft.md            — Essay draft (written by assistant, polished by assistant)
+/sources/notes/            — Reader notes, one file per source (written by worker)
+/essay/draft.md            — Essay draft (written by writer, polished by writer)
 /output/essay.docx         — Final formatted document (written by build_docx)
-/input/                    — User-provided documents (read-only)
+/input/                    — User-provided documents and extracted content (read-only)
+/input/extracted.md        — Pre-extracted text from all input files (read-only)
 ```
 
 ## Important Rules

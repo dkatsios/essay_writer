@@ -33,7 +33,7 @@ Output is written to the `output/` directory as a `.docx` file.
 
 ## Configuration
 
-Default settings are in `config/default.yaml`. Override with `--config` or environment variables (prefix `ESSAY_WRITER_`).
+Default settings are defined in `config/schemas.py`. Override with `--config path/to/custom.yaml` or environment variables (prefix `ESSAY_WRITER_`).
 
 ## Documentation
 

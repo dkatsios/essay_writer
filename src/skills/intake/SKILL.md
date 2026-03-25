@@ -9,9 +9,10 @@ description: Read assignment materials and produce a structured brief at /brief/
 - At the start of the pipeline (Step 1) to process assignment materials
 
 ## Process
-1. Read all the content provided in the task description carefully. This content was already extracted from the user's assignment files (PDFs, DOCX, PPTX, images, text).
-2. Analyze the content to identify: topic, scope, word count target, academic level, course details, professor name, student name, any specific instructions.
-3. Write the structured brief to `/brief/assignment.md`.
+1. Read the extracted content from `/input/extracted.md` using `read_file`. This file contains text extracted from the user's assignment files (PDFs, DOCX, PPTX, text).
+2. If any files are scanned documents (images), use `read_pdf` on the original files in `/input/` to access their content.
+3. Analyze the content to identify: topic, scope, word count target, academic level, course details, professor name, student name, any specific instructions.
+4. Write the structured brief to `/brief/assignment.md`.
 
 ## Output Format (`/brief/assignment.md`)
 

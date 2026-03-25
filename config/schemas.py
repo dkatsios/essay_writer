@@ -11,13 +11,11 @@ from pydantic_settings.sources import (
     YamlConfigSettingsSource,
 )
 
-_DEFAULT_YAML = Path(__file__).parent / "default.yaml"
-
 
 class ModelsConfig(BaseModel):
     """Model selection per agent role."""
 
-    orchestrator: str = "google_genai:gemini-2.5-flash"
+    orchestrator: str = "google_genai:gemini-3-flash-preview"
     worker: str = "google_genai:gemini-2.5-flash"
     writer: str = "google_genai:gemini-3-flash-preview"
 
@@ -61,15 +59,13 @@ class EssayWriterConfig(BaseSettings):
 
     Config priority (highest wins):
       1. Environment variables (prefix: ESSAY_WRITER_)
-      2. YAML config file (config/default.yaml or custom path)
+      2. Custom YAML config file (via --config)
       3. Field defaults above
     """
 
     model_config = SettingsConfigDict(
         env_prefix="ESSAY_WRITER_",
         env_nested_delimiter="__",
-        yaml_file=str(_DEFAULT_YAML),
-        yaml_file_encoding="utf-8",
     )
 
     models: ModelsConfig = ModelsConfig()
@@ -87,18 +83,19 @@ class EssayWriterConfig(BaseSettings):
         dotenv_settings: PydanticBaseSettingsSource,
         file_secret_settings: PydanticBaseSettingsSource,
     ) -> tuple[PydanticBaseSettingsSource, ...]:
-        return (
-            init_settings,
-            env_settings,
-            YamlConfigSettingsSource(settings_cls),
-        )
+        yaml_file = cls.model_config.get("yaml_file")
+        sources = [init_settings, env_settings]
+        if yaml_file:
+            sources.append(YamlConfigSettingsSource(settings_cls))
+        return tuple(sources)
 
 
 def load_config(yaml_path: str | None = None) -> EssayWriterConfig:
     """Load configuration, optionally from a custom YAML file.
 
     Args:
-        yaml_path: Path to a YAML config file. If None, uses config/default.yaml.
+        yaml_path: Path to a YAML config file. If None, uses field defaults
+            with environment variable overrides.
 
     Returns:
         Validated EssayWriterConfig instance.

@@ -86,18 +86,21 @@ Supported: `.md`, `.txt`, `.text`, `.rst`, `.csv`, `.tsv`, `.log`, `.pdf`, `.doc
 
 ### Configuration
 
-Uses `pydantic-settings` (`BaseSettings`) with three layers (highest wins):
+Uses `pydantic-settings` (`BaseSettings`) with two layers (highest wins):
 
-1. **Environment variables** — prefix `ESSAY_WRITER_`, nested with `__` (e.g., `ESSAY_WRITER_MODELS__ORCHESTRATOR=anthropic:claude-opus-4-6`)
-2. **YAML config file** — `config/default.yaml` by default, override with `--config`
+1. **Environment variables** — prefix `ESSAY_WRITER_`, nested with `__` (e.g., `ESSAY_WRITER_MODELS__ORCHESTRATOR=google_genai:gemini-2.5-flash`)
+2. **Custom YAML config file** — override with `--config path/to/custom.yaml`
 3. **Field defaults** — in the Pydantic models at `config/schemas.py`
+
+No `default.yaml` exists; field defaults in `schemas.py` are canonical.
 
 ### Key Invariants
 
-- **Jinja2 templates** (`src/templates/*.j2`) render system prompts. 2 templates: `orchestrator.j2` (orchestrator), `assistant.j2` (single assistant subagent).
-- **Skills** (`src/skills/*/SKILL.md`) provide detailed task-specific instructions via progressive disclosure — the assistant reads the relevant skill via `read_file` when starting each task. 6 skills: intake, essay-planning, source-reading, essay-writing, essay-review, docx-export.
+- **Jinja2 templates** (`src/templates/*.j2`) render system prompts. 2 templates: `orchestrator.j2` (orchestrator), `assistant.j2` (shared by worker and writer subagents).
+- **Skills** (`src/skills/*/SKILL.md`) provide detailed task-specific instructions via progressive disclosure — subagents read the relevant skill via `read_file` when starting each task. 6 skills: intake, essay-planning, source-reading, essay-writing, essay-review, docx-export.
 - **Retry middleware** — `_RetryMalformedMiddleware` retries on `MALFORMED_FUNCTION_CALL` / zero-output `STOP` (Gemini glitch). `ModelRetryMiddleware` retries on transient 503/429 errors with exponential backoff. Both applied to all agents.
-- **Thin orchestrator** — the orchestrator is a lightweight coordinator. Research is handled by the `research_sources` tool (deterministic Python, no LLM). Heavy writing and review work is delegated to the writer subagent.
+- **Thin orchestrator** — the orchestrator is a lightweight coordinator that receives only a text-only summary of input files (no multimodal content). Research is handled by the `research_sources` tool (deterministic Python, no LLM). Heavy writing and review work is delegated to the writer subagent.
+- **Input flow** — `build_message_content()` returns a text-only summary for the orchestrator and writes extracted content to `/input/extracted.md` for the worker. Multimodal content (scanned PDF images) stays in `/input/` for the worker to access via `read_pdf`. The orchestrator never sees base64 images.
 - **`research_sources` tool** — fans out queries across Semantic Scholar, OpenAlex, and Crossref in parallel, deduplicates by DOI/title, writes registry JSON. Zero LLM tokens consumed.
 - **Subagent independence** — subagents have NO conversation history from the orchestrator. They read what they need from VFS. Multiple `task` calls in one message run in parallel.
 - **CompositeBackend** routes `/input/` to a temp staging dir, `/output/`, `/sources/`, and `/essay/` to `FilesystemBackend` (real disk); everything else goes to `StateBackend` (in-memory LangGraph state).

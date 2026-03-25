@@ -22,7 +22,7 @@ Supported input file types: .md, .txt, .rst, .csv, .pdf, .docx, .pptx,
 
 Configuration priority (highest wins):
     1. Environment variables (prefix ESSAY_WRITER_, nested with __)
-    2. YAML config file (config/default.yaml or --config override)
+    2. Custom YAML config file (via --config)
     3. Field defaults in config/schemas.py
 """
 
@@ -445,8 +445,13 @@ def run(
     # Stage files into a temp directory for the agent's /input/ backend
     staging_dir = stage_files(input_files)
 
-    # Build the message content (plain text or multimodal)
-    content = build_message_content(input_files, extra_prompt=prompt)
+    # Build orchestrator summary (text-only) and extracted content for worker
+    orchestrator_summary, extracted_text = build_message_content(
+        input_files, extra_prompt=prompt
+    )
+
+    # Write extracted content to staging dir so worker reads it from /input/
+    (Path(staging_dir) / "extracted.md").write_text(extracted_text, encoding="utf-8")
 
     # Sources dir persists downloaded PDFs alongside run artifacts
     if output_dir:
@@ -471,7 +476,7 @@ def run(
     try:
         result = _invoke_with_retry(
             agent,
-            {"messages": [HumanMessage(content=content)]},
+            {"messages": [HumanMessage(content=orchestrator_summary)]},
             _THREAD_ID,
             callbacks,
             run_tags=run_tags,
@@ -603,7 +608,7 @@ def main() -> None:
     parser.add_argument(
         "--config",
         default=None,
-        help="Path to a custom YAML config file (default: config/default.yaml).",
+        help="Path to a custom YAML config file.",
     )
     parser.add_argument(
         "--dump-vfs",

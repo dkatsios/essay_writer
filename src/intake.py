@@ -280,55 +280,55 @@ def stage_files(input_files: list[InputFile]) -> Path:
 def build_message_content(
     input_files: list[InputFile],
     extra_prompt: str | None = None,
-) -> str | list[dict]:
-    """Build the HumanMessage content from scanned input files.
+) -> str:
+    """Build a text-only summary for the orchestrator.
 
-    Returns a plain string if there are no images, or a list of content
-    blocks (text + image_url) for multimodal messages.
+    Extracted text content is written to the staging directory as
+    ``extracted.md`` so the worker subagent can read it from VFS at
+    ``/input/extracted.md``.  The orchestrator receives only a short
+    summary listing the files and topic — no extracted text, no images.
+
+    Returns a plain string (never multimodal).
     """
     text_parts: list[str] = []
-    image_blocks: list[dict] = []
+    file_list: list[str] = []
     warnings: list[str] = []
+    has_images = False
 
     for f in input_files:
         if f.warning:
             warnings.append(f"- {f.path.name}: {f.warning}")
             continue
+        file_list.append(f"- {f.path.name} ({f.category})")
         if f.text:
             text_parts.append(f"### File: {f.path.name}\n\n{f.text}")
         if f.image_blocks:
-            image_blocks.extend(f.image_blocks)
+            has_images = True
             n_pages = len(f.image_blocks)
             label = f"{n_pages} page image(s)" if n_pages > 1 else "image"
             text_parts.append(
                 f"### Image: {f.path.name}\n\n"
-                f"(See the attached {label} below for the content of this file.)"
+                f"(Scanned document with {label} — "
+                f"worker should use read_pdf to access this file from /input/.)"
             )
 
-    # Assemble the text portion
-    sections = ["# Assignment Materials\n"]
-    sections.append(
-        "The following content was extracted from the input files. "
-        "Use this information to understand the assignment and proceed "
-        "with the essay writing pipeline.\n"
-    )
-    if warnings:
-        sections.append("## Warnings\n\nThe following files could not be processed:\n")
-        sections.extend(warnings)
-        sections.append("")
-    sections.append("## Extracted Content\n")
-    sections.extend(text_parts)
+    # Write full extracted text to staging dir for worker to read via VFS
+    extracted_text = "\n\n".join(text_parts) if text_parts else "(no text extracted)"
 
+    # Build orchestrator summary — minimal, no extracted content
+    sections = ["# Assignment Materials\n"]
+    sections.append("Files have been staged at `/input/` for the worker to process.\n")
+    sections.append("## File List\n")
+    sections.extend(file_list)
+    if warnings:
+        sections.append("\n## Warnings\n")
+        sections.extend(warnings)
+    if has_images:
+        sections.append(
+            "\n## Note\nSome files are scanned documents (images). "
+            "The worker has access to the original files via `/input/`."
+        )
     if extra_prompt:
         sections.append(f"\n## Additional Instructions\n\n{extra_prompt}")
 
-    full_text = "\n\n".join(sections)
-
-    # If no images, return plain string (simpler for the LLM)
-    if not image_blocks:
-        return full_text
-
-    # Multimodal: text block + image blocks
-    content_blocks: list[dict] = [{"type": "text", "text": full_text}]
-    content_blocks.extend(image_blocks)
-    return content_blocks
+    return "\n".join(sections), extracted_text
