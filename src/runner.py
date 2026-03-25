@@ -41,6 +41,109 @@ from src.pipeline import run_pipeline  # noqa: E402
 
 
 # ---------------------------------------------------------------------------
+# Pricing per 1M tokens (google_genai models)
+# ---------------------------------------------------------------------------
+_PRICING: dict[str, dict[str, float]] = {
+    "gemini-2.5-pro": {"input": 1.25, "output": 10.00, "thinking": 3.50},
+    "gemini-2.5-flash": {"input": 0.15, "output": 0.60, "thinking": 0.70},
+    "gemini-2.5-flash-lite": {"input": 0.075, "output": 0.30, "thinking": 0.0},
+    "gemini-2.0-flash": {"input": 0.10, "output": 0.40, "thinking": 0.0},
+}
+# Fallback pricing for unknown models
+_DEFAULT_PRICING = {"input": 0.15, "output": 0.60, "thinking": 0.70}
+
+
+def _model_short_name(full_name: str) -> str:
+    """Extract model name from full spec like 'google_genai:gemini-2.5-flash'."""
+    if ":" in full_name:
+        full_name = full_name.split(":", 1)[1]
+    # Remove version suffixes like -001
+    for suffix in ("-001", "-002", "-latest"):
+        full_name = full_name.removesuffix(suffix)
+    return full_name
+
+
+# ---------------------------------------------------------------------------
+# Token tracker — captures per-step LLM token usage and costs
+# ---------------------------------------------------------------------------
+
+
+class TokenTracker:
+    """Tracks LLM token usage per pipeline step."""
+
+    def __init__(self) -> None:
+        self.current_step: str = "unknown"
+        # step -> {input_tokens, output_tokens, thinking_tokens, model, calls}
+        self._steps: dict[str, dict] = {}
+
+    def _ensure_step(self, step: str) -> dict:
+        if step not in self._steps:
+            self._steps[step] = {
+                "input_tokens": 0,
+                "output_tokens": 0,
+                "thinking_tokens": 0,
+                "model": "",
+                "calls": 0,
+            }
+        return self._steps[step]
+
+    def record(
+        self,
+        model: str,
+        input_tokens: int,
+        output_tokens: int,
+        thinking_tokens: int = 0,
+    ) -> None:
+        data = self._ensure_step(self.current_step)
+        data["input_tokens"] += input_tokens
+        data["output_tokens"] += output_tokens
+        data["thinking_tokens"] += thinking_tokens
+        data["model"] = _model_short_name(model) if model else data["model"]
+        data["calls"] += 1
+
+    def cost_summary(self) -> str:
+        if not self._steps:
+            return "\n(No token data captured)"
+
+        lines = [
+            "",
+            "── Cost Report ─────────────────────────────────",
+            f"{'Step':<16} {'Model':<20} {'In':>8} {'Out':>8} {'Think':>8} {'Cost':>8}",
+            "─" * 72,
+        ]
+        total_cost = 0.0
+        total_in = 0
+        total_out = 0
+        total_think = 0
+
+        for step, data in self._steps.items():
+            model = data["model"] or "unknown"
+            pricing = _PRICING.get(model, _DEFAULT_PRICING)
+            in_cost = data["input_tokens"] * pricing["input"] / 1_000_000
+            out_cost = data["output_tokens"] * pricing["output"] / 1_000_000
+            think_cost = data["thinking_tokens"] * pricing["thinking"] / 1_000_000
+            step_cost = in_cost + out_cost + think_cost
+
+            total_cost += step_cost
+            total_in += data["input_tokens"]
+            total_out += data["output_tokens"]
+            total_think += data["thinking_tokens"]
+
+            lines.append(
+                f"{step:<16} {model:<20} "
+                f"{data['input_tokens']:>8,} {data['output_tokens']:>8,} "
+                f"{data['thinking_tokens']:>8,} ${step_cost:>6.4f}"
+            )
+
+        lines.append("─" * 72)
+        lines.append(
+            f"{'TOTAL':<16} {'':<20} "
+            f"{total_in:>8,} {total_out:>8,} {total_think:>8,} ${total_cost:>6.4f}"
+        )
+        return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
 # Step timer — prints elapsed time for each tool call
 # ---------------------------------------------------------------------------
 
@@ -108,10 +211,84 @@ class _StepTimer:
         return "\n".join(lines)
 
 
-def _make_callbacks(timer: _StepTimer) -> list:
+def _make_callbacks(timer: _StepTimer, tracker: TokenTracker) -> list:
     from langchain_core.callbacks import BaseCallbackHandler
 
     class _H(BaseCallbackHandler):
+        def __init__(self):
+            super().__init__()
+            self._models: dict[str, str] = {}  # run_id -> model name
+
+        def on_chat_model_start(self, serialized, messages, *, run_id, **kw):
+            model = (kw.get("invocation_params") or {}).get("model", "")
+            if not model:
+                model = serialized.get("kwargs", {}).get("model", "")
+            if not model:
+                ids = serialized.get("id", [])
+                model = ids[-1] if ids else ""
+            self._models[str(run_id)] = model
+
+        def on_llm_end(self, response, *, run_id, **kw):
+            model = self._models.pop(str(run_id), "")
+            # Try llm_output first
+            llm_out = response.llm_output or {}
+            usage = llm_out.get("usage_metadata") or llm_out.get("token_usage") or {}
+            # Fall back to generation_info on the first generation
+            if not usage and response.generations:
+                for gen_list in response.generations:
+                    for gen in gen_list:
+                        info = gen.generation_info or {}
+                        usage = info.get("usage_metadata", {})
+                        if usage:
+                            break
+                    if usage:
+                        break
+            # Also try message.usage_metadata (ChatGeneration stores AIMessage)
+            if not usage and response.generations:
+                for gen_list in response.generations:
+                    for gen in gen_list:
+                        msg = getattr(gen, "message", None)
+                        if msg:
+                            um = getattr(msg, "usage_metadata", None)
+                            if um:
+                                usage = (
+                                    um
+                                    if isinstance(um, dict)
+                                    else {
+                                        "input_tokens": getattr(um, "input_tokens", 0),
+                                        "output_tokens": getattr(
+                                            um, "output_tokens", 0
+                                        ),
+                                    }
+                                )
+                                # Check response_metadata for model
+                                rm = getattr(msg, "response_metadata", {}) or {}
+                                if not model and "model_name" in rm:
+                                    model = rm["model_name"]
+                                break
+                    if usage:
+                        break
+
+            in_tok = (
+                usage.get("input_tokens")
+                or usage.get("prompt_tokens")
+                or usage.get("prompt_token_count")
+                or 0
+            )
+            raw_out = (
+                usage.get("output_tokens")
+                or usage.get("completion_tokens")
+                or usage.get("candidates_token_count")
+                or 0
+            )
+            # Thinking tokens are nested under output_token_details.reasoning
+            details = usage.get("output_token_details") or {}
+            think_tok = details.get("reasoning", 0) if isinstance(details, dict) else 0
+            # output_tokens from API includes thinking; separate them for billing
+            out_tok = max(raw_out - think_tok, 0)
+            if in_tok or out_tok or think_tok:
+                tracker.record(model, in_tok, out_tok, think_tok)
+
         def on_tool_start(self, serialized, input_str, *, run_id, **kw):
             timer.on_tool_start(serialized.get("name", "unknown"), str(run_id))
 
@@ -129,7 +306,9 @@ def _setup_file_logging(output_dir: Path) -> logging.FileHandler:
     handler = logging.FileHandler(log_path, encoding="utf-8")
     handler.setLevel(logging.DEBUG)
     handler.setFormatter(
-        logging.Formatter("%(asctime)s [%(levelname)s] %(name)s: %(message)s", "%H:%M:%S")
+        logging.Formatter(
+            "%(asctime)s [%(levelname)s] %(name)s: %(message)s", "%H:%M:%S"
+        )
     )
     logging.getLogger().addHandler(handler)
     return handler
@@ -173,13 +352,18 @@ def run(
     writer = create_writer(config, run_dir)
 
     timer = _StepTimer()
-    callbacks = _make_callbacks(timer)
+    tracker = TokenTracker()
+    callbacks = _make_callbacks(timer, tracker)
 
     try:
         run_pipeline(
-            worker, writer, run_dir, config,
+            worker,
+            writer,
+            run_dir,
+            config,
             extra_prompt=prompt,
             callbacks=callbacks,
+            token_tracker=tracker,
         )
     finally:
         shutil.rmtree(staging_dir, ignore_errors=True)
@@ -193,11 +377,14 @@ def run(
         shutil.copy2(str(docx_src), str(output_dir / "essay.docx"))
 
     summary = timer.summary()
+    cost = tracker.cost_summary()
     print(summary, file=sys.stderr)
-    logger.info("Run summary:\n%s", summary)
+    print(cost, file=sys.stderr)
+    logger.info("Run summary:\n%s\n%s", summary, cost)
 
     if output_dir:
         from src.analysis import generate_run_report
+
         generate_run_report(output_dir, output_dir.name)
 
 
@@ -226,12 +413,17 @@ def run_prompt(
     writer = create_writer(config, run_dir)
 
     timer = _StepTimer()
-    callbacks = _make_callbacks(timer)
+    tracker = TokenTracker()
+    callbacks = _make_callbacks(timer, tracker)
 
     try:
         run_pipeline(
-            worker, writer, run_dir, config,
+            worker,
+            writer,
+            run_dir,
+            config,
             callbacks=callbacks,
+            token_tracker=tracker,
         )
     finally:
         if log_handler:
@@ -243,11 +435,14 @@ def run_prompt(
         shutil.copy2(str(docx_src), str(output_dir / "essay.docx"))
 
     summary = timer.summary()
+    cost = tracker.cost_summary()
     print(summary, file=sys.stderr)
-    logger.info("Run summary:\n%s", summary)
+    print(cost, file=sys.stderr)
+    logger.info("Run summary:\n%s\n%s", summary, cost)
 
     if output_dir:
         from src.analysis import generate_run_report
+
         generate_run_report(output_dir, output_dir.name)
 
 
@@ -257,13 +452,25 @@ def main() -> None:
         description="Essay Writer — AI-powered academic essay generator",
     )
     parser.add_argument(
-        "input_path", nargs="?",
+        "input_path",
+        nargs="?",
         help="Path to a file or directory containing assignment materials.",
     )
-    parser.add_argument("--prompt", "-p", default=None, help="Additional instructions or standalone prompt.")
-    parser.add_argument("--config", default=None, help="Path to a custom YAML config file.")
-    parser.add_argument("--dump-vfs", action="store_true", default=False,
-        help="Save outputs to a timestamped directory under .output/.")
+    parser.add_argument(
+        "--prompt",
+        "-p",
+        default=None,
+        help="Additional instructions or standalone prompt.",
+    )
+    parser.add_argument(
+        "--config", default=None, help="Path to a custom YAML config file."
+    )
+    parser.add_argument(
+        "--dump-vfs",
+        action="store_true",
+        default=False,
+        help="Save outputs to a timestamped directory under .output/.",
+    )
     args = parser.parse_args()
 
     output_dir = None
@@ -292,7 +499,12 @@ def main() -> None:
     elif args.input_path is None:
         run_prompt(args.prompt, config_path=args.config, output_dir=output_dir)
     else:
-        run(args.input_path, prompt=args.prompt, config_path=args.config, output_dir=output_dir)
+        run(
+            args.input_path,
+            prompt=args.prompt,
+            config_path=args.config,
+            output_dir=output_dir,
+        )
 
 
 if __name__ == "__main__":

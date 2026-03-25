@@ -36,10 +36,12 @@ def _invoke(
     )
 
 
-def _step(name: str, fn, *args):
+def _step(name: str, fn, *args, tracker=None):
     """Run a pipeline step with timing and stderr output."""
     print(f"\n{'─' * 50}", file=sys.stderr)
     print(f"  Step: {name}", file=sys.stderr)
+    if tracker is not None:
+        tracker.current_step = name
     t0 = monotonic()
     try:
         result = fn(*args)
@@ -60,6 +62,7 @@ def run_pipeline(
     *,
     extra_prompt: str | None = None,
     callbacks: list | None = None,
+    token_tracker=None,
 ) -> None:
     """Execute the 7-step essay writing pipeline.
 
@@ -70,12 +73,14 @@ def run_pipeline(
         config: Essay writer configuration.
         extra_prompt: Optional additional user instructions.
         callbacks: LangChain callback handlers (for tool timing).
+        token_tracker: Optional TokenTracker for per-step cost tracking.
     """
     extra = (
         f"\nAdditional instructions from the user: {extra_prompt}"
         if extra_prompt
         else ""
     )
+    tk = {"tracker": token_tracker}
 
     # Step 1: Intake
     _step(
@@ -86,6 +91,7 @@ def run_pipeline(
         f"Read /skills/worker/intake/SKILL.md. "
         f"Read extracted content from /input/extracted.md.{extra}",
         callbacks,
+        **tk,
     )
 
     # Step 2: Plan
@@ -97,6 +103,7 @@ def run_pipeline(
         "Read /skills/worker/essay-planning/SKILL.md. "
         "The brief is at /brief/assignment.md.",
         callbacks,
+        **tk,
     )
 
     # Step 3: Research
@@ -107,10 +114,11 @@ def run_pipeline(
         "research",
         "Read /skills/worker/research/SKILL.md. The plan is at /plan/plan.md.",
         callbacks,
+        **tk,
     )
 
     # Step 4: Read sources (parallel)
-    _step("read_sources", _read_sources_parallel, worker, run_dir, callbacks)
+    _step("read_sources", _read_sources_parallel, worker, run_dir, callbacks, **tk)
 
     # Step 5: Write
     _step(
@@ -120,6 +128,7 @@ def run_pipeline(
         "write",
         "Read /skills/writer/essay-writing/SKILL.md.",
         callbacks,
+        **tk,
     )
 
     # Step 6: Review
@@ -130,6 +139,7 @@ def run_pipeline(
         "review",
         "Read /skills/writer/essay-review/SKILL.md.",
         callbacks,
+        **tk,
     )
 
     # Step 7: Export (pure Python — no LLM)
