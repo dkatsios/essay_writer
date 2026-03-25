@@ -15,9 +15,8 @@ from pydantic_settings.sources import (
 class ModelsConfig(BaseModel):
     """Model selection per agent role."""
 
-    orchestrator: str = "google_genai:gemini-3-flash-preview"
     worker: str = "google_genai:gemini-2.5-flash"
-    writer: str = "google_genai:gemini-3-flash-preview"
+    writer: str = "google_genai:gemini-2.5-flash"
 
 
 class WritingConfig(BaseModel):

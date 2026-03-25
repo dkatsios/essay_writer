@@ -25,7 +25,7 @@ uv run python -m src.runner /path/to/files/ --config my_config.yaml
 uv run python -m pytest tests/ -v
 
 # Import check
-uv run python -c "from src.agent import create_essay_agent"
+uv run python -c "from src.agent import create_worker, create_writer"
 ```
 
 ## Documentation Sync

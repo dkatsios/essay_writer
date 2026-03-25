@@ -1,11 +1,11 @@
 # Essay Writer
 
-AI-powered academic essay generator for Greek university students. Uses an AI orchestrator with a single assistant subagent to research, plan, write, review, and export formatted `.docx` essays.
+AI-powered academic essay generator for Greek university students. Uses a deterministic Python pipeline with two specialized LLM agents (worker and writer) to research, plan, write, review, and export formatted `.docx` essays.
 
 ## Features
 
-- Thin orchestrator that coordinates a 7-step workflow (intake → plan → research → read → write → review → export)
-- Single "assistant" subagent type, directed via skill files for each task
+- Deterministic 7-step Python pipeline (intake → plan → research → read → write → review → export)
+- Two agent types: worker (fast model for research/planning) and writer (quality model for essay text)
 - Deterministic academic source research via Semantic Scholar, OpenAlex, and Crossref
 - Formatted `.docx` output with cover page, table of contents, and page numbers
 - Supports multiple input formats: PDF, DOCX, PPTX, images, text files

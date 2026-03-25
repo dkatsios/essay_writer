@@ -1,4 +1,4 @@
-"""Tests for refactored modules."""
+"""Tests for the essay writer pipeline modules."""
 
 from __future__ import annotations
 
@@ -10,70 +10,35 @@ from unittest.mock import MagicMock
 import pytest
 
 
-# ── subagents ─────────────────────────────────────────────────────────────
+# ── agent factories ──────────────────────────────────────────────────────
 
 
-class TestSubagentFactories:
-    """Tests for the worker and writer subagent factories."""
+class TestAgentMiddleware:
+    """Tests for middleware classes in agent.py."""
 
-    @pytest.fixture()
-    def config(self):
-        from config.schemas import EssayWriterConfig
+    def test_block_tools_middleware_blocks(self):
+        from src.agent import _BlockToolsMiddleware
 
-        return EssayWriterConfig()
+        mw = _BlockToolsMiddleware(frozenset({"edit_file", "grep"}))
+        request = MagicMock()
+        request.tool_call = {"name": "edit_file", "id": "test-id"}
+        handler = MagicMock()
 
-    def test_worker_returns_valid_subagent(self, config):
-        from src.subagents import make_worker
+        result = mw.wrap_tool_call(request, handler)
+        handler.assert_not_called()
+        assert "disabled" in result.content
 
-        agent = make_worker(config, tools=[])
-        assert agent["name"] == "worker"
-        assert "description" in agent
-        assert "system_prompt" in agent
-        assert "model" in agent
-        assert "skills" in agent
-        assert "tools" in agent
+    def test_block_tools_middleware_passes(self):
+        from src.agent import _BlockToolsMiddleware
 
-    def test_writer_returns_valid_subagent(self, config):
-        from src.subagents import make_writer
+        mw = _BlockToolsMiddleware(frozenset({"edit_file"}))
+        request = MagicMock()
+        request.tool_call = {"name": "write_file", "id": "test-id"}
+        handler = MagicMock(return_value="ok")
 
-        agent = make_writer(config, tools=[])
-        assert agent["name"] == "writer"
-        assert "description" in agent
-        assert "system_prompt" in agent
-        assert "model" in agent
-        assert "skills" in agent
-        assert "tools" in agent
-
-    def test_tools_passed_through(self, config):
-        from src.subagents import make_worker
-
-        tools = ["tool1", "tool2"]
-        agent = make_worker(config, tools=tools)
-        assert agent["tools"] == tools
-
-    def test_worker_uses_worker_model(self, config):
-        from src.subagents import make_worker
-
-        agent = make_worker(config, tools=[])
-        assert agent["model"] == config.models.worker
-
-    def test_writer_uses_writer_model(self, config):
-        from src.subagents import make_writer
-
-        agent = make_writer(config, tools=[])
-        assert agent["model"] == config.models.writer
-
-    def test_worker_skills_scoped_to_worker(self, config):
-        from src.subagents import make_worker
-
-        agent = make_worker(config, tools=[])
-        assert agent["skills"] == ["/skills/worker/"]
-
-    def test_writer_skills_scoped_to_writer(self, config):
-        from src.subagents import make_writer
-
-        agent = make_writer(config, tools=[])
-        assert agent["skills"] == ["/skills/writer/"]
+        result = mw.wrap_tool_call(request, handler)
+        handler.assert_called_once()
+        assert result == "ok"
 
 
 # ── web_fetcher HTML stripping ────────────────────────────────────────────
@@ -198,7 +163,7 @@ class TestRendering:
         from config.schemas import EssayWriterConfig
 
         config = EssayWriterConfig()
-        for template in ("worker.j2", "writer.j2", "orchestrator.j2"):
+        for template in ("worker.j2", "writer.j2"):
             result = render_prompt(template, config=config)
             assert isinstance(result, str)
             assert len(result) > 0
@@ -210,34 +175,3 @@ class TestRendering:
         env1 = _get_env("/tmp/dummy")
         env2 = _get_env("/tmp/dummy")
         assert env1 is env2
-
-
-# ── dump_vfs ──────────────────────────────────────────────────────────────
-
-
-class TestDumpVfs:
-    def _mock_agent(self, files: dict):
-        """Create a mock agent whose get_state returns the given files."""
-        agent = MagicMock()
-        state = MagicMock()
-        state.values = {"files": files}
-        agent.get_state.return_value = state
-        return agent
-
-    def test_writes_files_and_skips_skills(self, tmp_path):
-        from src.runner import dump_vfs
-
-        files = {
-            "/essay/draft.md": {"content": ["hello", "world"]},
-            "/skills/section-writing/SKILL.md": {"content": ["skip me"]},
-        }
-        dump_vfs(self._mock_agent(files), "t1", tmp_path)
-        assert (tmp_path / "vfs" / "essay" / "draft.md").read_text() == "hello\nworld"
-        assert not (tmp_path / "vfs" / "skills").exists()
-
-    def test_empty_files_warns(self, tmp_path, caplog):
-        from src.runner import dump_vfs
-
-        with caplog.at_level(logging.WARNING):
-            dump_vfs(self._mock_agent({}), "t1", tmp_path)
-        assert "No VFS files" in caplog.text

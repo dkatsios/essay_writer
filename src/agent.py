@@ -1,10 +1,18 @@
-"""Main agent assembly — creates the essay writer deep agent."""
+"""Agent factories — creates standalone worker and writer agents.
+
+Each agent uses ``create_agent`` (low-level) with only
+``FilesystemMiddleware`` for file tools.  No orchestrator, no
+TodoList, no SubAgent, no Summarization middleware — keeping
+the system prompt lean and the agent focused on a single task.
+The Python pipeline (``src/pipeline.py``) invokes agents in sequence.
+"""
 
 from __future__ import annotations
 
 import logging
 import os
 import time
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 from langchain.agents.middleware import AgentMiddleware, ModelRetryMiddleware
@@ -12,11 +20,9 @@ from langchain_core.language_models import BaseChatModel
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph.state import CompiledStateGraph
 
-from config.schemas import EssayWriterConfig, load_config
+from config.schemas import EssayWriterConfig
 from src.rendering import render_prompt
-from src.subagents import make_worker, make_writer
 from src.tools import (
-    make_build_docx,
     make_fetch_url,
     make_read_pdf,
     make_research_sources,
@@ -30,11 +36,12 @@ if TYPE_CHECKING:
         ModelRequest,
         ModelResponse,
     )
-    from langchain_core.messages import ToolMessage
-    from langgraph.prebuilt.tool_node import ToolCallRequest
-    from langgraph.types import Command
 
 logger = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# Middleware
+# ---------------------------------------------------------------------------
 
 _MALFORMED = "MALFORMED_FUNCTION_CALL"
 _RETRY_MAX = 3
@@ -42,12 +49,7 @@ _RETRY_DELAY = 1.0
 
 
 class _RetryMalformedMiddleware(AgentMiddleware):
-    """Middleware that retries model calls returning MALFORMED_FUNCTION_CALL.
-
-    Google Gemini sometimes returns finish_reason=MALFORMED_FUNCTION_CALL with
-    0 output tokens.  This is non-deterministic; retrying the same request
-    usually succeeds.
-    """
+    """Retry on Gemini's non-deterministic MALFORMED_FUNCTION_CALL glitch."""
 
     def wrap_model_call(
         self,
@@ -62,20 +64,15 @@ class _RetryMalformedMiddleware(AgentMiddleware):
             last = msgs[-1]
             finish = getattr(last, "response_metadata", {}).get("finish_reason")
             usage = getattr(last, "usage_metadata", None) or {}
-            output_tokens = (
-                usage.get("output_tokens", -1) if isinstance(usage, dict) else -1
-            )
-            # Retry on MALFORMED_FUNCTION_CALL or zero-output STOP (Gemini glitch)
-            needs_retry = finish == _MALFORMED or (
-                finish == "STOP" and output_tokens == 0
-            )
+            out_tok = usage.get("output_tokens", -1) if isinstance(usage, dict) else -1
+            needs_retry = finish == _MALFORMED or (finish == "STOP" and out_tok == 0)
             if not needs_retry:
                 return response
             if attempt < _RETRY_MAX:
                 logger.warning(
-                    "%s (output_tokens=%s) on model call — retrying (%d/%d)",
+                    "%s (output_tokens=%s) — retrying (%d/%d)",
                     finish,
-                    output_tokens,
+                    out_tok,
                     attempt + 1,
                     _RETRY_MAX,
                 )
@@ -83,84 +80,51 @@ class _RetryMalformedMiddleware(AgentMiddleware):
         return response
 
 
-class _TrimHistoryMiddleware(AgentMiddleware):
-    """Trim conversation history before each LLM call to reduce token usage.
-
-    Keeps the first message (user request with assignment context) and the
-    most recent messages.  The LLM doesn't need intermediate tool call/result
-    pairs — the ``write_todos`` state and VFS files provide all continuity.
-
-    Only modifies what the LLM sees; full history stays in LangGraph state.
-    """
-
-    def __init__(self, keep_recent: int = 6):
-        super().__init__()
-        self._keep_recent = keep_recent
-
-    def wrap_model_call(
-        self,
-        request: ModelRequest,
-        handler: Callable[[ModelRequest], ModelResponse],
-    ) -> ModelResponse:
-        messages = request.messages
-        threshold = self._keep_recent + 1  # +1 for the first message
-        if len(messages) <= threshold:
-            return handler(request)
-        trimmed = [messages[0]] + messages[-self._keep_recent :]
-        return handler(request.override(messages=trimmed))
-
-
 class _BlockToolsMiddleware(AgentMiddleware):
-    """Block specific tool calls at the code level.
+    """Block specific framework-injected tools at the code level.
 
-    LLMs ignore prompt-level instructions about forbidden tools.
-    This middleware intercepts blocked tool calls and returns an error
-    message without executing them.
+    LLMs ignore prompt-level restrictions.  This middleware short-circuits
+    blocked tool calls with an error message.
     """
 
     def __init__(self, blocked: frozenset[str]):
         super().__init__()
         self._blocked = blocked
 
-    def _make_error(self, request):
-        from langchain_core.messages import ToolMessage as TM
+    def _error(self, request):
+        from langchain_core.messages import ToolMessage
 
-        return TM(
-            content=f"ERROR: '{request.tool_call['name']}' is disabled. Use write_file instead.",
+        return ToolMessage(
+            content=f"ERROR: '{request.tool_call['name']}' is disabled.",
             tool_call_id=request.tool_call["id"],
             status="error",
         )
 
     def wrap_tool_call(self, request, handler):
         if request.tool_call["name"] in self._blocked:
-            return self._make_error(request)
+            return self._error(request)
         return handler(request)
 
     async def awrap_tool_call(self, request, handler):
         if request.tool_call["name"] in self._blocked:
-            return self._make_error(request)
+            return self._error(request)
         return await handler(request)
 
 
 def _is_retryable_api_error(exc: Exception) -> bool:
     """Return True for transient API errors (503, 429)."""
-    exc_str = str(exc)
-    # Google genai ServerError (503)
+    s = str(exc)
     if type(exc).__name__ == "ServerError":
         return True
-    # LangChain-wrapped Google errors (429 rate limit, 503 unavailable)
-    if "RESOURCE_EXHAUSTED" in exc_str or "429" in exc_str:
+    if "RESOURCE_EXHAUSTED" in s or "429" in s:
         return True
-    if "UNAVAILABLE" in exc_str or "503" in exc_str:
+    if "UNAVAILABLE" in s or "503" in s:
         return True
-    status = getattr(exc, "status_code", None)
-    if status and (status == 429 or 500 <= status < 600):
-        return True
-    return False
+    code = getattr(exc, "status_code", None)
+    return bool(code and (code == 429 or 500 <= code < 600))
 
 
-def _make_server_retry_middleware() -> ModelRetryMiddleware:
-    """Create a middleware that retries model calls on transient API errors."""
+def _server_retry() -> ModelRetryMiddleware:
     return ModelRetryMiddleware(
         max_retries=5,
         retry_on=_is_retryable_api_error,
@@ -172,29 +136,22 @@ def _make_server_retry_middleware() -> ModelRetryMiddleware:
     )
 
 
+# ---------------------------------------------------------------------------
+# Model resolution
+# ---------------------------------------------------------------------------
+
+
 def _resolve_model(model_spec: str) -> str | BaseChatModel:
-    """Resolve a model spec, routing through AI_BASE_URL when set.
-
-    When AI_BASE_URL (and optionally AI_API_KEY) are present in the
-    environment, the model is pre-resolved as a ChatOpenAI instance
-    pointing at that endpoint.  Otherwise the raw spec string is
-    returned for deepagents' default resolution.
-
-    AI_MODEL can override the model name sent to the custom endpoint.
-    If unset, the model name from the config spec is used as-is.
-    """
+    """Route through AI_BASE_URL when set, else return raw spec."""
     base_url = os.environ.get("AI_BASE_URL")
     if not base_url:
         return model_spec
-
     from langchain.chat_models import init_chat_model
 
-    # AI_MODEL overrides the model name; otherwise strip the provider prefix
     model_name = os.environ.get("AI_MODEL")
     if not model_name:
         _, _, model_name = model_spec.partition(":")
         model_name = model_name or model_spec
-
     return init_chat_model(
         f"openai:{model_name}",
         base_url=base_url,
@@ -202,54 +159,44 @@ def _resolve_model(model_spec: str) -> str | BaseChatModel:
     )
 
 
+# ---------------------------------------------------------------------------
+# Backend — all VFS paths map to run_dir subdirectories on disk
+# ---------------------------------------------------------------------------
+
+
 def _create_backend(
-    config: EssayWriterConfig,
+    run_dir: Path,
     input_staging_dir: str | None = None,
-    sources_dir: str | None = None,
-    essay_dir: str | None = None,
 ):
-    """Return a backend factory for create_deep_agent.
+    """Return a backend factory where VFS paths map to disk.
 
-    Args:
-        config: Project configuration (provides output_dir).
-        input_staging_dir: Temp directory with staged input files.
-            If None, the /input/ route is omitted (prompt-only mode).
-        sources_dir: Directory to persist downloaded source PDFs.
-            If None, /sources/ lives in VFS state only.
-        essay_dir: Directory to persist essay drafts.
-            If None, /essay/ lives in VFS state only.
+    Paths like ``/brief/``, ``/plan/``, ``/sources/``, ``/essay/``
+    all resolve to subdirectories of *run_dir*.  ``/skills/`` routes
+    to the actual skills directory on disk so agents can read SKILL.md
+    files via the VFS.
     """
-    from pathlib import Path
-
     from deepagents.backends import CompositeBackend, FilesystemBackend, StateBackend
 
-    # Ensure output directory exists
-    Path(config.paths.output_dir).mkdir(parents=True, exist_ok=True)
+    skills_dir = str(Path(__file__).resolve().parent / "skills")
 
     def factory(runtime):
-        routes = {
-            "/output/": FilesystemBackend(
-                root_dir=config.paths.output_dir,
+        routes = {}
+        for subdir in ("brief", "plan", "sources", "essay", "output"):
+            path = run_dir / subdir
+            path.mkdir(parents=True, exist_ok=True)
+            routes[f"/{subdir}/"] = FilesystemBackend(
+                root_dir=str(path),
                 virtual_mode=True,
-            ),
-        }
+            )
         if input_staging_dir is not None:
             routes["/input/"] = FilesystemBackend(
                 root_dir=input_staging_dir,
                 virtual_mode=True,
             )
-        if sources_dir is not None:
-            Path(sources_dir).mkdir(parents=True, exist_ok=True)
-            routes["/sources/"] = FilesystemBackend(
-                root_dir=sources_dir,
-                virtual_mode=True,
-            )
-        if essay_dir is not None:
-            Path(essay_dir).mkdir(parents=True, exist_ok=True)
-            routes["/essay/"] = FilesystemBackend(
-                root_dir=essay_dir,
-                virtual_mode=True,
-            )
+        routes["/skills/"] = FilesystemBackend(
+            root_dir=skills_dir,
+            virtual_mode=True,
+        )
         return CompositeBackend(
             default=StateBackend(runtime),
             routes=routes,
@@ -258,76 +205,69 @@ def _create_backend(
     return factory
 
 
-def create_essay_agent(
-    config: EssayWriterConfig | None = None,
+# ---------------------------------------------------------------------------
+# Agent factories
+# ---------------------------------------------------------------------------
+
+
+def create_worker(
+    config: EssayWriterConfig,
+    run_dir: Path,
     input_staging_dir: str | None = None,
-    sources_dir: str | None = None,
 ) -> CompiledStateGraph:
-    """Create and return the essay writer agent graph.
+    """Create a standalone worker agent (fast/cheap model).
 
-    Args:
-        config: Configuration object. If None, loads from default.yaml.
-        input_staging_dir: Temp directory with staged input files (from intake).
-            If None, the /input/ backend route is omitted (prompt-only mode).
-        sources_dir: Directory to persist downloaded source PDFs.
-            If None, /sources/ lives in VFS state only.
-
-    Returns:
-        A compiled LangGraph agent ready to invoke.
+    Uses ``create_agent`` with ``FilesystemMiddleware`` only — no
+    TodoList, SubAgent, or Summarization middleware.  The pipeline
+    tells the agent exactly which skill to read.
     """
-    from deepagents import create_deep_agent
-    from pathlib import Path
+    from deepagents.middleware.filesystem import FilesystemMiddleware
+    from langchain.agents import create_agent
 
-    if config is None:
-        config = load_config()
+    sources_dir = str(run_dir / "sources")
+    tools = [
+        make_read_pdf(sources_dir),
+        read_docx,
+        make_fetch_url(sources_dir),
+        make_research_sources(sources_dir),
+    ]
 
-    # Essay dir persists drafts alongside run artifacts
-    essay_dir = str(Path(sources_dir).parent / "essay") if sources_dir else None
-
-    # Orchestrator tools — only build_docx (export is the orchestrator's last step)
-    build_docx = make_build_docx(
-        config.paths.output_dir, sources_dir=sources_dir, essay_dir=essay_dir
-    )
-    orchestrator_tools = [build_docx]
-
-    # Worker tools — reading, fetching, and research
-    fetch_url = make_fetch_url(sources_dir)
-    read_pdf = make_read_pdf(sources_dir)
-    research_sources = make_research_sources(sources_dir)
-    worker_tools = [read_pdf, read_docx, fetch_url, research_sources]
-
-    # Writer tools — none; writer only uses framework-provided read_file/write_file
-    writer_tools: list = []
-
-    # Render orchestrator system prompt
-    orchestrator_prompt = render_prompt("orchestrator.j2", config=config)
-
-    # Two-tier subagents: worker (fast/cheap) for intake/planning/reading,
-    # writer (quality) for essay writing and reviewing
-    malformed_retry = _RetryMalformedMiddleware()
-    server_retry = _make_server_retry_middleware()
-    trim_history = _TrimHistoryMiddleware(keep_recent=6)
-
-    worker = make_worker(config, worker_tools)
-    worker["model"] = _resolve_model(worker["model"])
-    worker.setdefault("middleware", []).extend([server_retry, malformed_retry])
-
-    writer = make_writer(config, writer_tools)
-    writer["model"] = _resolve_model(writer["model"])
-    block_writer_tools = _BlockToolsMiddleware(
-        frozenset({"edit_file", "grep", "glob", "write_todos"})
-    )
-    writer.setdefault("middleware", []).extend(
-        [server_retry, malformed_retry, block_writer_tools]
+    fs_mw = FilesystemMiddleware(
+        backend=_create_backend(run_dir, input_staging_dir),
     )
 
-    return create_deep_agent(
-        model=_resolve_model(config.models.orchestrator),
-        tools=orchestrator_tools,
-        system_prompt=orchestrator_prompt,
-        subagents=[worker, writer],
-        backend=_create_backend(config, input_staging_dir, sources_dir, essay_dir),
+    return create_agent(
+        model=_resolve_model(config.models.worker),
+        tools=tools,
+        system_prompt=render_prompt("worker.j2", config=config),
+        middleware=[fs_mw, _server_retry(), _RetryMalformedMiddleware()],
         checkpointer=MemorySaver(),
-        name="essay-orchestrator",
-        middleware=[server_retry, malformed_retry, trim_history],
+        name="worker",
+    )
+
+
+def create_writer(
+    config: EssayWriterConfig,
+    run_dir: Path,
+) -> CompiledStateGraph:
+    """Create a standalone writer agent (quality model).
+
+    Framework-injected tools (edit_file, grep, glob) are blocked
+    via middleware so the writer focuses on writing.
+    """
+    from deepagents.middleware.filesystem import FilesystemMiddleware
+    from langchain.agents import create_agent
+
+    block = _BlockToolsMiddleware(frozenset({"edit_file", "grep", "glob"}))
+    fs_mw = FilesystemMiddleware(
+        backend=_create_backend(run_dir),
+    )
+
+    return create_agent(
+        model=_resolve_model(config.models.writer),
+        tools=[],
+        system_prompt=render_prompt("writer.j2", config=config),
+        middleware=[fs_mw, _server_retry(), _RetryMalformedMiddleware(), block],
+        checkpointer=MemorySaver(),
+        name="writer",
     )
