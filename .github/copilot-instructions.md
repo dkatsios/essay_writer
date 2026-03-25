@@ -37,7 +37,7 @@ Coordinator-subagent essay writing system built on the `deepagents` framework (L
 3. **Research** (worker) — extracts queries from plan, calls `research_sources` → `/sources/registry.json`
 4. **Read sources** (worker, parallel) — fetches full-text sources → `/sources/notes/{source_id}.md`
 5. **Write** (writer) — writes the complete essay → `/essay/draft.md`
-6. **Review** (writer) — reviews and polishes draft via `edit_file`
+6. **Review** (writer) — reviews draft, writes polished version to `/essay/reviewed.md`
 7. **Export** — orchestrator calls `build_docx` → `/output/essay.docx`
 
 ### Three-Agent Architecture
@@ -46,7 +46,7 @@ Coordinator-subagent essay writing system built on the `deepagents` framework (L
 |-------|-------|----------|-------|------------|
 | **orchestrator** | `gemini-3-flash-preview` | `orchestrator.j2` | `build_docx` | — |
 | **worker** | `gemini-2.5-flash` | `worker.j2` | `read_pdf`, `read_docx`, `fetch_url`, `research_sources` | `/skills/worker/` |
-| **writer** | `gemini-3-flash-preview` | `writer.j2` | `count_words` | `/skills/writer/` |
+| **writer** | `gemini-3-flash-preview` | `writer.j2` | *(none)* | `/skills/writer/` |
 
 The orchestrator coordinates by dispatching `task` calls. It has no research or reading tools — it delegates everything.
 
@@ -66,7 +66,7 @@ Writer skills (`src/skills/writer/`):
 | Skill | Purpose | VFS output |
 |-------|---------|------------|
 | `essay-writing` | Write the complete essay using plan and source notes | `/essay/draft.md` |
-| `essay-review` | Review and polish the draft with targeted edits | `/essay/draft.md` (via `edit_file`) |
+| `essay-review` | Review and polish the draft | `/essay/reviewed.md` |
 
 ### VFS (Virtual File System)
 
@@ -75,7 +75,8 @@ Key paths:
 - `/brief/assignment.md` — assignment brief
 - `/plan/plan.md` — essay plan
 - `/sources/registry.json` — source metadata (from `research_sources` tool)
-- `/essay/draft.md` — complete essay draft
+- `/essay/draft.md` — initial essay draft
+- `/essay/reviewed.md` — reviewed/polished essay (used for export)
 - `/sources/notes/{source_id}.md` — reader notes, one file per source
 - `/input/` — staged input files (temp dir, routed via `CompositeBackend`)
 - `/sources/` — downloaded source PDFs (routed to `.output/run_*/sources/` on disk)
@@ -108,8 +109,9 @@ No `default.yaml` exists; field defaults in `schemas.py` are canonical.
 
 - **Jinja2 templates** (`src/templates/*.j2`) render system prompts. 3 templates: `orchestrator.j2`, `worker.j2`, `writer.j2` — one per agent type.
 - **Skills** (`src/skills/{worker,writer}/*/SKILL.md`) provide task-specific instructions via progressive disclosure. 6 skills total: 4 worker, 2 writer. Each subagent only sees its own skills directory.
-- **Tool separation** — orchestrator has only `build_docx`; worker has `read_pdf`, `read_docx`, `fetch_url`, `research_sources`; writer has `count_words`. The orchestrator delegates; subagents perform.
+- **Tool separation** — orchestrator has only `build_docx`; worker has `read_pdf`, `read_docx`, `fetch_url`, `research_sources`; writer has no custom tools (uses only framework-provided `read_file`/`write_file`). The orchestrator delegates; subagents perform.
 - **Retry middleware** — `_RetryMalformedMiddleware` retries on `MALFORMED_FUNCTION_CALL` / zero-output `STOP` (Gemini glitch). `ModelRetryMiddleware` retries on transient 503/429 errors with exponential backoff. Both applied to all agents.
+- **History trimming** — `_TrimHistoryMiddleware` keeps only the first message + last 6 messages before each LLM call, preventing token accumulation across turns. Applied to orchestrator only. Full history stays in LangGraph state; only the LLM's view is trimmed.
 - **Thin orchestrator** — receives only a text-only summary of input files (no multimodal content). Has no research or reading tools. Delegates all work to subagents via `task` calls.
 - **Input flow** — `build_message_content()` returns a text-only summary for the orchestrator and writes extracted content to `/input/extracted.md` for the worker. Multimodal content (scanned PDF images) stays in `/input/` for the worker to access via `read_pdf`. The orchestrator never sees base64 images.
 - **`research_sources` tool** — owned by the worker, fans out queries across Semantic Scholar, OpenAlex, and Crossref in parallel, deduplicates by DOI/title, writes registry JSON. Zero LLM tokens consumed by the tool itself.

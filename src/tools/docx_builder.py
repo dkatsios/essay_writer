@@ -382,15 +382,16 @@ def make_build_docx(
 ):
     """Create a build_docx tool bound to real directories.
 
-    The tool reads essay text from *essay_dir*/draft.md and source metadata
-    from *sources_dir*/registry.json so the LLM never needs to pass these
-    large blobs as tool arguments (keeping them out of conversation history).
+    The tool reads essay text from *essay_dir*/reviewed.md (or draft.md as
+    fallback) and source metadata from *sources_dir*/registry.json so the LLM
+    never needs to pass these large blobs as tool arguments (keeping them out
+    of conversation history).
     """
     from pathlib import Path
 
     output_dir_path = Path(output_dir)
     _sources_path = Path(sources_dir) / "registry.json" if sources_dir else None
-    _essay_path = Path(essay_dir) / "draft.md" if essay_dir else None
+    _essay_dir = Path(essay_dir) if essay_dir else None
 
     @tool
     def build_docx(
@@ -404,15 +405,21 @@ def make_build_docx(
     ) -> str:
         """Build a formatted .docx document.
 
-        Reads the essay from /essay/draft.md and source metadata from
-        /sources/registry.json automatically.  Creates a document with cover
-        page, table of contents, formatted body, and page numbers.
+        Reads the essay from /essay/reviewed.md (or /essay/draft.md as
+        fallback) and source metadata from /sources/registry.json
+        automatically.  Creates a document with cover page, table of
+        contents, formatted body, and page numbers.
         """
-        # Read essay text from disk
-        if _essay_path and _essay_path.exists():
-            essay_text = _essay_path.read_text(encoding="utf-8")
-        else:
-            return "ERROR: /essay/draft.md not found on disk."
+        # Read essay text from disk — prefer reviewed, fall back to draft
+        essay_text = None
+        if _essay_dir:
+            for name in ("reviewed.md", "draft.md"):
+                p = _essay_dir / name
+                if p.exists():
+                    essay_text = p.read_text(encoding="utf-8")
+                    break
+        if not essay_text:
+            return "ERROR: no essay file found on disk."
 
         # Read source registry from disk
         sources: dict = {}

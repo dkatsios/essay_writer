@@ -16,7 +16,6 @@ from config.schemas import EssayWriterConfig, load_config
 from src.rendering import render_prompt
 from src.subagents import make_worker, make_writer
 from src.tools import (
-    count_words,
     make_build_docx,
     make_fetch_url,
     make_read_pdf,
@@ -31,6 +30,9 @@ if TYPE_CHECKING:
         ModelRequest,
         ModelResponse,
     )
+    from langchain_core.messages import ToolMessage
+    from langgraph.prebuilt.tool_node import ToolCallRequest
+    from langgraph.types import Command
 
 logger = logging.getLogger(__name__)
 
@@ -79,6 +81,65 @@ class _RetryMalformedMiddleware(AgentMiddleware):
                 )
                 time.sleep(_RETRY_DELAY)
         return response
+
+
+class _TrimHistoryMiddleware(AgentMiddleware):
+    """Trim conversation history before each LLM call to reduce token usage.
+
+    Keeps the first message (user request with assignment context) and the
+    most recent messages.  The LLM doesn't need intermediate tool call/result
+    pairs — the ``write_todos`` state and VFS files provide all continuity.
+
+    Only modifies what the LLM sees; full history stays in LangGraph state.
+    """
+
+    def __init__(self, keep_recent: int = 6):
+        super().__init__()
+        self._keep_recent = keep_recent
+
+    def wrap_model_call(
+        self,
+        request: ModelRequest,
+        handler: Callable[[ModelRequest], ModelResponse],
+    ) -> ModelResponse:
+        messages = request.messages
+        threshold = self._keep_recent + 1  # +1 for the first message
+        if len(messages) <= threshold:
+            return handler(request)
+        trimmed = [messages[0]] + messages[-self._keep_recent :]
+        return handler(request.override(messages=trimmed))
+
+
+class _BlockToolsMiddleware(AgentMiddleware):
+    """Block specific tool calls at the code level.
+
+    LLMs ignore prompt-level instructions about forbidden tools.
+    This middleware intercepts blocked tool calls and returns an error
+    message without executing them.
+    """
+
+    def __init__(self, blocked: frozenset[str]):
+        super().__init__()
+        self._blocked = blocked
+
+    def _make_error(self, request):
+        from langchain_core.messages import ToolMessage as TM
+
+        return TM(
+            content=f"ERROR: '{request.tool_call['name']}' is disabled. Use write_file instead.",
+            tool_call_id=request.tool_call["id"],
+            status="error",
+        )
+
+    def wrap_tool_call(self, request, handler):
+        if request.tool_call["name"] in self._blocked:
+            return self._make_error(request)
+        return handler(request)
+
+    async def awrap_tool_call(self, request, handler):
+        if request.tool_call["name"] in self._blocked:
+            return self._make_error(request)
+        return await handler(request)
 
 
 def _is_retryable_api_error(exc: Exception) -> bool:
@@ -235,8 +296,8 @@ def create_essay_agent(
     research_sources = make_research_sources(sources_dir)
     worker_tools = [read_pdf, read_docx, fetch_url, research_sources]
 
-    # Writer tools — word counting only
-    writer_tools = [count_words]
+    # Writer tools — none; writer only uses framework-provided read_file/write_file
+    writer_tools: list = []
 
     # Render orchestrator system prompt
     orchestrator_prompt = render_prompt("orchestrator.j2", config=config)
@@ -245,6 +306,7 @@ def create_essay_agent(
     # writer (quality) for essay writing and reviewing
     malformed_retry = _RetryMalformedMiddleware()
     server_retry = _make_server_retry_middleware()
+    trim_history = _TrimHistoryMiddleware(keep_recent=6)
 
     worker = make_worker(config, worker_tools)
     worker["model"] = _resolve_model(worker["model"])
@@ -252,7 +314,12 @@ def create_essay_agent(
 
     writer = make_writer(config, writer_tools)
     writer["model"] = _resolve_model(writer["model"])
-    writer.setdefault("middleware", []).extend([server_retry, malformed_retry])
+    block_writer_tools = _BlockToolsMiddleware(
+        frozenset({"edit_file", "grep", "glob", "write_todos"})
+    )
+    writer.setdefault("middleware", []).extend(
+        [server_retry, malformed_retry, block_writer_tools]
+    )
 
     return create_deep_agent(
         model=_resolve_model(config.models.orchestrator),
@@ -262,5 +329,5 @@ def create_essay_agent(
         backend=_create_backend(config, input_staging_dir, sources_dir, essay_dir),
         checkpointer=MemorySaver(),
         name="essay-orchestrator",
-        middleware=[server_retry, malformed_retry],
+        middleware=[server_retry, malformed_retry, trim_history],
     )

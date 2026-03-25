@@ -98,20 +98,24 @@ class _StepTimer:
         else:
             print(f"  [{self._elapsed()}] ✗ {tool_name}", file=sys.stderr)
 
-    def summary(self) -> str:
+    def summary(self, min_duration: float = 1.0) -> str:
         total = monotonic() - self._t0
         if not self._steps:
             return f"\nTotal wall-clock: {total:.1f}s"
+        significant = [(n, d) for n, d in self._steps if d >= min_duration]
+        skipped = len(self._steps) - len(significant)
         lines = [
             "",
             "── Step Timing ─────────────────────────────────",
             f"{'#':<4} {'Tool':<25} {'Duration':>10}",
             "─" * 48,
         ]
-        for i, (name, dur) in enumerate(self._steps, 1):
+        for i, (name, dur) in enumerate(significant, 1):
             lines.append(f"{i:<4} {name:<25} {dur:>9.1f}s")
 
         lines.append("─" * 48)
+        if skipped:
+            lines.append(f"     ({skipped} steps under {min_duration}s omitted)")
         sum_tools = sum(d for _, d in self._steps)
         overhead = total - sum_tools
         lines.append(f"{'':4} {'Tool time':<25} {sum_tools:>9.1f}s")
@@ -215,7 +219,7 @@ def _invoke_with_retry(
     invoke_config = {
         "configurable": {"thread_id": thread_id},
         "callbacks": callbacks,
-        "recursion_limit": 150,
+        "recursion_limit": 300,
     }
     if run_tags:
         invoke_config["tags"] = run_tags
@@ -325,10 +329,15 @@ def _ensure_docx_output(
 
     # Essay now lives on disk via FilesystemBackend
     essay_dir = str(Path(sources_dir).parent / "essay") if sources_dir else None
-    essay_path = Path(essay_dir) / "draft.md" if essay_dir else None
-    if not (essay_path and essay_path.exists()):
+    has_essay_on_disk = False
+    if essay_dir:
+        for name in ("reviewed.md", "draft.md"):
+            if (Path(essay_dir) / name).exists():
+                has_essay_on_disk = True
+                break
+    if not has_essay_on_disk:
         # Fall back to VFS state check (prompt-only mode)
-        if "/essay/draft.md" not in vfs:
+        if "/essay/draft.md" not in vfs and "/essay/reviewed.md" not in vfs:
             logger.warning("No draft found — cannot produce docx fallback.")
             return
 
@@ -370,11 +379,13 @@ def _direct_build_docx(
     essay_text = None
     essay_dir = str(Path(sources_dir).parent / "essay") if sources_dir else None
     if essay_dir:
-        essay_path = Path(essay_dir) / "draft.md"
-        if essay_path.exists():
-            essay_text = essay_path.read_text(encoding="utf-8")
+        for name in ("reviewed.md", "draft.md"):
+            p = Path(essay_dir) / name
+            if p.exists():
+                essay_text = p.read_text(encoding="utf-8")
+                break
     if not essay_text:
-        final_data = vfs.get("/essay/draft.md")
+        final_data = vfs.get("/essay/reviewed.md") or vfs.get("/essay/draft.md")
         if not final_data:
             logger.error("No essay text found for direct build.")
             return
