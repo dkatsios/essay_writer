@@ -42,6 +42,8 @@ def make_read_pdf(sources_dir: str | None = None):
         resolved = file_path
         if sources_path and file_path.startswith("/sources/"):
             resolved = str(sources_path / file_path[len("/sources/") :])
+        if not Path(resolved).is_file():
+            return f"ERROR: PDF file not found at '{file_path}'. The file may not have been downloaded. Use fetch_url to download it first, or skip this source."
         doc = pymupdf.open(resolved)
         total = len(doc)
 
