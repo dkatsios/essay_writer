@@ -14,7 +14,7 @@ from langgraph.graph.state import CompiledStateGraph
 
 from config.schemas import EssayWriterConfig, load_config
 from src.rendering import render_prompt
-from src.subagents import make_assistant
+from src.subagents import make_worker, make_writer
 from src.tools import (
     count_words,
     make_build_docx,
@@ -238,18 +238,24 @@ def create_essay_agent(
     # Render orchestrator system prompt
     orchestrator_prompt = render_prompt("orchestrator.j2", config=config)
 
-    # Single assistant subagent — orchestrator directs it via skill references
+    # Two-tier subagents: worker (fast/cheap) for intake/planning/reading,
+    # writer (quality) for essay writing and reviewing
     malformed_retry = _RetryMalformedMiddleware()
     server_retry = _make_server_retry_middleware()
-    assistant = make_assistant(config, assistant_tools)
-    assistant["model"] = _resolve_model(assistant["model"])
-    assistant.setdefault("middleware", []).extend([server_retry, malformed_retry])
+
+    worker = make_worker(config, assistant_tools)
+    worker["model"] = _resolve_model(worker["model"])
+    worker.setdefault("middleware", []).extend([server_retry, malformed_retry])
+
+    writer = make_writer(config, assistant_tools)
+    writer["model"] = _resolve_model(writer["model"])
+    writer.setdefault("middleware", []).extend([server_retry, malformed_retry])
 
     return create_deep_agent(
         model=_resolve_model(config.models.orchestrator),
         tools=orchestrator_tools,
         system_prompt=orchestrator_prompt,
-        subagents=[assistant],
+        subagents=[worker, writer],
         skills=[config.paths.skills_dir],
         backend=_create_backend(config, input_staging_dir, sources_dir, essay_dir),
         checkpointer=MemorySaver(),

@@ -1,4 +1,4 @@
-"""Subagent factory for the essay writer pipeline."""
+"""Subagent factories for the essay writer pipeline."""
 
 from __future__ import annotations
 
@@ -8,22 +8,41 @@ from config.schemas import EssayWriterConfig
 from src.rendering import render_prompt
 
 
-def make_assistant(config: EssayWriterConfig, tools: list) -> SubAgent:
-    """Create the assistant subagent.
+def make_worker(config: EssayWriterConfig, tools: list) -> SubAgent:
+    """Create the worker subagent (fast/cheap model).
 
-    The assistant is a general-purpose academic writing agent. The orchestrator
-    directs it to read the appropriate skill file for each task (intake,
-    planning, source reading, writing, or reviewing).
+    Used for intake, planning, and source reading — tasks that require
+    instruction-following but not deep creative writing.
     """
     return {
-        "name": "assistant",
+        "name": "worker",
         "description": (
-            "General-purpose academic writing assistant. Reads the skill file "
-            "specified in the task description, then follows its instructions. "
-            "Can handle intake, planning, source reading, writing, and reviewing."
+            "Fast academic assistant for intake, planning, and source reading. "
+            "Reads the skill file specified in the task description, then "
+            "follows its instructions."
         ),
         "system_prompt": render_prompt("assistant.j2", config=config),
-        "model": config.models.assistant,
+        "model": config.models.worker,
+        "tools": tools,
+        "skills": [config.paths.skills_dir],
+    }
+
+
+def make_writer(config: EssayWriterConfig, tools: list) -> SubAgent:
+    """Create the writer subagent (quality model).
+
+    Used for essay writing and reviewing — tasks that demand high-quality
+    prose, argumentation, and academic depth.
+    """
+    return {
+        "name": "writer",
+        "description": (
+            "High-quality academic writing assistant for essay composition "
+            "and review. Reads the skill file specified in the task description, "
+            "then follows its instructions."
+        ),
+        "system_prompt": render_prompt("assistant.j2", config=config),
+        "model": config.models.writer,
         "tools": tools,
         "skills": [config.paths.skills_dir],
     }

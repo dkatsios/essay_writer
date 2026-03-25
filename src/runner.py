@@ -215,6 +215,7 @@ def _invoke_with_retry(
     invoke_config = {
         "configurable": {"thread_id": thread_id},
         "callbacks": callbacks,
+        "recursion_limit": 150,
     }
     if run_tags:
         invoke_config["tags"] = run_tags

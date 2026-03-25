@@ -70,9 +70,13 @@ def _extract_pdf_text(data: bytes) -> str:
     return "\n\n".join(parts)
 
 
+_MAX_FETCH_FAILURES = 3  # after this many total failures, hard-stop
+
+
 def make_fetch_url(sources_dir: str | None = None):
     """Create a fetch_url tool, optionally saving PDFs to sources_dir."""
     sources_path = Path(sources_dir) if sources_dir else None
+    failed_urls: dict[str, int] = {}  # url → failure count
 
     @tool
     def fetch_url(
@@ -83,15 +87,38 @@ def make_fetch_url(sources_dir: str | None = None):
         Strips HTML tags from web pages. For PDFs, extracts text and saves
         the original PDF to the sources directory.
         """
+        total_failures = sum(failed_urls.values())
+        if total_failures >= _MAX_FETCH_FAILURES:
+            return (
+                f"STOP: This source is inaccessible. "
+                f"{total_failures} fetch attempts have already failed. "
+                f"Previously failed URLs: {list(failed_urls.keys())}. "
+                f"Do NOT attempt any more URLs — write an INACCESSIBLE note and move on."
+            )
+
         try:
             resp = httpx.get(
                 url, follow_redirects=True, timeout=30, verify=get_ssl_verify()
             )
             resp.raise_for_status()
         except httpx.HTTPStatusError as exc:
-            return f"Error fetching {url}: HTTP {exc.response.status_code}"
+            failed_urls[url] = failed_urls.get(url, 0) + 1
+            total_failures = sum(failed_urls.values())
+            msg = f"Error fetching {url}: HTTP {exc.response.status_code} (attempt {failed_urls[url]} for this URL, {total_failures} total failures)"
+            if total_failures >= _MAX_FETCH_FAILURES:
+                msg += (
+                    f"\nSTOP: {total_failures} failures reached. "
+                    f"Previously failed: {list(failed_urls.keys())}. "
+                    f"Do NOT retry — write an INACCESSIBLE note and move on."
+                )
+            return msg
         except httpx.RequestError as exc:
-            return f"Error fetching {url}: {type(exc).__name__}"
+            failed_urls[url] = failed_urls.get(url, 0) + 1
+            total_failures = sum(failed_urls.values())
+            msg = f"Error fetching {url}: {type(exc).__name__} (attempt {failed_urls[url]}, {total_failures} total failures)"
+            if total_failures >= _MAX_FETCH_FAILURES:
+                msg += f"\nSTOP: {total_failures} failures reached. Do NOT retry — write an INACCESSIBLE note."
+            return msg
 
         content_type = resp.headers.get("content-type", "")
 

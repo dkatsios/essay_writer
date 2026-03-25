@@ -13,8 +13,8 @@ import pytest
 # ── subagents ─────────────────────────────────────────────────────────────
 
 
-class TestMakeAssistant:
-    """Tests for the assistant subagent factory."""
+class TestSubagentFactories:
+    """Tests for the worker and writer subagent factories."""
 
     @pytest.fixture()
     def config(self):
@@ -22,11 +22,22 @@ class TestMakeAssistant:
 
         return EssayWriterConfig()
 
-    def test_returns_valid_subagent(self, config):
-        from src.subagents import make_assistant
+    def test_worker_returns_valid_subagent(self, config):
+        from src.subagents import make_worker
 
-        agent = make_assistant(config, tools=[])
-        assert agent["name"] == "assistant"
+        agent = make_worker(config, tools=[])
+        assert agent["name"] == "worker"
+        assert "description" in agent
+        assert "system_prompt" in agent
+        assert "model" in agent
+        assert "skills" in agent
+        assert "tools" in agent
+
+    def test_writer_returns_valid_subagent(self, config):
+        from src.subagents import make_writer
+
+        agent = make_writer(config, tools=[])
+        assert agent["name"] == "writer"
         assert "description" in agent
         assert "system_prompt" in agent
         assert "model" in agent
@@ -34,17 +45,23 @@ class TestMakeAssistant:
         assert "tools" in agent
 
     def test_tools_passed_through(self, config):
-        from src.subagents import make_assistant
+        from src.subagents import make_worker
 
         tools = ["tool1", "tool2"]
-        agent = make_assistant(config, tools=tools)
+        agent = make_worker(config, tools=tools)
         assert agent["tools"] == tools
 
-    def test_uses_assistant_model(self, config):
-        from src.subagents import make_assistant
+    def test_worker_uses_worker_model(self, config):
+        from src.subagents import make_worker
 
-        agent = make_assistant(config, tools=[])
-        assert agent["model"] == config.models.assistant
+        agent = make_worker(config, tools=[])
+        assert agent["model"] == config.models.worker
+
+    def test_writer_uses_writer_model(self, config):
+        from src.subagents import make_writer
+
+        agent = make_writer(config, tools=[])
+        assert agent["model"] == config.models.writer
 
 
 # ── web_fetcher HTML stripping ────────────────────────────────────────────

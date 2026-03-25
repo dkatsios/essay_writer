@@ -48,6 +48,7 @@ For inaccessible sources, write:
 - The `source_id` will be provided in the task description — use it exactly as given for the VFS path.
 - Focus ONLY on content relevant to the given topic.
 - Keep extracts concise — aim for 200-500 words total per source.
+- **HARD LIMIT**: If `fetch_url` returns an error (404, timeout, etc.), do NOT retry the same URL or try URL variations. Write the INACCESSIBLE note immediately and return "FAIL". Maximum 2 fetch attempts per source.
 - Include page numbers for direct quotes when available.
 - If the source is inaccessible (paywall, 404, etc.), still write a notes file documenting the failure, then return "FAIL: {source_id} — {reason}".
 - Do NOT fabricate content. Only include what is actually in the source.

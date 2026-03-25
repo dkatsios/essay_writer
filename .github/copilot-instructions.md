@@ -28,30 +28,35 @@ uv run python -c "from src.agent import create_essay_agent"
 
 ## Architecture
 
-Coordinator-subagent essay writing system built on the `deepagents` framework (LangChain/LangGraph). Produces academic essays in Greek as formatted `.docx` files. The orchestrator is a thin coordinator that delegates heavy work to a single "assistant" subagent, directing it via skill files.
+Coordinator-subagent essay writing system built on the `deepagents` framework (LangChain/LangGraph). Produces academic essays in Greek as formatted `.docx` files. The orchestrator is a thin coordinator that delegates to two subagent types — **worker** (fast/cheap) and **writer** (quality) — directing them via skill files.
 
 ### Flow
 
-1. **Intake** (assistant + intake skill) — reads user documents, writes `/brief/assignment.md`
-2. **Plan** (assistant + essay-planning skill) — creates sections, word targets, research queries → `/plan/plan.md`
+1. **Intake** (worker + intake skill) — reads user documents, writes `/brief/assignment.md`
+2. **Plan** (worker + essay-planning skill) — creates sections, word targets, research queries → `/plan/plan.md`
 3. **Research** (tool) — orchestrator calls `research_sources` with queries from the plan → `/sources/registry.json`
-4. **Read sources** (assistant + source-reading skill, parallel) — fetches full-text sources → `/sources/notes/{source_id}.md`
-5. **Write** (assistant + essay-writing skill) — writes the complete essay → `/essay/draft.md`
-6. **Review** (assistant + essay-review skill) — reviews and polishes draft via `edit_file`
+4. **Read sources** (worker + source-reading skill, parallel) — fetches full-text sources → `/sources/notes/{source_id}.md`
+5. **Write** (writer + essay-writing skill) — writes the complete essay → `/essay/draft.md`
+6. **Review** (writer + essay-review skill) — reviews and polishes draft via `edit_file`
 7. **Export** — orchestrator calls `build_docx` → `/output/essay.docx`
 
-### Single Assistant Architecture
+### Two-Tier Subagent Architecture
 
-One subagent type ("assistant") handles all tasks. The orchestrator directs it by specifying which skill file to read in each task description. This keeps the codebase simple while giving each task detailed, isolated guidance.
+Two subagent types share the same system prompt (`assistant.j2`) but use different models:
 
-| Skill | Purpose | VFS output |
-|-------|---------|------------|
-| `intake` | Synthesize pre-extracted document content into a structured brief | `/brief/assignment.md` |
-| `essay-planning` | Create essay plan with sections, word targets, research queries | `/plan/plan.md` |
-| `source-reading` | Fetch/read a single source, write condensed notes | `/sources/notes/{source_id}.md` |
-| `essay-writing` | Write the complete essay using plan and source notes | `/essay/draft.md` |
-| `essay-review` | Review and polish the draft with targeted edits | `/essay/draft.md` (via `edit_file`) |
-| `docx-export` | Reference for orchestrator's export step | (used by orchestrator) |
+- **worker** — fast, cheap model (default: `gemini-2.5-flash`) for intake, planning, and source reading.
+- **writer** — quality model (default: `gemini-3-flash-preview`) for essay writing and reviewing.
+
+The orchestrator directs each subagent by specifying which skill file to read in the task description.
+
+| Skill | Subagent | Purpose | VFS output |
+|-------|----------|---------|------------|
+| `intake` | worker | Synthesize pre-extracted document content into a structured brief | `/brief/assignment.md` |
+| `essay-planning` | worker | Create essay plan with sections, word targets, research queries | `/plan/plan.md` |
+| `source-reading` | worker | Fetch/read a single source, write condensed notes | `/sources/notes/{source_id}.md` |
+| `essay-writing` | writer | Write the complete essay using plan and source notes | `/essay/draft.md` |
+| `essay-review` | writer | Review and polish the draft with targeted edits | `/essay/draft.md` (via `edit_file`) |
+| `docx-export` | — | Reference for orchestrator's export step | (used by orchestrator) |
 
 ### VFS (Virtual File System)
 
@@ -92,9 +97,9 @@ Uses `pydantic-settings` (`BaseSettings`) with three layers (highest wins):
 - **Jinja2 templates** (`src/templates/*.j2`) render system prompts. 2 templates: `orchestrator.j2` (orchestrator), `assistant.j2` (single assistant subagent).
 - **Skills** (`src/skills/*/SKILL.md`) provide detailed task-specific instructions via progressive disclosure — the assistant reads the relevant skill via `read_file` when starting each task. 6 skills: intake, essay-planning, source-reading, essay-writing, essay-review, docx-export.
 - **Retry middleware** — `_RetryMalformedMiddleware` retries on `MALFORMED_FUNCTION_CALL` / zero-output `STOP` (Gemini glitch). `ModelRetryMiddleware` retries on transient 503/429 errors with exponential backoff. Both applied to all agents.
-- **Thin orchestrator** — the orchestrator is a lightweight coordinator. Research is handled by the `research_sources` tool (deterministic Python, no LLM). Heavy writing and review work is delegated to the assistant subagent.
+- **Thin orchestrator** — the orchestrator is a lightweight coordinator. Research is handled by the `research_sources` tool (deterministic Python, no LLM). Heavy writing and review work is delegated to the writer subagent.
 - **`research_sources` tool** — fans out queries across Semantic Scholar, OpenAlex, and Crossref in parallel, deduplicates by DOI/title, writes registry JSON. Zero LLM tokens consumed.
-- **Subagent independence** — the assistant has NO conversation history from the orchestrator. It reads what it needs from VFS. Multiple `task` calls in one message run in parallel.
+- **Subagent independence** — subagents have NO conversation history from the orchestrator. They read what they need from VFS. Multiple `task` calls in one message run in parallel.
 - **CompositeBackend** routes `/input/` to a temp staging dir, `/output/`, `/sources/`, and `/essay/` to `FilesystemBackend` (real disk); everything else goes to `StateBackend` (in-memory LangGraph state).
 - **Custom AI endpoint** — when `AI_BASE_URL` is set in `.env`, all models route through an OpenAI-compatible endpoint using `AI_API_KEY` and `AI_MODEL`.
 - **Deterministic docx fallback** — if the orchestrator doesn't call `build_docx`, the runner nudges it and, as a last resort, calls `_build_document` directly from `/essay/draft.md`.
