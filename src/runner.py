@@ -665,7 +665,7 @@ def main() -> None:
             output_dir=output_dir,
         )
 
-    # Print the final assistant message
+    # Print the final orchestrator message
     messages = result.get("messages", [])
     if messages:
         last_msg = messages[-1]

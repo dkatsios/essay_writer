@@ -11,20 +11,20 @@ from src.rendering import render_prompt
 def make_worker(config: EssayWriterConfig, tools: list) -> SubAgent:
     """Create the worker subagent (fast/cheap model).
 
-    Used for intake, planning, and source reading — tasks that require
-    instruction-following but not deep creative writing.
+    Used for intake, planning, research, and source reading — tasks that
+    require instruction-following but not deep creative writing.
     """
     return {
         "name": "worker",
         "description": (
-            "Fast academic assistant for intake, planning, and source reading. "
-            "Reads the skill file specified in the task description, then "
-            "follows its instructions."
+            "Fast research assistant for intake, planning, research, "
+            "and source reading. Reads the skill file specified in "
+            "the task description, then follows its instructions."
         ),
-        "system_prompt": render_prompt("assistant.j2", config=config),
+        "system_prompt": render_prompt("worker.j2", config=config),
         "model": config.models.worker,
         "tools": tools,
-        "skills": [config.paths.skills_dir],
+        "skills": ["/skills/worker/"],
     }
 
 
@@ -37,12 +37,12 @@ def make_writer(config: EssayWriterConfig, tools: list) -> SubAgent:
     return {
         "name": "writer",
         "description": (
-            "High-quality academic writing assistant for essay composition "
-            "and review. Reads the skill file specified in the task description, "
+            "Expert academic writer for essay composition and review. "
+            "Reads the skill file specified in the task description, "
             "then follows its instructions."
         ),
-        "system_prompt": render_prompt("assistant.j2", config=config),
+        "system_prompt": render_prompt("writer.j2", config=config),
         "model": config.models.writer,
         "tools": tools,
-        "skills": [config.paths.skills_dir],
+        "skills": ["/skills/writer/"],
     }

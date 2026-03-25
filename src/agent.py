@@ -223,17 +223,20 @@ def create_essay_agent(
     # Essay dir persists drafts alongside run artifacts
     essay_dir = str(Path(sources_dir).parent / "essay") if sources_dir else None
 
-    # Orchestrator tools (research_sources is deterministic Python, not LLM)
+    # Orchestrator tools — only build_docx (export is the orchestrator's last step)
     build_docx = make_build_docx(
         config.paths.output_dir, sources_dir=sources_dir, essay_dir=essay_dir
     )
-    research_sources = make_research_sources(sources_dir)
-    orchestrator_tools = [count_words, build_docx, research_sources]
+    orchestrator_tools = [build_docx]
 
-    # Assistant tools — union of all tools any task might need
+    # Worker tools — reading, fetching, and research
     fetch_url = make_fetch_url(sources_dir)
     read_pdf = make_read_pdf(sources_dir)
-    assistant_tools = [read_pdf, read_docx, fetch_url, count_words]
+    research_sources = make_research_sources(sources_dir)
+    worker_tools = [read_pdf, read_docx, fetch_url, research_sources]
+
+    # Writer tools — word counting only
+    writer_tools = [count_words]
 
     # Render orchestrator system prompt
     orchestrator_prompt = render_prompt("orchestrator.j2", config=config)
@@ -243,11 +246,11 @@ def create_essay_agent(
     malformed_retry = _RetryMalformedMiddleware()
     server_retry = _make_server_retry_middleware()
 
-    worker = make_worker(config, assistant_tools)
+    worker = make_worker(config, worker_tools)
     worker["model"] = _resolve_model(worker["model"])
     worker.setdefault("middleware", []).extend([server_retry, malformed_retry])
 
-    writer = make_writer(config, assistant_tools)
+    writer = make_writer(config, writer_tools)
     writer["model"] = _resolve_model(writer["model"])
     writer.setdefault("middleware", []).extend([server_retry, malformed_retry])
 
@@ -256,7 +259,6 @@ def create_essay_agent(
         tools=orchestrator_tools,
         system_prompt=orchestrator_prompt,
         subagents=[worker, writer],
-        skills=[config.paths.skills_dir],
         backend=_create_backend(config, input_staging_dir, sources_dir, essay_dir),
         checkpointer=MemorySaver(),
         name="essay-orchestrator",

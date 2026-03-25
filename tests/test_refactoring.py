@@ -63,6 +63,18 @@ class TestSubagentFactories:
         agent = make_writer(config, tools=[])
         assert agent["model"] == config.models.writer
 
+    def test_worker_skills_scoped_to_worker(self, config):
+        from src.subagents import make_worker
+
+        agent = make_worker(config, tools=[])
+        assert agent["skills"] == ["/skills/worker/"]
+
+    def test_writer_skills_scoped_to_writer(self, config):
+        from src.subagents import make_writer
+
+        agent = make_writer(config, tools=[])
+        assert agent["skills"] == ["/skills/writer/"]
+
 
 # ── web_fetcher HTML stripping ────────────────────────────────────────────
 
@@ -186,9 +198,10 @@ class TestRendering:
         from config.schemas import EssayWriterConfig
 
         config = EssayWriterConfig()
-        result = render_prompt("assistant.j2", config=config)
-        assert isinstance(result, str)
-        assert len(result) > 0
+        for template in ("worker.j2", "writer.j2", "orchestrator.j2"):
+            result = render_prompt(template, config=config)
+            assert isinstance(result, str)
+            assert len(result) > 0
 
     def test_cached_env_is_same_object(self):
         from src.rendering import _get_env
