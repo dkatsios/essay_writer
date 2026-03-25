@@ -1,9 +1,6 @@
 """Pydantic configuration schemas for the essay writer."""
 
 from __future__ import annotations
-
-from pathlib import Path
-
 from pydantic import BaseModel
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from pydantic_settings.sources import (
@@ -16,7 +13,7 @@ class ModelsConfig(BaseModel):
     """Model selection per agent role."""
 
     worker: str = "google_genai:gemini-2.5-flash"
-    writer: str = "google_genai:gemini-2.5-flash"
+    writer: str = "google_genai:gemini-2.5-pro"
 
 
 class WritingConfig(BaseModel):

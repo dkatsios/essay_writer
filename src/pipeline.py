@@ -10,7 +10,6 @@ from __future__ import annotations
 import json
 import logging
 import sys
-import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from time import monotonic
@@ -112,10 +111,6 @@ def run_pipeline(
 
     # Step 4: Read sources (parallel)
     _step("read_sources", _read_sources_parallel, worker, run_dir, callbacks)
-
-    # Cooldown — let API quota replenish after parallel source reads
-    print("  ⏳ Cooldown (30s)...", file=sys.stderr)
-    time.sleep(30)
 
     # Step 5: Write
     _step(
