@@ -14,7 +14,7 @@ description: Create a structured essay plan with sections, word allocation, and 
 3. Formulate a clear thesis statement (1-2 sentences).
 4. Break the essay into sections (typically 4-6 including introduction and conclusion).
 5. Allocate word counts per section summing to the overall target.
-6. Write 8-12 targeted search queries for finding academic sources (in both Greek and English).
+6. Write 6-8 targeted search queries for finding academic sources (in both Greek and English).
 7. Write the plan to `/plan/plan.md`.
 8. Return a short status: "OK: plan written, {section_count} sections, {total_words} target words, {query_count} queries"
 

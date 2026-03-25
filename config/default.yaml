@@ -1,6 +1,6 @@
 models:
-  orchestrator: "google_genai:gemini-2.5-flash"
-  assistant: "google_genai:gemini-2.5-flash"
+  orchestrator: "google_genai:gemini-3-flash-preview"
+  assistant: "google_genai:gemini-3-flash-preview"
 
 writing:
   word_count_tolerance: 0.10

@@ -21,10 +21,10 @@ Read `/plan/plan.md` to extract the research queries, then call `research_source
 The tool searches Semantic Scholar, OpenAlex, and Crossref in parallel, deduplicates, and writes `/sources/registry.json` directly. It returns a short summary with source IDs — do NOT write the registry yourself.
 
 ### Step 4: READ SOURCES
-Read the source registry, then for each source with a URL:
-- Call the **assistant** subagent, telling it to read `/skills/source-reading/SKILL.md` for guidance.
+Read the source registry, then dispatch ALL source-reading tasks in a SINGLE message:
+- For each source with a URL, call the **assistant** subagent, telling it to read `/skills/source-reading/SKILL.md` for guidance.
 - Provide the URL, `source_id`, and topic focus in each task description.
-- Multiple calls can be made in parallel (use multiple `task` calls in one message).
+- **CRITICAL: Emit ALL `task` calls in ONE message so they run in parallel.** Do NOT wait for one to finish before starting the next.
 
 ### Step 5: WRITE
 Call the **assistant** subagent to write the complete essay.
