@@ -185,6 +185,7 @@ class TokenTracker:
         # Word counts from essay files
         draft_words = _count_words(run_dir / "essay" / "draft.md")
         reviewed_words = _count_words(run_dir / "essay" / "reviewed.md")
+        target_words = _parse_target_words(run_dir / "plan" / "plan.md")
         sources_count = _count_sources(run_dir / "sources" / "registry.json")
 
         lines = [
@@ -198,10 +199,16 @@ class TokenTracker:
         ]
         if sources_count:
             lines.append(f"| Sources | {sources_count} |")
+        if target_words:
+            lines.append(f"| Target words | {target_words:,} |")
         if draft_words:
             lines.append(f"| Draft words | {draft_words:,} |")
         if reviewed_words:
-            lines.append(f"| Final words | {reviewed_words:,} |")
+            final_pct = (
+                round(reviewed_words / target_words * 100) if target_words else 0
+            )
+            pct_str = f" ({final_pct}%)" if target_words else ""
+            lines.append(f"| Final words | {reviewed_words:,}{pct_str} |")
 
         # Step breakdown table
         lines += [
@@ -250,6 +257,20 @@ def _count_sources(path: Path) -> int:
         return len(json.loads(path.read_text(encoding="utf-8")))
     except (json.JSONDecodeError, ValueError):
         return 0
+
+
+def _parse_target_words(path: Path) -> int:
+    """Sum word targets from plan.md (lines like '- **Word target**: 350 words')."""
+    if not path.exists():
+        return 0
+    import re
+
+    total = 0
+    for match in re.finditer(
+        r"\*\*Word target\*\*:\s*(\d[\d,]*)", path.read_text(encoding="utf-8")
+    ):
+        total += int(match.group(1).replace(",", ""))
+    return total
 
 
 # ---------------------------------------------------------------------------

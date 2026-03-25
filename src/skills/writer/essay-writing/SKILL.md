@@ -14,11 +14,19 @@ description: Write complete academic essays in Greek with proper source integrat
 5. Return: "OK: essay written"
 
 ## HARD LIMITS
-- ONE `write_file` call. That is your ONLY output action.
+- **EXACTLY ONE `write_file` call.** That is your ONLY output action.
 - Do NOT call `edit_file`. EVER.
 - Do NOT read back `/essay/draft.md` after writing it.
 - Do NOT call `grep`, `glob`, or `write_todos`.
 - After `write_file`, return your status immediately. No more tool calls.
+- **Do NOT attempt to rewrite, fix, or create additional files.** One call, you’re done.
+
+## Word Count — CRITICAL
+- Sum ALL section word targets from the plan. That is your target.
+- Your output MUST be within ±10% of that target. Under 90% = FAILURE.
+- Write LONG, detailed paragraphs. Develop every argument fully.
+- Each section MUST meet its individual word target from the plan.
+- If the plan says 600 words for a section, do NOT write 300.
 
 ## Writing Rules
 - Follow the section structure from the plan.
@@ -28,4 +36,3 @@ description: Write complete academic essays in Greek with proper source integrat
 - Multiple sources: `[[smith2020]] [[jones2019]]` — separate markers, NEVER combined.
 - Do NOT write a References/Βιβλιογραφία section — `build_docx` generates it.
 - Do NOT write literal `(Author, Year)` citations.
-- Target word count: within ±10% of the plan's total.

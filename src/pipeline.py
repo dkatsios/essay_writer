@@ -125,29 +125,51 @@ def run_pipeline(
     _step("read_sources", _read_sources_parallel, worker, run_dir, callbacks, **tk)
 
     # Step 5: Write
+    target_words = _get_target_words(run_dir)
+    write_msg = "Read /skills/writer/essay-writing/SKILL.md."
+    if target_words:
+        write_msg += f" The total word target is {target_words} words. You MUST write at least {target_words} words."
     _step(
         "write",
         _invoke,
         writer,
         "write",
-        "Read /skills/writer/essay-writing/SKILL.md.",
+        write_msg,
         callbacks,
         **tk,
     )
 
     # Step 6: Review
+    review_msg = "Read /skills/writer/essay-review/SKILL.md."
+    if target_words:
+        review_msg += f" The word target is {target_words} words. Do NOT produce fewer words than the draft."
     _step(
         "review",
         _invoke,
         writer,
         "review",
-        "Read /skills/writer/essay-review/SKILL.md.",
+        review_msg,
         callbacks,
         **tk,
     )
 
     # Step 7: Export (pure Python — no LLM)
     _step("export", _export, config, run_dir)
+
+
+def _get_target_words(run_dir: Path) -> int:
+    """Sum word targets from plan.md."""
+    import re
+
+    plan = run_dir / "plan" / "plan.md"
+    if not plan.exists():
+        return 0
+    total = 0
+    for m in re.finditer(
+        r"\*\*Word target\*\*:\s*(\d[\d,]*)", plan.read_text(encoding="utf-8")
+    ):
+        total += int(m.group(1).replace(",", ""))
+    return total
 
 
 def _read_sources_parallel(
