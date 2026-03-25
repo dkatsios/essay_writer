@@ -172,14 +172,10 @@ def make_research_sources(sources_dir: str | None = None):
 
         max_per_api = max(3, max_sources // len(queries))
 
-        # Fan out queries in parallel (Semantic Scholar throttle is thread-safe)
+        # Run queries sequentially to respect Semantic Scholar's 1 req/s limit
         all_results: list[dict] = []
-        with ThreadPoolExecutor(max_workers=min(4, len(queries))) as pool:
-            futures = {
-                pool.submit(_search_one_query, q, max_per_api): q for q in queries
-            }
-            for fut in as_completed(futures):
-                all_results.extend(fut.result())
+        for q in queries:
+            all_results.extend(_search_one_query(q, max_per_api))
 
         registry = _build_registry(all_results, max_sources)
         logger.info(

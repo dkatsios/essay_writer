@@ -17,7 +17,7 @@ _DEFAULT_YAML = Path(__file__).parent / "default.yaml"
 class ModelsConfig(BaseModel):
     """Model selection per agent role."""
 
-    orchestrator: str = "google_genai:gemini-3-flash-preview"
+    orchestrator: str = "google_genai:gemini-2.5-flash"
     worker: str = "google_genai:gemini-2.5-flash"
     writer: str = "google_genai:gemini-3-flash-preview"
 

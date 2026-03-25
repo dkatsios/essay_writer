@@ -10,8 +10,7 @@ from pathlib import Path
 logger = logging.getLogger(__name__)
 
 # Pipeline steps in execution order.
-# With the single-assistant architecture, all subagent work is under "assistant".
-STEPS = ["assistant"]
+STEPS = ["worker", "writer"]
 
 
 def generate_run_report(output_dir: Path, run_tag: str) -> Path | None:

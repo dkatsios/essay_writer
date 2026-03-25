@@ -1,5 +1,5 @@
 models:
-  orchestrator: "google_genai:gemini-3-flash-preview"
+  orchestrator: "google_genai:gemini-2.5-flash"
   worker: "google_genai:gemini-2.5-flash"
   writer: "google_genai:gemini-3-flash-preview"
 

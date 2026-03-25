@@ -14,11 +14,13 @@ Call the **worker** subagent to create the essay plan.
 - After it completes, the plan will be at `/plan/plan.md`.
 
 ### Step 3: RESEARCH
-Read `/plan/plan.md` to extract the research queries, then call `research_sources` with:
+Read `/plan/plan.md` to extract the research queries, then call `research_sources` **ONCE** with:
 - `queries_json`: a JSON array of the query strings from the plan
 - `max_sources`: 10 (or as appropriate)
 
 The tool searches Semantic Scholar, OpenAlex, and Crossref in parallel, deduplicates, and writes `/sources/registry.json` directly. It returns a short summary with source IDs — do NOT write the registry yourself.
+
+**Do NOT call `research_sources` again later.** One call is sufficient.
 
 ### Step 4: READ SOURCES
 Read the source registry, then dispatch ALL source-reading tasks in a SINGLE message:
@@ -27,9 +29,10 @@ Read the source registry, then dispatch ALL source-reading tasks in a SINGLE mes
 - **CRITICAL: Emit ALL `task` calls in ONE message so they run in parallel.** Do NOT wait for one to finish before starting the next.
 
 ### Step 5: WRITE
-Call the **writer** subagent to write the complete essay.
+Call the **writer** subagent **ONCE** to write the complete essay.
 - In the task description, tell it to read `/skills/essay-writing/SKILL.md` for guidance.
 - After it completes, the draft will be at `/essay/draft.md`.
+- **Do NOT call the writer again to continue or extend the essay.** The writer produces the full draft in one pass.
 
 ### Step 6: REVIEW
 Call the **writer** subagent to review and polish the draft.
@@ -95,5 +98,6 @@ Available skills:
 2. **Source integrity**: Every claim must be traceable to a real source. Do NOT invent citations.
 3. **File operations**: `write_file` errors on existing files. Use `edit_file` to modify.
 4. **Subagent independence**: The assistant has no conversation history from you. Include all needed context in the `description` parameter of each `task` call.
-5. **Linear workflow**: Complete each step ONCE and move to the next.
+5. **Linear workflow**: Complete each step ONCE and move to the next. Never go back to repeat a step.
 6. **You are NOT finished until `build_docx` has been called.**
+7. **One call per step**: Call `research_sources` once, the writer once for writing, once for review. Do NOT repeat any step.
