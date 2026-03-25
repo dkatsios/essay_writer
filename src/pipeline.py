@@ -47,10 +47,14 @@ def _step(name: str, fn, *args, tracker=None):
         result = fn(*args)
         dur = monotonic() - t0
         print(f"  ✓ {name} ({dur:.1f}s)", file=sys.stderr)
+        if tracker is not None:
+            tracker.record_duration(name, dur)
         return result
     except Exception:
         dur = monotonic() - t0
         print(f"  ✗ {name} FAILED ({dur:.1f}s)", file=sys.stderr)
+        if tracker is not None:
+            tracker.record_duration(name, dur)
         raise
 
 

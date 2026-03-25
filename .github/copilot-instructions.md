@@ -126,6 +126,4 @@ Place test assignment directories under `examples/`. Each subdirectory is a self
 
 ## Design Documents
 
-- `docs/DESIGN.md` — high-level requirements and decisions
-- `docs/TECHNICAL_DESIGN.md` — implementation blueprint mapping design to deepagents constructs
 - `docs/DEEPAGENTS_REFERENCE.md` — framework API reference from source code analysis

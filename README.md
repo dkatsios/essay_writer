@@ -37,6 +37,4 @@ Default settings are defined in `config/schemas.py`. Override with `--config pat
 
 ## Documentation
 
-- [Design Document](docs/DESIGN.md) — high-level requirements and decisions
-- [Technical Design](docs/TECHNICAL_DESIGN.md) — implementation blueprint
 - [Deepagents Reference](docs/DEEPAGENTS_REFERENCE.md) — framework API reference

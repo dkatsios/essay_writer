@@ -84,8 +84,13 @@ class TokenTracker:
                 "thinking_tokens": 0,
                 "model": "",
                 "calls": 0,
+                "duration": 0.0,
             }
         return self._steps[step]
+
+    def record_duration(self, step: str, duration: float) -> None:
+        data = self._ensure_step(step)
+        data["duration"] = duration
 
     def record(
         self,
@@ -107,14 +112,15 @@ class TokenTracker:
 
         lines = [
             "",
-            "── Cost Report ─────────────────────────────────",
-            f"{'Step':<16} {'Model':<20} {'In':>8} {'Out':>8} {'Think':>8} {'Cost':>8}",
-            "─" * 72,
+            "── Cost Report ─────────────────────────────────────────────",
+            f"{'Step':<16} {'Model':<20} {'Time':>7} {'In':>8} {'Out':>8} {'Think':>8} {'Cost':>8}",
+            "─" * 80,
         ]
         total_cost = 0.0
         total_in = 0
         total_out = 0
         total_think = 0
+        total_dur = 0.0
 
         for step, data in self._steps.items():
             model = data["model"] or "unknown"
@@ -124,23 +130,126 @@ class TokenTracker:
             think_cost = data["thinking_tokens"] * pricing["thinking"] / 1_000_000
             step_cost = in_cost + out_cost + think_cost
 
+            dur = data["duration"]
             total_cost += step_cost
             total_in += data["input_tokens"]
             total_out += data["output_tokens"]
             total_think += data["thinking_tokens"]
+            total_dur += dur
 
+            dur_str = f"{dur:.0f}s" if dur else ""
             lines.append(
-                f"{step:<16} {model:<20} "
+                f"{step:<16} {model:<20} {dur_str:>7} "
                 f"{data['input_tokens']:>8,} {data['output_tokens']:>8,} "
                 f"{data['thinking_tokens']:>8,} ${step_cost:>6.4f}"
             )
 
-        lines.append("─" * 72)
+        m, s = divmod(int(total_dur), 60)
+        lines.append("─" * 80)
         lines.append(
-            f"{'TOTAL':<16} {'':<20} "
+            f"{'TOTAL':<16} {'':<20} {f'{m}m{s:02d}s':>7} "
             f"{total_in:>8,} {total_out:>8,} {total_think:>8,} ${total_cost:>6.4f}"
         )
         return "\n".join(lines)
+
+    def write_report(self, run_dir: Path) -> Path | None:
+        """Write a concise markdown report to run_dir/report.md."""
+        if not self._steps:
+            return None
+
+        # Gather totals
+        total_cost = 0.0
+        total_in = 0
+        total_out = 0
+        total_think = 0
+        total_dur = 0.0
+        rows: list[tuple[str, dict, float]] = []
+
+        for step, data in self._steps.items():
+            model = data["model"] or "unknown"
+            pricing = _PRICING.get(model, _DEFAULT_PRICING)
+            step_cost = (
+                data["input_tokens"] * pricing["input"]
+                + data["output_tokens"] * pricing["output"]
+                + data["thinking_tokens"] * pricing["thinking"]
+            ) / 1_000_000
+            rows.append((step, data, step_cost))
+            total_cost += step_cost
+            total_in += data["input_tokens"]
+            total_out += data["output_tokens"]
+            total_think += data["thinking_tokens"]
+            total_dur += data["duration"]
+
+        m, s = divmod(int(total_dur), 60)
+
+        # Word counts from essay files
+        draft_words = _count_words(run_dir / "essay" / "draft.md")
+        reviewed_words = _count_words(run_dir / "essay" / "reviewed.md")
+        sources_count = _count_sources(run_dir / "sources" / "registry.json")
+
+        lines = [
+            "# Run Report",
+            "",
+            f"| Metric | Value |",
+            f"|--------|-------|",
+            f"| Duration | {m}m {s}s |",
+            f"| Total cost | ${total_cost:.4f} |",
+            f"| Tokens (in / out / think) | {total_in:,} / {total_out:,} / {total_think:,} |",
+        ]
+        if sources_count:
+            lines.append(f"| Sources | {sources_count} |")
+        if draft_words:
+            lines.append(f"| Draft words | {draft_words:,} |")
+        if reviewed_words:
+            lines.append(f"| Final words | {reviewed_words:,} |")
+
+        # Step breakdown table
+        lines += [
+            "",
+            "## Steps",
+            "",
+            "| Step | Model | Time | In | Out | Think | Cost |",
+            "|------|-------|-----:|---:|----:|------:|-----:|",
+        ]
+        for step, data, step_cost in rows:
+            model = data["model"] or "—"
+            dur = data["duration"]
+            dur_str = f"{dur:.0f}s" if dur else "—"
+            lines.append(
+                f"| {step} | {model} | {dur_str} "
+                f"| {data['input_tokens']:,} | {data['output_tokens']:,} "
+                f"| {data['thinking_tokens']:,} | ${step_cost:.4f} |"
+            )
+        lines.append(
+            f"| **Total** | | **{m}m {s}s** "
+            f"| **{total_in:,}** | **{total_out:,}** "
+            f"| **{total_think:,}** | **${total_cost:.4f}** |"
+        )
+        lines.append("")
+
+        report_path = run_dir / "report.md"
+        report_path.write_text("\n".join(lines), encoding="utf-8")
+        print(f"  Report: {report_path}", file=sys.stderr)
+        return report_path
+
+
+def _count_words(path: Path) -> int:
+    """Count words in a markdown file, 0 if missing."""
+    if not path.exists():
+        return 0
+    return len(path.read_text(encoding="utf-8").split())
+
+
+def _count_sources(path: Path) -> int:
+    """Count entries in registry.json, 0 if missing."""
+    if not path.exists():
+        return 0
+    import json
+
+    try:
+        return len(json.loads(path.read_text(encoding="utf-8")))
+    except (json.JSONDecodeError, ValueError):
+        return 0
 
 
 # ---------------------------------------------------------------------------
@@ -382,10 +491,7 @@ def run(
     print(cost, file=sys.stderr)
     logger.info("Run summary:\n%s\n%s", summary, cost)
 
-    if output_dir:
-        from src.analysis import generate_run_report
-
-        generate_run_report(output_dir, output_dir.name)
+    tracker.write_report(run_dir)
 
 
 def run_prompt(
@@ -440,10 +546,7 @@ def run_prompt(
     print(cost, file=sys.stderr)
     logger.info("Run summary:\n%s\n%s", summary, cost)
 
-    if output_dir:
-        from src.analysis import generate_run_report
-
-        generate_run_report(output_dir, output_dir.name)
+    tracker.write_report(run_dir)
 
 
 def main() -> None:
