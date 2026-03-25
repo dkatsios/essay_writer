@@ -13,7 +13,7 @@ class ModelsConfig(BaseModel):
     """Model selection per agent role."""
 
     worker: str = "google_genai:gemini-2.5-flash"
-    writer: str = "google_genai:gemini-2.5-pro"
+    writer: str = "google_genai:gemini-3.1-pro-preview"
 
 
 class WritingConfig(BaseModel):

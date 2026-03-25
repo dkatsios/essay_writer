@@ -44,13 +44,15 @@ from src.pipeline import run_pipeline  # noqa: E402
 # Pricing per 1M tokens (google_genai models)
 # ---------------------------------------------------------------------------
 _PRICING: dict[str, dict[str, float]] = {
-    "gemini-2.5-pro": {"input": 1.25, "output": 10.00, "thinking": 3.50},
-    "gemini-2.5-flash": {"input": 0.15, "output": 0.60, "thinking": 0.70},
-    "gemini-2.5-flash-lite": {"input": 0.075, "output": 0.30, "thinking": 0.0},
+    "gemini-3.1-pro-preview": {"input": 2.00, "output": 12.00, "thinking": 12.00},
+    "gemini-2.5-pro": {"input": 1.25, "output": 10.00, "thinking": 10.00},
+    "gemini-3-flash-preview": {"input": 0.50, "output": 3.00, "thinking": 3.00},
+    "gemini-2.5-flash": {"input": 0.30, "output": 2.50, "thinking": 2.50},
+    "gemini-2.5-flash-lite": {"input": 0.10, "output": 0.40, "thinking": 0.0},
     "gemini-2.0-flash": {"input": 0.10, "output": 0.40, "thinking": 0.0},
 }
 # Fallback pricing for unknown models
-_DEFAULT_PRICING = {"input": 0.15, "output": 0.60, "thinking": 0.70}
+_DEFAULT_PRICING = {"input": 0.30, "output": 2.50, "thinking": 2.50}
 
 
 def _model_short_name(full_name: str) -> str:

@@ -342,10 +342,8 @@ def _writing_order(sections: list[Section]) -> list[Section]:
 
 
 def _section_filename(section: Section) -> str:
-    """Generate a filename for a section: 01_title.md"""
-    safe = re.sub(r"[^\w\s-]", "", section.title)
-    safe = re.sub(r"\s+", "_", safe.strip())[:40]
-    return f"{section.number:02d}_{safe}.md"
+    """Generate a filename for a section: 01.md"""
+    return f"{section.number:02d}.md"
 
 
 def _make_write_sections(
@@ -441,11 +439,18 @@ def _make_review_sections(
 
     def _do_review_sections(ctx: PipelineContext) -> None:
         sections_dir = ctx.run_dir / "essay" / "sections"
+        reviewed_dir = ctx.run_dir / "essay" / "reviewed"
+        reviewed_dir.mkdir(parents=True, exist_ok=True)
         plan_order = sorted(sections, key=lambda s: s.number)
 
+        def _best_path(s: Section) -> Path:
+            """Return reviewed version if it exists, else original."""
+            rp = reviewed_dir / _section_filename(s)
+            sp = sections_dir / _section_filename(s)
+            return rp if rp.exists() else sp
+
         for section in plan_order:
-            fname = _section_filename(section)
-            section_path = sections_dir / fname
+            section_path = _best_path(section)
 
             if not section_path.exists():
                 logger.warning("Section %d missing, skipping review", section.number)
@@ -454,7 +459,7 @@ def _make_review_sections(
             # Build full essay with target section delimited
             full_essay_parts = []
             for s in plan_order:
-                fp = sections_dir / _section_filename(s)
+                fp = _best_path(s)
                 if not fp.exists():
                     continue
                 text = fp.read_text(encoding="utf-8")
@@ -467,11 +472,8 @@ def _make_review_sections(
                 full_essay_parts.append(text)
             full_essay = "\n\n---\n\n".join(full_essay_parts)
 
-            vfs_path = f"/essay/sections/{fname}"
-
-            # Delete original so `write_file` (which rejects existing files)
-            # can create the reviewed version at the same path.
-            section_path.unlink()
+            fname = _section_filename(section)
+            vfs_path = f"/essay/reviewed/{fname}"
 
             msg = (
                 f"Read /skills/writer/section-review/SKILL.md.\n\n"
@@ -509,10 +511,10 @@ def _make_review_sections(
                 file=sys.stderr,
             )
 
-        # Concatenate all reviewed sections into reviewed.md
+        # Concatenate reviewed sections (fall back to originals)
         reviewed_parts = []
         for s in plan_order:
-            fp = sections_dir / _section_filename(s)
+            fp = _best_path(s)
             if fp.exists():
                 reviewed_parts.append(fp.read_text(encoding="utf-8"))
 
