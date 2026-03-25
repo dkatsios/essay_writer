@@ -20,6 +20,7 @@ class WritingConfig(BaseModel):
     """Writing phase settings."""
 
     word_count_tolerance: float = 0.10
+    long_essay_threshold: int = 4000
 
 
 class FormattingConfig(BaseModel):
@@ -41,6 +42,9 @@ class SearchConfig(BaseModel):
     max_sources_per_direction: int = 5
     prefer_greek_sources: bool = True
     search_language: list[str] = ["el", "en"]
+    sources_per_1k_words: int = 3
+    min_sources: int = 5
+    max_sources: int = 25
 
 
 class PathsConfig(BaseModel):

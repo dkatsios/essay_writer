@@ -30,23 +30,37 @@ description: Create a structured essay plan with sections, word allocation, and 
 
 ### 1. Εισαγωγή (Introduction)
 - **Word target**: [N words]
+- **Heading**: # 1. Εισαγωγή
 - **Key points**: [what to cover]
+- **Content outline**: [2-4 bullet points describing the content in detail]
 
 ### 2. [Section Title in Greek]
 - **Word target**: [N words]
+- **Heading**: # 2. [Section Title]
 - **Key points**: [what to cover]
+- **Content outline**: [2-4 bullet points describing the content in detail]
 
 ...
 
 ### N. Συμπέρασμα (Conclusion)
 - **Word target**: [N words]
+- **Heading**: # N. Συμπέρασμα
 - **Key points**: [what to cover]
+- **Content outline**: [2-4 bullet points describing the content in detail]
 
 ## Research Queries
 - [query 1 in Greek or English]
 - [query 2]
 - ...
 ```
+
+### Content Outline Detail
+
+Each section's **Content outline** should be detailed enough for independent writing:
+- What arguments/sub-topics to develop
+- Which types of evidence/data to present
+- How the section relates to the thesis
+- Any specific examples or case studies to include
 
 ## Word Allocation Guidelines
 
