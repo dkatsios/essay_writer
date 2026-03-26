@@ -41,12 +41,15 @@ Deterministic Python pipeline for academic essay writing, built on the `deepagen
 7. **Review** (writer) — reviews draft, writes polished version to `/essay/reviewed.md`
 8. **Export** — pure Python `_build_document` call → `essay.docx`
 
-### Two-Agent Architecture
+### Three-Agent Architecture
 
 | Agent | Model | Template | Custom Tools | Blocked Tools | Skills dir |
 |-------|-------|----------|-------------|---------------|------------|
 | **worker** | `gemini-2.5-flash` | `worker.j2` | `read_pdf`, `read_docx`, `fetch_url`, `research_sources` | *(none)* | `/skills/worker/` |
-| **writer** | `gemini-3-flash-preview` | `writer.j2` | *(none)* | `edit_file`, `grep`, `glob`, `write_todos` | `/skills/writer/` |
+| **writer** | `gemini-2.5-pro` | `writer.j2` | *(none)* | `edit_file`, `grep`, `glob`, `write_todos` | `/skills/writer/` |
+| **reviewer** | `gemini-3.1-pro-preview` | `writer.j2` | *(none)* | `edit_file`, `grep`, `glob`, `write_todos` | `/skills/writer/` |
+
+The writer and reviewer share the same template and tool restrictions — only the model differs. The reviewer uses a higher-quality model for the review/polish pass.
 
 There is no LLM orchestrator. The Python pipeline (`src/pipeline.py`) controls flow deterministically. Each agent is a standalone `create_deep_agent` instance. Each pipeline step uses a unique `thread_id` for clean agent state.
 
@@ -110,10 +113,10 @@ No `default.yaml` exists; field defaults in `schemas.py` are canonical.
 
 ### Key Invariants
 
-- **Deterministic pipeline** — `src/pipeline.py` runs 8 fixed steps in sequence. No LLM decides the flow. Steps 1–5 use the worker; steps 6–7 use the writer; step 8 is pure Python.
-- **Jinja2 templates** (`src/templates/*.j2`) render system prompts. 2 templates: `worker.j2`, `writer.j2` — one per agent type.
+- **Deterministic pipeline** — `src/pipeline.py` runs 8 fixed steps in sequence. No LLM decides the flow. Steps 1–5 use the worker; step 6 uses the writer; step 7 uses the reviewer; step 8 is pure Python.
+- **Jinja2 templates** (`src/templates/*.j2`) render system prompts. 2 templates: `worker.j2`, `writer.j2` — one per agent type. The reviewer reuses `writer.j2`.
 - **Skills** (`src/skills/{worker,writer}/*/SKILL.md`) provide task-specific instructions via progressive disclosure. 7 skills total: 5 worker, 2 writer. Each agent only sees its own skills directory.
-- **Tool separation** — worker has `read_pdf`, `read_docx`, `fetch_url`, `research_sources`; writer has no custom tools (uses only framework-provided `read_file`/`write_file`). `_BlockToolsMiddleware` blocks `edit_file`, `grep`, `glob`, `write_todos` on the writer at code level.
+- **Tool separation** — worker has `read_pdf`, `read_docx`, `fetch_url`, `research_sources`; writer and reviewer have no custom tools (use only framework-provided `read_file`/`write_file`). `_BlockToolsMiddleware` blocks `edit_file`, `grep`, `glob`, `write_todos` on both at code level.
 - **Retry middleware** — `_RetryMalformedMiddleware` retries on `MALFORMED_FUNCTION_CALL` / zero-output `STOP` (Gemini glitch). `ModelRetryMiddleware` retries on transient 503/429 errors with exponential backoff. Both applied to all agents.
 - **Input flow** — `build_message_content()` writes extracted text to `/input/extracted.md` for the worker. Multimodal content (scanned PDF images) stays in `/input/` for the worker to access via `read_pdf`.
 - **`research_sources` tool** — owned by the worker, fans out queries across Semantic Scholar, OpenAlex, and Crossref in parallel, deduplicates by DOI/title, writes registry JSON. Zero LLM tokens consumed by the tool itself.

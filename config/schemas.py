@@ -14,6 +14,7 @@ class ModelsConfig(BaseModel):
 
     worker: str = "google_genai:gemini-2.5-flash"
     writer: str = "google_genai:gemini-2.5-pro"
+    reviewer: str = "google_genai:gemini-3.1-pro-preview"
 
 
 class WritingConfig(BaseModel):

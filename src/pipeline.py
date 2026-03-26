@@ -43,6 +43,7 @@ class PipelineContext:
 
     worker: CompiledStateGraph
     writer: CompiledStateGraph
+    reviewer: CompiledStateGraph
     run_dir: Path
     config: EssayWriterConfig
     extra_prompt: str | None = None
@@ -348,7 +349,7 @@ def _make_review_full(target_words: int) -> Callable[[PipelineContext], None]:
                 f" The word target is {target_words} words."
                 f" Do NOT produce fewer words than the draft."
             )
-        _invoke(ctx.writer, "review", msg, ctx.callbacks)
+        _invoke(ctx.reviewer, "review", msg, ctx.callbacks)
 
     return _do_review_full
 
@@ -519,7 +520,7 @@ def _make_review_sections(
 
             t0 = monotonic()
             _invoke(
-                ctx.writer,
+                ctx.reviewer,
                 f"review_s{section.number}",
                 msg,
                 ctx.callbacks,
@@ -642,6 +643,7 @@ def _build_execution_steps(
 def run_pipeline(
     worker: CompiledStateGraph,
     writer: CompiledStateGraph,
+    reviewer: CompiledStateGraph,
     run_dir: Path,
     config,
     *,
@@ -662,6 +664,7 @@ def run_pipeline(
     ctx = PipelineContext(
         worker=worker,
         writer=writer,
+        reviewer=reviewer,
         run_dir=run_dir,
         config=config,
         extra_prompt=extra_prompt,

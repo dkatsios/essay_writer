@@ -35,7 +35,7 @@ logger = logging.getLogger(__name__)
 load_dotenv()
 
 from config.schemas import load_config  # noqa: E402
-from src.agent import create_worker, create_writer  # noqa: E402
+from src.agent import create_reviewer, create_worker, create_writer  # noqa: E402
 from src.intake import build_message_content, scan, stage_files  # noqa: E402
 from src.pipeline import run_pipeline  # noqa: E402
 
@@ -510,6 +510,7 @@ def run(
     # Create agents
     worker = create_worker(config, run_dir, input_staging_dir=str(staging_dir))
     writer = create_writer(config, run_dir)
+    reviewer = create_reviewer(config, run_dir)
 
     timer = _StepTimer()
     tracker = TokenTracker()
@@ -519,6 +520,7 @@ def run(
         run_pipeline(
             worker,
             writer,
+            reviewer,
             run_dir,
             config,
             extra_prompt=prompt,
@@ -569,6 +571,7 @@ def run_prompt(
 
     worker = create_worker(config, run_dir, input_staging_dir=str(input_dir))
     writer = create_writer(config, run_dir)
+    reviewer = create_reviewer(config, run_dir)
 
     timer = _StepTimer()
     tracker = TokenTracker()
@@ -578,6 +581,7 @@ def run_prompt(
         run_pipeline(
             worker,
             writer,
+            reviewer,
             run_dir,
             config,
             callbacks=callbacks,

@@ -246,15 +246,13 @@ def create_worker(
     )
 
 
-def create_writer(
-    config: EssayWriterConfig,
+def _create_writer_agent(
+    model_spec: str,
     run_dir: Path,
+    config: EssayWriterConfig,
+    name: str,
 ) -> CompiledStateGraph:
-    """Create a standalone writer agent (quality model).
-
-    Framework-injected tools (edit_file, grep, glob) are blocked
-    via middleware so the writer focuses on writing.
-    """
+    """Shared factory for writer-like agents (writer & reviewer)."""
     from deepagents.middleware.filesystem import FilesystemMiddleware
     from langchain.agents import create_agent
 
@@ -264,10 +262,26 @@ def create_writer(
     )
 
     return create_agent(
-        model=_resolve_model(config.models.writer),
+        model=_resolve_model(model_spec),
         tools=[],
         system_prompt=render_prompt("writer.j2", config=config),
         middleware=[fs_mw, _server_retry(), _RetryMalformedMiddleware(), block],
         checkpointer=MemorySaver(),
-        name="writer",
+        name=name,
     )
+
+
+def create_writer(
+    config: EssayWriterConfig,
+    run_dir: Path,
+) -> CompiledStateGraph:
+    """Create a standalone writer agent (quality model)."""
+    return _create_writer_agent(config.models.writer, run_dir, config, "writer")
+
+
+def create_reviewer(
+    config: EssayWriterConfig,
+    run_dir: Path,
+) -> CompiledStateGraph:
+    """Create a standalone reviewer agent (highest-quality model)."""
+    return _create_writer_agent(config.models.reviewer, run_dir, config, "reviewer")
