@@ -441,12 +441,21 @@ def _make_write_full(target_words: int) -> Callable[[PipelineContext], None]:
 
 def _make_review_full(target_words: int) -> Callable[[PipelineContext], None]:
     def _do_review_full(ctx: PipelineContext) -> None:
-        msg = "Read /skills/writer/essay-review/SKILL.md."
+        brief = (ctx.run_dir / "brief" / "assignment.md").read_text(encoding="utf-8")
+        plan = (ctx.run_dir / "plan" / "plan.md").read_text(encoding="utf-8")
+        draft = (ctx.run_dir / "essay" / "draft.md").read_text(encoding="utf-8")
+
+        msg = "Read /skills/writer/essay-review/SKILL.md.\n\n"
         if target_words:
             msg += (
-                f" The word target is {target_words} words."
-                f" Do NOT produce fewer words than the draft."
+                f"Word target: {target_words} words. "
+                f"Do NOT produce fewer words than the draft.\n\n"
             )
+        msg += (
+            "## Assignment Brief\n\n" + brief + "\n\n"
+            "## Essay Plan\n\n" + plan + "\n\n"
+            "## Draft\n\n" + draft
+        )
         _invoke(ctx.reviewer, "review", msg, ctx.callbacks)
 
     return _do_review_full

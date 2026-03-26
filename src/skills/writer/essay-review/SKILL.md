@@ -7,16 +7,16 @@ description: Review and polish academic essays for coherence, language quality, 
 
 ## Process
 
-1. Read `/brief/assignment.md` — the assignment requirements.
-2. Read `/plan/plan.md` — for the section word targets.
-3. Read `/essay/draft.md` — the essay to review.
-4. Write the corrected essay to `/essay/reviewed.md` in a **single `write_file` call**.
-5. Return: "OK: review complete"
+1. The assignment brief, essay plan, and draft are provided below in the prompt — do NOT read them from disk.
+2. Review the draft following the criteria below.
+3. Write the corrected essay to `/essay/reviewed.md` in a **single `write_file` call**.
+4. Return: "OK: review complete"
 
 ## HARD LIMITS
 - ONE `write_file` call to `/essay/reviewed.md`. That is your ONLY output action.
+- Do NOT call `read_file`. The brief, plan, and draft are already in the prompt.
 - Do NOT call `edit_file`. EVER.
-- Do NOT call `grep`, `glob`, or `write_todos`.
+- Do NOT call `grep`, `glob`, `ls`, or `write_todos`.
 - After `write_file`, return your status immediately. No more tool calls.
 - **Do NOT attempt to rewrite or create additional files.** One call, done.
 
