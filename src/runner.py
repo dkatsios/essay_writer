@@ -35,7 +35,7 @@ logger = logging.getLogger(__name__)
 load_dotenv()
 
 from config.schemas import load_config  # noqa: E402
-from src.agent import create_reviewer, create_worker, create_writer  # noqa: E402
+from src.agent import create_model  # noqa: E402
 from src.intake import build_message_content, scan, stage_files  # noqa: E402
 from src.pipeline import run_pipeline  # noqa: E402
 
@@ -467,12 +467,11 @@ def _handle_questions(questions: str, run_dir: Path) -> None:
     answers = input("> ").strip()
     if not answers:
         return
-    from src.pipeline import _sanitize_json
     from src.schemas import AssignmentBrief, Clarification
 
     brief_path = run_dir / "brief" / "assignment.json"
     brief = AssignmentBrief.model_validate_json(
-        _sanitize_json(brief_path.read_text(encoding="utf-8"))
+        brief_path.read_text(encoding="utf-8")
     )
     if brief.clarifications is None:
         brief.clarifications = []
@@ -515,10 +514,15 @@ def run(
 
     log_handler = _setup_file_logging(run_dir) if output_dir else None
 
-    # Create agents
-    worker = create_worker(config, run_dir, input_staging_dir=str(staging_dir))
-    writer = create_writer(config, run_dir)
-    reviewer = create_reviewer(config, run_dir)
+    # Write extracted text for intake
+    input_dir = run_dir / "input"
+    input_dir.mkdir(parents=True, exist_ok=True)
+    (input_dir / "extracted.md").write_text(extracted_text, encoding="utf-8")
+
+    # Create models
+    worker = create_model(config.models.worker)
+    writer = create_model(config.models.writer)
+    reviewer = create_model(config.models.reviewer)
 
     timer = _StepTimer()
     tracker = TokenTracker()
@@ -577,9 +581,9 @@ def run_prompt(
         f"# Assignment\n\n{prompt}\n", encoding="utf-8"
     )
 
-    worker = create_worker(config, run_dir, input_staging_dir=str(input_dir))
-    writer = create_writer(config, run_dir)
-    reviewer = create_reviewer(config, run_dir)
+    worker = create_model(config.models.worker)
+    writer = create_model(config.models.writer)
+    reviewer = create_model(config.models.reviewer)
 
     timer = _StepTimer()
     tracker = TokenTracker()
@@ -653,7 +657,7 @@ def main() -> None:
     )
     logging.getLogger("httpx").setLevel(logging.WARNING)
     logging.getLogger("httpcore").setLevel(logging.WARNING)
-    logging.getLogger("deepagents.middleware.skills").setLevel(logging.ERROR)
+    logging.getLogger("langchain").setLevel(logging.WARNING)
 
     if args.input_path is None and args.prompt is None:
         if sys.stdin.isatty():

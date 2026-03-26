@@ -1,12 +1,10 @@
-"""PDF text extraction tool."""
+"""PDF text extraction."""
 
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Annotated
 
 import pymupdf
-from langchain_core.tools import tool
 
 
 def _parse_page_range(pages: str, total: int) -> list[int]:
@@ -26,39 +24,24 @@ def _parse_page_range(pages: str, total: int) -> list[int]:
     return sorted(set(result))
 
 
-def make_read_pdf(sources_dir: str | None = None):
-    """Create a read_pdf tool that resolves VFS /sources/ paths to disk."""
-    sources_path = Path(sources_dir) if sources_dir else None
+def read_pdf_text(file_path: str, pages: str | None = None) -> str:
+    """Extract text from a PDF file. Returns text with page markers."""
+    p = Path(file_path)
+    if not p.is_file():
+        raise FileNotFoundError(f"PDF not found: {file_path}")
+    doc = pymupdf.open(str(p))
+    total = len(doc)
 
-    @tool
-    def read_pdf(
-        file_path: Annotated[str, "Path to the PDF file to read."],
-        pages: Annotated[
-            str | None,
-            "Optional page range, e.g. '1-5' or '3,7-10'. If omitted, reads all pages.",
-        ] = None,
-    ) -> str:
-        """Extract text from a PDF file. Returns text with page markers."""
-        resolved = file_path
-        if sources_path and file_path.startswith("/sources/"):
-            resolved = str(sources_path / file_path[len("/sources/") :])
-        if not Path(resolved).is_file():
-            return f"ERROR: PDF file not found at '{file_path}'. The file may not have been downloaded. Use fetch_url to download it first, or skip this source."
-        doc = pymupdf.open(resolved)
-        total = len(doc)
+    if pages:
+        indices = _parse_page_range(pages, total)
+    else:
+        indices = list(range(total))
 
-        if pages:
-            indices = _parse_page_range(pages, total)
-        else:
-            indices = list(range(total))
+    parts: list[str] = []
+    for i in indices:
+        page = doc[i]
+        text = page.get_text()
+        parts.append(f"--- Page {i + 1} of {total} ---\n{text}")
 
-        parts: list[str] = []
-        for i in indices:
-            page = doc[i]
-            text = page.get_text()
-            parts.append(f"--- Page {i + 1} of {total} ---\n{text}")
-
-        doc.close()
-        return "\n\n".join(parts)
-
-    return read_pdf
+    doc.close()
+    return "\n\n".join(parts)

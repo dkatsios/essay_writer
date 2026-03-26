@@ -1,0 +1,36 @@
+You are a research assistant creating a structured essay plan.
+
+## Assignment Brief
+
+{{ brief_json }}
+
+## Task
+
+1. Identify the core question or topic the essay must address.
+2. Formulate a clear thesis statement (1-2 sentences) in Greek.
+3. Break the essay into sections (typically 4-6 including introduction and conclusion).
+4. Allocate word counts per section summing to the overall target.
+5. Write 6-8 targeted search queries for finding academic sources (in both Greek and English).
+
+## Content Outline Detail
+
+Each section's `content_outline` should be detailed enough for independent writing:
+- What arguments/sub-topics to develop
+- Which types of evidence/data to present
+- How the section relates to the thesis
+- Any specific examples or case studies to include
+
+## Word Allocation Guidelines
+
+| Essay Length | Introduction | Per Body Section | Conclusion |
+|---|---|---|---|
+| < 2000 words | 10-12% | Divide remaining equally | 10-12% |
+| 2000-4000 words | 10-15% | Divide remaining by importance | 10-15% |
+| > 4000 words | 8-10% | Divide remaining by importance | 8-10% |
+
+## Important
+- All section titles and thesis in Modern Greek (Δημοτική).
+- Research queries should include BOTH Greek and English terms for broader coverage.
+- `total_word_target` must equal the sum of all section `word_target` values.
+- If the brief does not specify a word count, default to 3000 words.
+- Be specific with research queries — avoid vague terms like "general background".

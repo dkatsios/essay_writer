@@ -1,11 +1,13 @@
 # Essay Writer
 
-AI-powered academic essay generator for Greek university students. Uses a deterministic Python pipeline with two specialized LLM agents (worker and writer) to research, plan, write, review, and export formatted `.docx` essays.
+AI-powered academic essay generator for Greek university students. Uses a deterministic Python pipeline with direct LangChain model calls to research, plan, write, review, and export formatted `.docx` essays.
 
 ## Features
 
 - Deterministic 8-step Python pipeline (intake → validate → plan → research → read → write → review → export)
-- Two agent types: worker (fast model for research/planning), writer (quality model for essay text), and reviewer (highest-quality model for polishing)
+- Three model roles: worker (fast model for research/planning), writer (quality model for essay text), and reviewer (highest-quality model for polishing)
+- Direct LangChain model calls — no agent framework, no VFS, no middleware
+- `model.with_structured_output()` for automatic Pydantic-validated JSON outputs with retry
 - Interactive validation: catches incomplete assignments and prompts for missing info before proceeding
 - Deterministic academic source research via Semantic Scholar, OpenAlex, and Crossref
 - Formatted `.docx` output with cover page, table of contents, and page numbers
@@ -35,7 +37,3 @@ Output is written to the `output/` directory as a `.docx` file.
 ## Configuration
 
 Default settings are defined in `config/schemas.py`. Override with `--config path/to/custom.yaml` or environment variables (prefix `ESSAY_WRITER_`).
-
-## Documentation
-
-- [Deepagents Reference](docs/DEEPAGENTS_REFERENCE.md) — framework API reference

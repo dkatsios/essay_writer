@@ -1,17 +1,18 @@
-"""URL content fetching tool."""
+"""URL content fetching."""
 
 from __future__ import annotations
 
+import logging
 import re
 from html.parser import HTMLParser
 from pathlib import Path
-from typing import Annotated
 from urllib.parse import urlparse
 
 import httpx
-from langchain_core.tools import tool
 
 from src.tools._http import get_ssl_verify
+
+logger = logging.getLogger(__name__)
 
 _WHITESPACE_RE = re.compile(r"\n{3,}")
 
@@ -70,84 +71,42 @@ def _extract_pdf_text(data: bytes) -> str:
     return "\n\n".join(parts)
 
 
-_MAX_FETCH_FAILURES = 3  # after this many total failures, hard-stop
+def fetch_url_content(url: str, sources_dir: str | None = None) -> str:
+    """Fetch content from a URL and return as plain text.
 
+    Strips HTML tags from web pages. For PDFs, extracts text and saves
+    the original PDF to the sources directory.
 
-def make_fetch_url(sources_dir: str | None = None):
-    """Create a fetch_url tool, optionally saving PDFs to sources_dir."""
+    Raises ``httpx.HTTPStatusError`` or ``httpx.RequestError`` on failure.
+    """
     sources_path = Path(sources_dir) if sources_dir else None
-    failed_urls: dict[str, int] = {}  # url → failure count
 
-    @tool
-    def fetch_url(
-        url: Annotated[str, "The URL to fetch content from."],
-    ) -> str:
-        """Fetch content from a URL and return as plain text.
+    resp = httpx.get(
+        url, follow_redirects=True, timeout=30, verify=get_ssl_verify()
+    )
+    resp.raise_for_status()
 
-        Strips HTML tags from web pages. For PDFs, extracts text and saves
-        the original PDF to the sources directory.
-        """
-        total_failures = sum(failed_urls.values())
-        if total_failures >= _MAX_FETCH_FAILURES:
-            return (
-                f"STOP: This source is inaccessible. "
-                f"{total_failures} fetch attempts have already failed. "
-                f"Previously failed URLs: {list(failed_urls.keys())}. "
-                f"Do NOT attempt any more URLs — write an INACCESSIBLE note and move on."
-            )
+    content_type = resp.headers.get("content-type", "")
 
-        try:
-            resp = httpx.get(
-                url, follow_redirects=True, timeout=30, verify=get_ssl_verify()
-            )
-            resp.raise_for_status()
-        except httpx.HTTPStatusError as exc:
-            failed_urls[url] = failed_urls.get(url, 0) + 1
-            total_failures = sum(failed_urls.values())
-            msg = f"Error fetching {url}: HTTP {exc.response.status_code} (attempt {failed_urls[url]} for this URL, {total_failures} total failures)"
-            if total_failures >= _MAX_FETCH_FAILURES:
-                msg += (
-                    f"\nSTOP: {total_failures} failures reached. "
-                    f"Previously failed: {list(failed_urls.keys())}. "
-                    f"Do NOT retry — write an INACCESSIBLE note and move on."
-                )
-            return msg
-        except httpx.RequestError as exc:
-            failed_urls[url] = failed_urls.get(url, 0) + 1
-            total_failures = sum(failed_urls.values())
-            msg = f"Error fetching {url}: {type(exc).__name__} (attempt {failed_urls[url]}, {total_failures} total failures)"
-            if total_failures >= _MAX_FETCH_FAILURES:
-                msg += f"\nSTOP: {total_failures} failures reached. Do NOT retry — write an INACCESSIBLE note."
-            return msg
+    if "pdf" in content_type or url.lower().endswith(".pdf"):
+        if sources_path is not None:
+            sources_path.mkdir(parents=True, exist_ok=True)
+            filename = _slugify_url(url) + ".pdf"
+            pdf_path = sources_path / filename
+            pdf_path.write_bytes(resp.content)
+        return _extract_pdf_text(resp.content)
 
-        content_type = resp.headers.get("content-type", "")
+    if "html" in content_type:
+        text = _html_to_text(resp.text)
+    else:
+        text = resp.text
 
-        if "pdf" in content_type or url.lower().endswith(".pdf"):
-            # Save PDF to sources dir
-            if sources_path is not None:
-                sources_path.mkdir(parents=True, exist_ok=True)
-                filename = _slugify_url(url) + ".pdf"
-                pdf_path = sources_path / filename
-                pdf_path.write_bytes(resp.content)
-            try:
-                return _extract_pdf_text(resp.content)
-            except Exception:
-                return f"Downloaded PDF from {url} but could not extract text."
+    if sources_path is not None and text:
+        word_count = len(text.split())
+        if word_count >= 200:
+            sources_path.mkdir(parents=True, exist_ok=True)
+            filename = _slugify_url(url) + ".txt"
+            content_path = sources_path / filename
+            content_path.write_text(text[:50_000], encoding="utf-8")
 
-        if "html" in content_type:
-            text = _html_to_text(resp.text)
-        else:
-            text = resp.text
-
-        # Save fetched text content to sources dir — only if substantive
-        if sources_path is not None and text:
-            word_count = len(text.split())
-            if word_count >= 200:
-                sources_path.mkdir(parents=True, exist_ok=True)
-                filename = _slugify_url(url) + ".txt"
-                content_path = sources_path / filename
-                content_path.write_text(text[:50_000], encoding="utf-8")
-
-        return text
-
-    return fetch_url
+    return text

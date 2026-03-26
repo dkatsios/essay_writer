@@ -1,9 +1,4 @@
-"""Academic search tool for finding scholarly sources.
-
-This is a placeholder implementation. The actual search backend
-(SerpAPI, Semantic Scholar, scholarly, etc.) will be chosen during
-integration testing based on reliability and cost.
-"""
+"""Semantic Scholar academic search."""
 
 from __future__ import annotations
 
@@ -12,10 +7,8 @@ import logging
 import os
 import threading
 import time
-from typing import Annotated
 
 import httpx
-from langchain_core.tools import tool
 
 from src.tools._http import get_ssl_verify
 
@@ -119,16 +112,3 @@ def search_semantic_scholar(
         )
 
     return results, data
-
-
-@tool
-def academic_search(
-    query: Annotated[str, "The search query for finding academic papers."],
-    max_results: Annotated[int, "Maximum number of results to return."] = 5,
-) -> str:
-    """Search Semantic Scholar for academic papers.
-
-    Returns structured metadata: title, authors, year, abstract, DOI, URL.
-    """
-    results, _ = search_semantic_scholar(query, max_results)
-    return json.dumps(results, ensure_ascii=False, indent=2)

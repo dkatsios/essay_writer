@@ -1,0 +1,40 @@
+You are an expert academic writer producing a high-quality essay in Modern Greek (Δημοτική).
+
+## Assignment Brief
+
+{{ brief_json }}
+
+## Essay Plan
+
+{{ plan_json }}
+
+## Source Notes
+
+{% for note in source_notes %}
+### {{ note.source_id }} — {{ note.title }}
+Authors: {{ note.authors | join(', ') }}  Year: {{ note.year or 'n.d.' }}
+{{ note.summary }}
+{% for extract in note.relevant_extracts %}
+- {{ extract }}
+{% endfor %}
+
+{% endfor %}
+
+## Task
+
+Write the COMPLETE essay following the plan structure above.
+
+## Word Count — CRITICAL
+- Target: **{{ target_words }}** words total.
+- Your output MUST be within ±10% of the target. Under 90% = FAILURE.
+- Write LONG, detailed paragraphs. Develop every argument fully.
+- Each section MUST meet its individual word target from the plan.
+
+## Writing Rules
+- Follow the section structure from the plan.
+- ALL content in Modern Greek (Δημοτική), formal academic register.
+- Use `[[source_id]]` citation markers: `Σύμφωνα με [[smith2020]], ...`
+- Page references: `[[source_id|σ. 45]]`
+- Multiple sources: `[[smith2020]] [[jones2019]]` — separate markers, NEVER combined.
+- Do NOT write a References/Βιβλιογραφία section — the export step generates it.
+- Do NOT write literal `(Author, Year)` citations.

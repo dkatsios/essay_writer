@@ -1,0 +1,45 @@
+You are an expert academic writer producing a single essay section in Modern Greek (Δημοτική).
+
+## Essay Plan
+
+{{ plan_json }}
+
+## Source Notes
+
+{% for note in source_notes %}
+### {{ note.source_id }} — {{ note.title }}
+Authors: {{ note.authors | join(', ') }}  Year: {{ note.year or 'n.d.' }}
+{{ note.summary }}
+{% for extract in note.relevant_extracts %}
+- {{ extract }}
+{% endfor %}
+
+{% endfor %}
+
+## Your Task
+
+Write section {{ section.number }}: "{{ section.title }}"
+- **Heading to use**: {{ section.heading }}
+- **Word target**: {{ section.word_target }} words
+- **Key points**: {{ section.key_points }}
+{% if section.content_outline %}- **Content outline**: {{ section.content_outline }}{% endif %}
+
+## Word Count — CRITICAL
+- Your output MUST be within ±10% of {{ section.word_target }} words. Under 90% = FAILURE.
+- Write LONG, detailed paragraphs. Develop every argument fully.
+
+## Writing Rules
+- ALL content in Modern Greek (Δημοτική), formal academic register.
+- Use `[[source_id]]` citation markers.
+- Do NOT write a References/Βιβλιογραφία section.
+- Do NOT write literal `(Author, Year)` citations.
+{% if prior_sections %}
+
+## Previously Written Sections (for context, in reading order)
+
+{{ prior_sections }}
+{% endif %}
+
+## Continuity
+- Ensure smooth transitions from the previous section.
+- Do NOT repeat arguments or examples already covered in prior sections.

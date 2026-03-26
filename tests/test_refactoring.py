@@ -10,35 +10,39 @@ from unittest.mock import MagicMock
 import pytest
 
 
-# ── agent factories ──────────────────────────────────────────────────────
+# ── agent retry logic ─────────────────────────────────────────────────
 
 
-class TestAgentMiddleware:
-    """Tests for middleware classes in agent.py."""
+class TestInvokeWithRetry:
+    """Tests for invoke_with_retry in agent.py."""
 
-    def test_block_tools_middleware_blocks(self):
-        from src.agent import _BlockToolsMiddleware
+    def test_immediate_success(self):
+        from src.agent import invoke_with_retry
 
-        mw = _BlockToolsMiddleware(frozenset({"edit_file", "grep"}))
-        request = MagicMock()
-        request.tool_call = {"name": "edit_file", "id": "test-id"}
-        handler = MagicMock()
+        model = MagicMock()
+        model.invoke.return_value = MagicMock(content="hello")
+        result = invoke_with_retry(model, ["test"])
+        assert result.content == "hello"
+        model.invoke.assert_called_once()
 
-        result = mw.wrap_tool_call(request, handler)
-        handler.assert_not_called()
-        assert "disabled" in result.content
+    def test_retries_on_resource_exhausted(self):
+        from src.agent import invoke_with_retry
 
-    def test_block_tools_middleware_passes(self):
-        from src.agent import _BlockToolsMiddleware
-
-        mw = _BlockToolsMiddleware(frozenset({"edit_file"}))
-        request = MagicMock()
-        request.tool_call = {"name": "write_file", "id": "test-id"}
-        handler = MagicMock(return_value="ok")
-
-        result = mw.wrap_tool_call(request, handler)
-        handler.assert_called_once()
-        assert result == "ok"
+        model = MagicMock()
+        model.invoke.side_effect = [
+            Exception("429 RESOURCE_EXHAUSTED"),
+            MagicMock(content="ok"),
+        ]
+        # Patch sleep to avoid waiting
+        import src.agent
+        original_sleep = src.agent.time.sleep
+        src.agent.time.sleep = lambda _: None
+        try:
+            result = invoke_with_retry(model, ["test"])
+            assert result.content == "ok"
+            assert model.invoke.call_count == 2
+        finally:
+            src.agent.time.sleep = original_sleep
 
 
 # ── web_fetcher HTML stripping ────────────────────────────────────────────
@@ -159,14 +163,14 @@ class TestRendering:
     def test_render_prompt_returns_string(self):
         from src.rendering import render_prompt
 
-        # All templates require config; just verify it doesn't crash
-        from config.schemas import EssayWriterConfig
+        # Test new per-task templates
+        result = render_prompt("intake.j2", extracted_text="Test content", extra_prompt=None)
+        assert isinstance(result, str)
+        assert len(result) > 0
 
-        config = EssayWriterConfig()
-        for template in ("worker.j2", "writer.j2"):
-            result = render_prompt(template, config=config)
-            assert isinstance(result, str)
-            assert len(result) > 0
+        result = render_prompt("validate.j2", brief_json='{"topic": "test"}')
+        assert isinstance(result, str)
+        assert len(result) > 0
 
     def test_cached_env_is_same_object(self):
         from src.rendering import _get_env

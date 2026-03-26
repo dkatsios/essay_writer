@@ -1,11 +1,8 @@
-"""DOCX text extraction tool."""
+"""DOCX text extraction."""
 
 from __future__ import annotations
 
-from typing import Annotated
-
 from docx import Document
-from langchain_core.tools import tool
 
 
 def extract_docx_text(doc: Document) -> str:
@@ -25,12 +22,6 @@ def extract_docx_text(doc: Document) -> str:
     return "\n\n".join(parts)
 
 
-@tool
-def read_docx(
-    file_path: Annotated[str, "Path to the .docx file to read."],
-) -> str:
-    """Extract text and structure from a .docx file. Preserves heading markers."""
-    try:
-        return extract_docx_text(Document(file_path))
-    except Exception as exc:
-        return f"ERROR: Could not read '{file_path}': {exc}"
+def read_docx_text(file_path: str) -> str:
+    """Extract text and structure from a .docx file."""
+    return extract_docx_text(Document(file_path))

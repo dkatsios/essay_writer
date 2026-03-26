@@ -1,11 +1,14 @@
 """Deterministic Python pipeline for essay writing.
 
 Two-phase execution:
-  Phase 1 (fixed):  intake -> plan
+  Phase 1 (fixed):  intake -> validate -> plan
   Phase 2 (dynamic): steps built from plan analysis (short vs long path)
 
-Each step is a callable wrapped in a PipelineStep dataclass.
-The executor iterates steps with timing, tracking, and error handling.
+LLM calls use:
+- ``model.with_structured_output(Schema)`` for JSON steps (auto-retry)
+- ``model.invoke(messages)`` for text steps (essays)
+
+The pipeline handles all file I/O; LLMs never touch disk.
 """
 
 from __future__ import annotations
@@ -20,15 +23,25 @@ from pathlib import Path
 from time import monotonic
 from typing import TYPE_CHECKING
 
-from langchain_core.messages import HumanMessage
+import httpx
+from langchain_core.language_models import BaseChatModel
+from langchain_core.messages import HumanMessage, SystemMessage
+from pydantic import BaseModel, ValidationError
 
-from src.schemas import EssayPlan, SourceNote, ValidationResult
+from src.rendering import render_prompt
+from src.schemas import (
+    AssignmentBrief,
+    EssayPlan,
+    SourceNote,
+    ValidationResult,
+)
+from src.tools.research_sources import run_research
+from src.tools.web_fetcher import fetch_url_content
 
 if TYPE_CHECKING:
     from collections.abc import Callable
 
     from config.schemas import EssayWriterConfig
-    from langgraph.graph.state import CompiledStateGraph
 
 logger = logging.getLogger(__name__)
 
@@ -42,9 +55,9 @@ logger = logging.getLogger(__name__)
 class PipelineContext:
     """Shared state passed to every step."""
 
-    worker: CompiledStateGraph
-    writer: CompiledStateGraph
-    reviewer: CompiledStateGraph
+    worker: BaseChatModel
+    writer: BaseChatModel
+    reviewer: BaseChatModel
     run_dir: Path
     config: EssayWriterConfig
     extra_prompt: str | None = None
@@ -102,59 +115,98 @@ def _execute(steps: list[PipelineStep], ctx: PipelineContext) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Low-level agent invocation
+# LLM invocation helpers
 # ---------------------------------------------------------------------------
 
+_STRUCTURED_RETRIES = 2
 
-def _invoke(
-    agent: CompiledStateGraph,
-    thread_id: str,
-    message: str,
+
+def _structured_call(
+    model: BaseChatModel,
+    prompt: str,
+    schema: type[BaseModel],
     callbacks: list | None = None,
-) -> dict:
-    """Invoke an agent with a single message."""
-    config: dict = {"configurable": {"thread_id": thread_id}}
-    if callbacks:
-        config["callbacks"] = callbacks
-    return agent.invoke(
-        {"messages": [HumanMessage(content=message)]},
-        config=config,
-    )
+    retries: int = _STRUCTURED_RETRIES,
+) -> BaseModel:
+    """Call a model with structured output, retrying on validation errors.
 
-
-# ---------------------------------------------------------------------------
-# JSON helpers
-# ---------------------------------------------------------------------------
-
-
-def _sanitize_json(raw: str) -> str:
-    """Fix unescaped newlines inside JSON string values.
-
-    LLMs sometimes write literal newlines in JSON strings instead of ``\\n``.
-    This walks the text character-by-character, and when inside a quoted string,
-    replaces bare ``\\n`` with ``\\\\n``.
+    Uses ``model.with_structured_output(schema)`` which constrains the
+    LLM to produce valid JSON matching the Pydantic model.  On validation
+    failure, re-invokes with the error message for self-correction.
     """
-    out: list[str] = []
-    in_string = False
-    escape_next = False
-    for ch in raw:
-        if escape_next:
-            out.append(ch)
-            escape_next = False
-            continue
-        if ch == "\\":
-            escape_next = True
-            out.append(ch)
-            continue
-        if ch == '"':
-            in_string = not in_string
-            out.append(ch)
-            continue
-        if in_string and ch == "\n":
-            out.append("\\n")
-            continue
-        out.append(ch)
-    return "".join(out)
+    from src.agent import invoke_with_retry
+
+    structured = model.with_structured_output(schema, method="json_schema")
+    messages = [HumanMessage(content=prompt)]
+    config = {"callbacks": callbacks} if callbacks else {}
+
+    for attempt in range(retries + 1):
+        try:
+            result = invoke_with_retry(structured, messages, **config)
+            if isinstance(result, BaseModel):
+                return result
+            # Some providers return dict instead of model
+            return schema.model_validate(result)
+        except (ValidationError, Exception) as exc:
+            if attempt < retries and isinstance(exc, ValidationError):
+                logger.warning(
+                    "Structured output validation failed (attempt %d/%d): %s",
+                    attempt + 1,
+                    retries + 1,
+                    exc,
+                )
+                messages = [
+                    HumanMessage(content=prompt),
+                    HumanMessage(
+                        content=f"Your previous output had validation errors:\n{exc}\n"
+                        "Please fix these errors and try again."
+                    ),
+                ]
+                continue
+            raise
+
+    # Unreachable, but satisfies type checker
+    raise RuntimeError("Structured call exhausted retries")
+
+
+def _text_call(
+    model: BaseChatModel,
+    system_prompt: str,
+    user_prompt: str,
+    callbacks: list | None = None,
+) -> str:
+    """Call a model for free-form text output (essays, reviews)."""
+    from src.agent import invoke_with_retry
+
+    messages = [
+        SystemMessage(content=system_prompt),
+        HumanMessage(content=user_prompt),
+    ]
+    config = {"callbacks": callbacks} if callbacks else {}
+    response = invoke_with_retry(model, messages, **config)
+    return response.content
+
+
+# ---------------------------------------------------------------------------
+# File I/O helpers
+# ---------------------------------------------------------------------------
+
+
+def _write_json(path: Path, data: BaseModel) -> None:
+    """Write a Pydantic model as JSON to disk."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(data.model_dump_json(indent=2, ensure_ascii=False), encoding="utf-8")
+
+
+def _write_text(path: Path, text: str) -> None:
+    """Write text to disk."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text, encoding="utf-8")
+
+
+def _read_text(path: Path) -> str:
+    """Read text from disk."""
+    return path.read_text(encoding="utf-8")
 
 
 # ---------------------------------------------------------------------------
@@ -167,8 +219,7 @@ def _get_target_words(run_dir: Path) -> int:
     plan_path = run_dir / "plan" / "plan.json"
     if not plan_path.exists():
         return 0
-    raw = _sanitize_json(plan_path.read_text(encoding="utf-8"))
-    plan = EssayPlan.model_validate_json(raw)
+    plan = EssayPlan.model_validate_json(plan_path.read_text(encoding="utf-8"))
     return plan.total_word_target
 
 
@@ -178,8 +229,7 @@ def _parse_sections(run_dir: Path) -> list[Section]:
     if not plan_path.exists():
         return []
 
-    raw = _sanitize_json(plan_path.read_text(encoding="utf-8"))
-    plan = EssayPlan.model_validate_json(raw)
+    plan = EssayPlan.model_validate_json(plan_path.read_text(encoding="utf-8"))
     sections: list[Section] = []
 
     for ps in plan.sections:
@@ -212,16 +262,29 @@ def _parse_sections(run_dir: Path) -> list[Section]:
 def _compute_max_sources(
     target_words: int, config: EssayWriterConfig
 ) -> tuple[int, int]:
-    """Compute (target_sources, fetch_sources) based on word count and config.
-
-    target_sources: how many the writer should use (final selection)
-    fetch_sources:  how many to register/read (overfetch for filtering)
-    """
+    """Compute (target_sources, fetch_sources) based on word count and config."""
     sc = config.search
     raw = math.ceil(target_words / 1000) * sc.sources_per_1k_words
     target = max(sc.min_sources, min(raw, sc.max_sources))
     fetch = min(int(target * sc.overfetch_multiplier), sc.max_sources * 2)
     return target, fetch
+
+
+def _load_source_notes(run_dir: Path) -> list[SourceNote]:
+    """Load all accessible source notes from disk."""
+    notes_dir = run_dir / "sources" / "notes"
+    if not notes_dir.exists():
+        return []
+    notes = []
+    for f in sorted(notes_dir.iterdir()):
+        if f.suffix == ".json":
+            try:
+                note = SourceNote.model_validate_json(f.read_text(encoding="utf-8"))
+                if note.is_accessible:
+                    notes.append(note)
+            except Exception:
+                logger.warning("Failed to load source note: %s", f.name)
+    return notes
 
 
 # ---------------------------------------------------------------------------
@@ -230,37 +293,37 @@ def _compute_max_sources(
 
 
 def _do_intake(ctx: PipelineContext) -> None:
-    extra = (
-        f"\nAdditional instructions from the user: {ctx.extra_prompt}"
-        if ctx.extra_prompt
-        else ""
+    extracted_path = ctx.run_dir / "input" / "extracted.md"
+    extracted_text = _read_text(extracted_path) if extracted_path.exists() else ""
+
+    prompt = render_prompt(
+        "intake.j2",
+        extracted_text=extracted_text,
+        extra_prompt=ctx.extra_prompt,
     )
-    _invoke(
-        ctx.worker,
-        "intake",
-        f"Read /skills/worker/intake/SKILL.md. "
-        f"Read extracted content from /input/extracted.md.{extra}",
-        ctx.callbacks,
+
+    brief = _structured_call(
+        ctx.worker, prompt, AssignmentBrief, ctx.callbacks
     )
+    _write_json(ctx.run_dir / "brief" / "assignment.json", brief)
 
 
 def _do_validate(ctx: PipelineContext) -> None:
-    _invoke(
-        ctx.worker,
-        "validate",
-        "Read /skills/worker/validate/SKILL.md. The brief is at /brief/assignment.json.",
-        ctx.callbacks,
+    brief_json = _read_text(ctx.run_dir / "brief" / "assignment.json")
+    prompt = render_prompt("validate.j2", brief_json=brief_json)
+
+    result = _structured_call(
+        ctx.worker, prompt, ValidationResult, ctx.callbacks
     )
+    _write_json(ctx.run_dir / "brief" / "validation.json", result)
 
 
 def _read_validation(run_dir: Path) -> str | None:
-    """Read validation.json and return formatted questions if any, else None."""
+    """Read validation.json and return formatted questions if any."""
     path = run_dir / "brief" / "validation.json"
     if not path.exists():
         return None
-    result = ValidationResult.model_validate_json(
-        _sanitize_json(path.read_text(encoding="utf-8"))
-    )
+    result = ValidationResult.model_validate_json(path.read_text(encoding="utf-8"))
     if result.is_pass or not result.questions:
         return None
     lines: list[str] = []
@@ -274,38 +337,95 @@ def _read_validation(run_dir: Path) -> str | None:
 
 
 def _do_plan(ctx: PipelineContext) -> None:
-    _invoke(
-        ctx.worker,
-        "plan",
-        "Read /skills/worker/essay-planning/SKILL.md. "
-        "The brief is at /brief/assignment.json.",
-        ctx.callbacks,
+    brief_json = _read_text(ctx.run_dir / "brief" / "assignment.json")
+    prompt = render_prompt("plan.j2", brief_json=brief_json)
+
+    plan = _structured_call(
+        ctx.worker, prompt, EssayPlan, ctx.callbacks
+    )
+    _write_json(ctx.run_dir / "plan" / "plan.json", plan)
+
+
+def _do_research(ctx: PipelineContext, fetch_sources: int) -> None:
+    """Run research — pure Python, no LLM."""
+    plan_path = ctx.run_dir / "plan" / "plan.json"
+    plan = EssayPlan.model_validate_json(plan_path.read_text(encoding="utf-8"))
+
+    run_research(
+        queries=plan.research_queries,
+        max_sources=fetch_sources,
+        sources_dir=str(ctx.run_dir / "sources"),
     )
 
 
-def _make_research(max_sources: int) -> Callable[[PipelineContext], None]:
-    def _do_research(ctx: PipelineContext) -> None:
-        _invoke(
-            ctx.worker,
-            "research",
-            f"Read /skills/worker/research/SKILL.md. The plan is at /plan/plan.json. "
-            f"Use max_sources={max_sources}.",
-            ctx.callbacks,
+def _read_one_source(
+    source_id: str,
+    meta: dict,
+    worker: BaseChatModel,
+    sources_dir: str,
+    callbacks: list | None,
+) -> SourceNote:
+    """Fetch and extract notes for a single source."""
+    url = meta.get("pdf_url") or meta.get("url", "")
+    content = ""
+
+    if url:
+        try:
+            content = fetch_url_content(url, sources_dir=sources_dir)
+            # Truncate very long content to avoid token limits
+            if len(content) > 50_000:
+                content = content[:50_000] + "\n\n[... truncated ...]"
+        except (httpx.HTTPStatusError, httpx.RequestError, Exception) as exc:
+            logger.warning("Failed to fetch %s: %s", url, exc)
+
+    # If we have content or at least an abstract, use LLM to extract notes
+    abstract = meta.get("abstract", "")
+    if content or abstract:
+        prompt = render_prompt(
+            "source_reading.j2",
+            source_id=source_id,
+            title=meta.get("title", ""),
+            authors=", ".join(meta.get("authors", [])),
+            year=meta.get("year", ""),
+            doi=meta.get("doi", ""),
+            abstract=abstract,
+            content=content,
+        )
+        try:
+            return _structured_call(worker, prompt, SourceNote, callbacks)
+        except Exception:
+            logger.warning("LLM extraction failed for %s, using metadata", source_id)
+
+    # Fallback: construct note from metadata alone
+    if abstract:
+        return SourceNote(
+            source_id=source_id,
+            is_accessible=True,
+            title=meta.get("title", ""),
+            authors=meta.get("authors", []),
+            year=meta.get("year"),
+            source_type=meta.get("source_type"),
+            summary=abstract,
+            url=url,
         )
 
-    return _do_research
+    return SourceNote(
+        source_id=source_id,
+        is_accessible=False,
+        title=meta.get("title", ""),
+        authors=meta.get("authors", []),
+        year=meta.get("year"),
+        inaccessible_reason="No content or abstract available",
+        url=url,
+    )
 
 
 def _select_best_sources(
     run_dir: Path, registry: dict, target_sources: int
 ) -> dict[str, dict]:
-    """Select the best target_sources from read notes.
-
-    Accessible sources ranked by note length (substance) come first.
-    If fewer accessible than target, pad with inaccessible to fill.
-    """
+    """Select the best target_sources from read notes."""
     notes_dir = run_dir / "sources" / "notes"
-    accessible: list[tuple[str, int]] = []  # (source_id, word_count)
+    accessible: list[tuple[str, int]] = []
     inaccessible: list[str] = []
 
     for sid in registry:
@@ -313,19 +433,18 @@ def _select_best_sources(
         if not note_path.exists():
             inaccessible.append(sid)
             continue
-        note = SourceNote.model_validate_json(
-            _sanitize_json(note_path.read_text(encoding="utf-8"))
-        )
-        if note.is_accessible:
-            accessible.append((sid, note.content_word_count))
-        else:
+        try:
+            note = SourceNote.model_validate_json(note_path.read_text(encoding="utf-8"))
+            if note.is_accessible:
+                accessible.append((sid, note.content_word_count))
+            else:
+                inaccessible.append(sid)
+        except Exception:
             inaccessible.append(sid)
 
-    # Sort accessible by note substance (more words = richer content)
     accessible.sort(key=lambda x: x[1], reverse=True)
     selected_ids = [sid for sid, _ in accessible[:target_sources]]
 
-    # If not enough accessible, pad with inaccessible (writer will cope)
     remaining = target_sources - len(selected_ids)
     if remaining > 0:
         selected_ids.extend(inaccessible[:remaining])
@@ -341,85 +460,50 @@ def _make_read_sources(target_sources: int) -> Callable[[PipelineContext], None]
             return
 
         registry = json.loads(registry_path.read_text(encoding="utf-8"))
-        tasks = []
-        for sid, meta in registry.items():
-            if not meta.get("url"):
-                continue
-            tasks.append((sid, meta))
+        tasks = [(sid, meta) for sid, meta in registry.items() if meta.get("url") or meta.get("pdf_url")]
         if not tasks:
             logger.info("No sources with URLs to read.")
             return
 
         logger.info("Reading %d sources in parallel...", len(tasks))
+        sources_dir = str(ctx.run_dir / "sources")
+        notes_dir = ctx.run_dir / "sources" / "notes"
+        notes_dir.mkdir(parents=True, exist_ok=True)
 
-        def read_one(args):
-            source_id, meta = args
-            url = meta.get("url", "")
-            title = meta.get("title", "")
-            authors = ", ".join(meta.get("authors", []))
-            year = meta.get("year", "")
-            abstract = meta.get("abstract", "")
-            doi = meta.get("doi", "")
+        def read_one(args: tuple[str, dict]) -> tuple[str, SourceNote]:
+            sid, meta = args
+            note = _read_one_source(sid, meta, ctx.worker, sources_dir, ctx.callbacks)
+            _write_json(notes_dir / f"{sid}.json", note)
+            return sid, note
 
-            msg = (
-                f"Read /skills/worker/source-reading/SKILL.md.\n"
-                f"Source: {source_id}\n"
-                f"URL: {url}\n"
-                f"Title: {title}\n"
-                f"Authors: {authors}\n"
-                f"Year: {year}\n"
-            )
-            if doi:
-                msg += f"DOI: {doi}\n"
-            if abstract:
-                msg += f"Abstract: {abstract}\n"
-
-            _invoke(
-                ctx.worker,
-                f"read_{source_id}",
-                msg,
-                ctx.callbacks,
-            )
-
+        accessible_count = 0
         with ThreadPoolExecutor(max_workers=3) as pool:
             futures = {pool.submit(read_one, t): t[0] for t in tasks}
             for future in as_completed(futures):
                 sid = futures[future]
                 try:
-                    future.result()
+                    _, note = future.result()
+                    if note.is_accessible:
+                        accessible_count += 1
                 except Exception:
                     logger.exception("Failed to read source %s", sid)
 
-        # Select best N sources and write selected.json
-        selected = _select_best_sources(ctx.run_dir, registry, target_sources)
-        total_read = len(tasks)
-        accessible_count = 0
-        for sid in registry:
-            note_path = ctx.run_dir / "sources" / "notes" / f"{sid}.json"
-            if not note_path.exists():
-                continue
-            note = SourceNote.model_validate_json(
-                _sanitize_json(note_path.read_text(encoding="utf-8"))
-            )
-            if note.is_accessible:
-                accessible_count += 1
-        inaccessible_count = total_read - accessible_count
+        inaccessible_count = len(tasks) - accessible_count
 
+        # Select best N sources
+        selected = _select_best_sources(ctx.run_dir, registry, target_sources)
         selected_path = ctx.run_dir / "sources" / "selected.json"
         selected_path.write_text(
             json.dumps(selected, ensure_ascii=False, indent=2), encoding="utf-8"
         )
         logger.info(
             "Selected %d/%d sources (%d accessible, %d inaccessible)",
-            len(selected),
-            total_read,
-            accessible_count,
-            inaccessible_count,
+            len(selected), len(tasks), accessible_count, inaccessible_count,
         )
 
         if inaccessible_count:
             print(
-                f"  ⚠ {inaccessible_count}/{total_read} sources inaccessible "
+                f"  ⚠ {inaccessible_count}/{len(tasks)} sources inaccessible "
                 f"({accessible_count} usable). Selected {len(selected)} best sources.",
                 file=sys.stderr,
             )
@@ -432,35 +516,50 @@ def _make_read_sources(target_sources: int) -> Callable[[PipelineContext], None]
 
 def _make_write_full(target_words: int) -> Callable[[PipelineContext], None]:
     def _do_write_full(ctx: PipelineContext) -> None:
-        msg = "Read /skills/writer/essay-writing/SKILL.md."
-        if target_words:
-            msg += (
-                f" The total word target is {target_words} words."
-                f" You MUST write at least {target_words} words."
-            )
-        _invoke(ctx.writer, "write", msg, ctx.callbacks)
+        brief_json = _read_text(ctx.run_dir / "brief" / "assignment.json")
+        plan_json = _read_text(ctx.run_dir / "plan" / "plan.json")
+        source_notes = _load_source_notes(ctx.run_dir)
+
+        prompt = render_prompt(
+            "essay_writing.j2",
+            brief_json=brief_json,
+            plan_json=plan_json,
+            source_notes=source_notes,
+            target_words=target_words,
+        )
+
+        essay = _text_call(
+            ctx.writer,
+            "You are an expert academic writer producing essays in Modern Greek (Δημοτική).",
+            prompt,
+            ctx.callbacks,
+        )
+        _write_text(ctx.run_dir / "essay" / "draft.md", essay)
 
     return _do_write_full
 
 
 def _make_review_full(target_words: int) -> Callable[[PipelineContext], None]:
     def _do_review_full(ctx: PipelineContext) -> None:
-        brief = (ctx.run_dir / "brief" / "assignment.json").read_text(encoding="utf-8")
-        plan = (ctx.run_dir / "plan" / "plan.json").read_text(encoding="utf-8")
-        draft = (ctx.run_dir / "essay" / "draft.md").read_text(encoding="utf-8")
+        brief_json = _read_text(ctx.run_dir / "brief" / "assignment.json")
+        plan_json = _read_text(ctx.run_dir / "plan" / "plan.json")
+        draft = _read_text(ctx.run_dir / "essay" / "draft.md")
 
-        msg = "Read /skills/writer/essay-review/SKILL.md.\n\n"
-        if target_words:
-            msg += (
-                f"Word target: {target_words} words. "
-                f"Do NOT produce fewer words than the draft.\n\n"
-            )
-        msg += (
-            "## Assignment Brief\n\n" + brief + "\n\n"
-            "## Essay Plan\n\n" + plan + "\n\n"
-            "## Draft\n\n" + draft
+        prompt = render_prompt(
+            "essay_review.j2",
+            brief_json=brief_json,
+            plan_json=plan_json,
+            draft_text=draft,
+            target_words=target_words,
         )
-        _invoke(ctx.reviewer, "review", msg, ctx.callbacks)
+
+        reviewed = _text_call(
+            ctx.reviewer,
+            "You are an expert academic editor polishing essays in Modern Greek (Δημοτική).",
+            prompt,
+            ctx.callbacks,
+        )
+        _write_text(ctx.run_dir / "essay" / "reviewed.md", reviewed)
 
     return _do_review_full
 
@@ -477,7 +576,6 @@ def _writing_order(sections: list[Section]) -> list[Section]:
 
 
 def _section_filename(section: Section) -> str:
-    """Generate a filename for a section: 01.md"""
     return f"{section.number:02d}.md"
 
 
@@ -485,20 +583,19 @@ def _make_write_sections(
     sections: list[Section],
     target_words: int,
 ) -> Callable[[PipelineContext], None]:
-    """Write essay section by section (long path)."""
-
     def _do_write_sections(ctx: PipelineContext) -> None:
         sections_dir = ctx.run_dir / "essay" / "sections"
         sections_dir.mkdir(parents=True, exist_ok=True)
 
+        plan_json = _read_text(ctx.run_dir / "plan" / "plan.json")
+        source_notes = _load_source_notes(ctx.run_dir)
         order = _writing_order(sections)
         written_files: list[tuple[Section, str]] = []
 
         for section in order:
             fname = _section_filename(section)
-            vfs_path = f"/essay/sections/{fname}"
 
-            # Build context of already-written sections (in plan order)
+            # Build context of already-written sections
             prior_context = ""
             if written_files:
                 sorted_written = sorted(written_files, key=lambda x: x[0].number)
@@ -508,37 +605,30 @@ def _make_write_sections(
                     if wp.exists():
                         parts.append(wp.read_text(encoding="utf-8"))
                 if parts:
-                    prior_context = (
-                        "\n\n--- Previously written sections "
-                        "(for context, in reading order) ---\n\n"
-                        + "\n\n---\n\n".join(parts)
-                    )
+                    prior_context = "\n\n---\n\n".join(parts)
 
-            msg = (
-                f"Read /skills/writer/section-writing/SKILL.md.\n\n"
-                f"## Your Task\n"
-                f'Write section {section.number}: "{section.title}"\n'
-                f"- **Heading to use**: {section.heading}\n"
-                f"- **Word target**: {section.word_target} words\n"
-                f"- **Key points**: {section.key_points}\n"
+            prompt = render_prompt(
+                "section_writing.j2",
+                plan_json=plan_json,
+                source_notes=source_notes,
+                section=section,
+                prior_sections=prior_context,
             )
-            if section.content_outline:
-                msg += f"- **Content outline**: {section.content_outline}\n"
-            msg += (
-                f"\nWrite to: {vfs_path}\n"
-                f"You MUST write at least {section.word_target} words "
-                f"for this section."
-            )
-            if prior_context:
-                msg += prior_context
 
             tracker_step = f"write:{section.number}"
             if ctx.tracker is not None:
                 ctx.tracker.current_step = tracker_step
 
             t0 = monotonic()
-            _invoke(ctx.writer, f"write_s{section.number}", msg, ctx.callbacks)
+            text = _text_call(
+                ctx.writer,
+                "You are an expert academic writer producing essays in Modern Greek (Δημοτική).",
+                prompt,
+                ctx.callbacks,
+            )
             dur = monotonic() - t0
+
+            _write_text(sections_dir / fname, text)
 
             if ctx.tracker is not None:
                 ctx.tracker.record_duration(tracker_step, dur)
@@ -559,8 +649,7 @@ def _make_write_sections(
             else:
                 logger.warning("Section %d file missing: %s", s.number, fp)
 
-        draft_path = ctx.run_dir / "essay" / "draft.md"
-        draft_path.write_text("\n\n".join(draft_parts), encoding="utf-8")
+        _write_text(ctx.run_dir / "essay" / "draft.md", "\n\n".join(draft_parts))
         logger.info("Combined %d sections into draft.md", len(draft_parts))
 
     return _do_write_sections
@@ -570,8 +659,6 @@ def _make_review_sections(
     sections: list[Section],
     target_words: int,
 ) -> Callable[[PipelineContext], None]:
-    """Review essay section by section with progressive replacement."""
-
     def _do_review_sections(ctx: PipelineContext) -> None:
         sections_dir = ctx.run_dir / "essay" / "sections"
         reviewed_dir = ctx.run_dir / "essay" / "reviewed"
@@ -579,14 +666,12 @@ def _make_review_sections(
         plan_order = sorted(sections, key=lambda s: s.number)
 
         def _best_path(s: Section) -> Path:
-            """Return reviewed version if it exists, else original."""
             rp = reviewed_dir / _section_filename(s)
             sp = sections_dir / _section_filename(s)
             return rp if rp.exists() else sp
 
         for section in plan_order:
             section_path = _best_path(section)
-
             if not section_path.exists():
                 logger.warning("Section %d missing, skipping review", section.number)
                 continue
@@ -607,22 +692,10 @@ def _make_review_sections(
                 full_essay_parts.append(text)
             full_essay = "\n\n---\n\n".join(full_essay_parts)
 
-            fname = _section_filename(section)
-            vfs_path = f"/essay/reviewed/{fname}"
-
-            msg = (
-                f"Read /skills/writer/section-review/SKILL.md.\n\n"
-                f"## Your Task\n"
-                f"Review and improve section {section.number}: "
-                f'"{section.title}"\n'
-                f"- **Word target**: {section.word_target} words\n"
-                f"- **Write improved version to**: {vfs_path}\n\n"
-                f"## Full Essay\n\n"
-                f"The section to review is delimited with "
-                f"`<!-- >>> SECTION TO REVIEW: START >>> -->` and "
-                f"`<!-- <<< SECTION TO REVIEW: END <<< -->>`.\n"
-                f"Rewrite ONLY that section. Do NOT touch other "
-                f"sections.\n\n{full_essay}"
+            prompt = render_prompt(
+                "section_review.j2",
+                section=section,
+                full_essay=full_essay,
             )
 
             tracker_step = f"review:{section.number}"
@@ -630,13 +703,15 @@ def _make_review_sections(
                 ctx.tracker.current_step = tracker_step
 
             t0 = monotonic()
-            _invoke(
+            reviewed = _text_call(
                 ctx.reviewer,
-                f"review_s{section.number}",
-                msg,
+                "You are an expert academic editor polishing essays in Modern Greek (Δημοτική).",
+                prompt,
                 ctx.callbacks,
             )
             dur = monotonic() - t0
+
+            _write_text(reviewed_dir / _section_filename(section), reviewed)
 
             if ctx.tracker is not None:
                 ctx.tracker.record_duration(tracker_step, dur)
@@ -646,19 +721,15 @@ def _make_review_sections(
                 file=sys.stderr,
             )
 
-        # Concatenate reviewed sections (fall back to originals)
+        # Concatenate reviewed sections
         reviewed_parts = []
         for s in plan_order:
             fp = _best_path(s)
             if fp.exists():
                 reviewed_parts.append(fp.read_text(encoding="utf-8"))
 
-        reviewed_path = ctx.run_dir / "essay" / "reviewed.md"
-        reviewed_path.write_text("\n\n".join(reviewed_parts), encoding="utf-8")
-        logger.info(
-            "Combined %d reviewed sections into reviewed.md",
-            len(reviewed_parts),
-        )
+        _write_text(ctx.run_dir / "essay" / "reviewed.md", "\n\n".join(reviewed_parts))
+        logger.info("Combined %d reviewed sections into reviewed.md", len(reviewed_parts))
 
     return _do_review_sections
 
@@ -668,7 +739,7 @@ def _make_review_sections(
 
 def _do_export(ctx: PipelineContext) -> None:
     """Build docx from disk files (pure Python, no LLM)."""
-    from src.tools.docx_builder import _build_document
+    from src.tools.docx_builder import build_document
 
     essay_text = None
     for name in ("reviewed.md", "draft.md"):
@@ -681,28 +752,21 @@ def _do_export(ctx: PipelineContext) -> None:
         return
 
     sources: dict = {}
-    # Prefer selected.json (post-read filter) over full registry
     for fname in ("selected.json", "registry.json"):
         src_path = ctx.run_dir / "sources" / fname
         if src_path.exists():
-            raw = src_path.read_text(encoding="utf-8")
-            try:
-                sources = json.loads(raw)
-            except json.JSONDecodeError:
-                sources = json.loads(raw.encode().decode("unicode_escape"))
+            sources = json.loads(src_path.read_text(encoding="utf-8"))
             break
 
     doc_config = ctx.config.formatting.model_dump()
     brief_path = ctx.run_dir / "brief" / "assignment.json"
     if brief_path.exists():
-        from src.schemas import AssignmentBrief
-
         brief = AssignmentBrief.model_validate_json(
-            _sanitize_json(brief_path.read_text(encoding="utf-8"))
+            brief_path.read_text(encoding="utf-8")
         )
         doc_config.setdefault("title", brief.topic)
 
-    doc = _build_document(essay_text, doc_config, sources)
+    doc = build_document(essay_text, doc_config, sources)
 
     output_path = Path(ctx.config.paths.output_dir) / "essay.docx"
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -710,7 +774,6 @@ def _do_export(ctx: PipelineContext) -> None:
     logger.info("essay.docx saved to %s", output_path)
     print(f"  essay.docx -> {output_path}", file=sys.stderr)
 
-    # Also copy into run_dir for easy access
     run_docx = ctx.run_dir / "essay.docx"
     if run_docx.resolve() != output_path.resolve():
         import shutil
@@ -726,13 +789,14 @@ def _do_export(ctx: PipelineContext) -> None:
 def _build_execution_steps(
     ctx: PipelineContext,
     target_words: int,
+    fetch_sources: int,
+    target_sources: int,
 ) -> list[PipelineStep]:
     """Build the dynamic portion of the pipeline after plan is available."""
-    target_sources, fetch_sources = _compute_max_sources(target_words, ctx.config)
     threshold = ctx.config.writing.long_essay_threshold
 
     steps: list[PipelineStep] = [
-        PipelineStep("research", _make_research(fetch_sources)),
+        PipelineStep("research", lambda c: _do_research(c, fetch_sources)),
         PipelineStep("read_sources", _make_read_sources(target_sources)),
     ]
 
@@ -747,16 +811,10 @@ def _build_execution_steps(
             steps.append(PipelineStep("review", _make_review_full(target_words)))
         else:
             steps.append(
-                PipelineStep(
-                    "write",
-                    _make_write_sections(sections, target_words),
-                )
+                PipelineStep("write", _make_write_sections(sections, target_words))
             )
             steps.append(
-                PipelineStep(
-                    "review",
-                    _make_review_sections(sections, target_words),
-                )
+                PipelineStep("review", _make_review_sections(sections, target_words))
             )
 
     steps.append(PipelineStep("export", _do_export))
@@ -764,11 +822,11 @@ def _build_execution_steps(
 
 
 def run_pipeline(
-    worker: CompiledStateGraph,
-    writer: CompiledStateGraph,
-    reviewer: CompiledStateGraph,
+    worker: BaseChatModel,
+    writer: BaseChatModel,
+    reviewer: BaseChatModel,
     run_dir: Path,
-    config,
+    config: EssayWriterConfig,
     *,
     extra_prompt: str | None = None,
     callbacks: list | None = None,
@@ -779,10 +837,6 @@ def run_pipeline(
 
     Phase 1 (fixed):  intake -> validate -> plan
     Phase 2 (dynamic): research -> read_sources -> write -> review -> export
-
-    If *on_questions* is provided and the validator finds gaps, it is called
-    with ``(questions_text, run_dir)``.  The callback should collect user
-    answers and update ``/brief/assignment.json``.
     """
     ctx = PipelineContext(
         worker=worker,
@@ -794,6 +848,10 @@ def run_pipeline(
         callbacks=callbacks,
         tracker=token_tracker,
     )
+
+    # Ensure output subdirectories exist
+    for subdir in ("brief", "plan", "sources", "essay"):
+        (run_dir / subdir).mkdir(parents=True, exist_ok=True)
 
     # Phase 1a: intake + validate
     _execute([PipelineStep("intake", _do_intake)], ctx)
@@ -818,5 +876,6 @@ def run_pipeline(
     )
 
     # Phase 2: built from plan analysis
-    phase2 = _build_execution_steps(ctx, target_words)
+    target_sources, fetch_sources = _compute_max_sources(target_words, config)
+    phase2 = _build_execution_steps(ctx, target_words, fetch_sources, target_sources)
     _execute(phase2, ctx)

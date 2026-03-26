@@ -1,4 +1,4 @@
-"""Crossref academic search tool.
+"""Crossref academic search.
 
 Uses the Crossref REST API (https://api.crossref.org/) for broad
 scholarly metadata coverage, especially strong for journal articles
@@ -8,16 +8,13 @@ No API key required — uses the polite pool with a mailto parameter.
 
 from __future__ import annotations
 
-import json
 import logging
 import os
 import re
-from typing import Annotated
 
 import httpx
-from langchain_core.tools import tool
 
-from src.tools._http import DEFAULT_MAILTO, get_ssl_verify, search_error_response
+from src.tools._http import DEFAULT_MAILTO, get_ssl_verify
 
 logger = logging.getLogger(__name__)
 
@@ -80,17 +77,3 @@ def search_crossref(query: str, max_results: int = 5) -> tuple[list[dict], dict]
         )
 
     return results, data
-
-
-@tool
-def crossref_search(
-    query: Annotated[str, "The search query for finding academic papers."],
-    max_results: Annotated[int, "Maximum number of results to return."] = 5,
-) -> str:
-    """Search Crossref for academic papers.
-
-    Returns structured metadata: title, authors, year, abstract, DOI, URL.
-    Broad journal article coverage across all disciplines.
-    """
-    results, _ = search_crossref(query, max_results)
-    return json.dumps(results, ensure_ascii=False, indent=2)

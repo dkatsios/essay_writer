@@ -23,72 +23,68 @@ uv run python -m src.runner /path/to/files/ --config my_config.yaml
 uv run python -m pytest tests/ -v
 
 # Import check
-uv run python -c "from src.agent import create_worker, create_writer"
+uv run python -c "from src.agent import create_model, invoke_with_retry"
 ```
 
 ## Architecture
 
-Deterministic Python pipeline for academic essay writing, built on the `deepagents` framework (LangChain/LangGraph). Produces academic essays in Greek as formatted `.docx` files. A Python pipeline (`src/pipeline.py`) controls the 8-step workflow; two LLM agent types — **worker** and **writer** — perform the actual language tasks.
+Deterministic Python pipeline for academic essay writing using direct LangChain model calls (no agent framework). Produces academic essays in Greek as formatted `.docx` files. A Python pipeline (`src/pipeline.py`) controls the 8-step workflow; three LLM model roles — **worker**, **writer**, and **reviewer** — perform the language tasks.
 
 ### Flow
 
-1. **Intake** (worker) — reads user documents, writes `/brief/assignment.json`
+1. **Intake** (worker) — reads extracted text, produces `AssignmentBrief` via `model.with_structured_output()`
 2. **Validate** (worker) — checks brief completeness; if gaps found, prompts user interactively and updates brief JSON
-3. **Plan** (worker) — creates sections, word targets, research queries → `/plan/plan.json`
-4. **Research** (worker) — extracts queries from plan, calls `research_sources` → `/sources/registry.json`
-5. **Read sources** (worker, parallel) — fetches full-text sources → `/sources/notes/{source_id}.json`
-6. **Write** (writer) — writes the complete essay → `/essay/draft.md`
-7. **Review** (writer) — reviews draft, writes polished version to `/essay/reviewed.md`
-8. **Export** — pure Python `_build_document` call → `essay.docx`
+3. **Plan** (worker) — creates sections, word targets, research queries → `EssayPlan` via structured output
+4. **Research** — pure Python: extracts queries from plan, calls `run_research()` → `registry.json`
+5. **Read sources** (worker, parallel) — pipeline fetches URLs via `fetch_url_content()`, then worker extracts `SourceNote` via structured output
+6. **Write** (writer) — writes the complete essay via `model.invoke()` → `draft.md`
+7. **Review** (reviewer) — reviews draft, writes polished version → `reviewed.md`
+8. **Export** — pure Python `build_document()` call → `essay.docx`
 
-### Three-Agent Architecture
+### Three-Model Architecture
 
-| Agent | Model | Template | Custom Tools | Blocked Tools | Skills dir |
-|-------|-------|----------|-------------|---------------|------------|
-| **worker** | `gemini-2.5-flash` | `worker.j2` | `read_pdf`, `read_docx`, `fetch_url`, `research_sources` | *(none)* | `/skills/worker/` |
-| **writer** | `gemini-2.5-pro` | `writer.j2` | *(none)* | `edit_file`, `grep`, `glob`, `write_todos` | `/skills/writer/` |
-| **reviewer** | `gemini-3.1-pro-preview` | `writer.j2` | *(none)* | `edit_file`, `grep`, `glob`, `write_todos` | `/skills/writer/` |
+| Role | Model | Templates | Purpose |
+|------|-------|-----------|---------|
+| **worker** | `gemini-2.5-flash` | `intake.j2`, `validate.j2`, `plan.j2`, `source_reading.j2` | Structured data extraction (brief, plan, notes) |
+| **writer** | `gemini-2.5-pro` | `essay_writing.j2`, `section_writing.j2` | Essay text generation |
+| **reviewer** | `gemini-3.1-pro-preview` | `essay_review.j2`, `section_review.j2` | Essay review and polish |
 
-The writer and reviewer share the same template and tool restrictions — only the model differs. The reviewer uses a higher-quality model for the review/polish pass.
+No agents, no VFS, no middleware. The pipeline calls models directly:
+- `model.with_structured_output(PydanticSchema)` for JSON steps (auto-retry on validation failure)
+- `model.invoke([SystemMessage, HumanMessage])` for text steps (essays)
 
-There is no LLM orchestrator. The Python pipeline (`src/pipeline.py`) controls flow deterministically. Each agent is a standalone `create_deep_agent` instance. Each pipeline step uses a unique `thread_id` for clean agent state.
+All tool calls (research, URL fetching, PDF reading) are plain Python functions called by the pipeline, not by the LLM.
 
-### Skills (organized by agent)
+### Templates (per-task Jinja2)
 
-Worker skills (`src/skills/worker/`):
+8 templates in `src/templates/`, one per pipeline task. Each template receives specific context variables and renders the complete prompt for that step:
 
-| Skill | Purpose | VFS output |
-|-------|---------|------------|
-| `intake` | Synthesize pre-extracted document content into a structured brief | `/brief/assignment.json` |
-| `validate` | Evaluate brief completeness; write pass/fail with structured questions | `/brief/validation.json` |
-| `essay-planning` | Create essay plan with sections, word targets, research queries | `/plan/plan.json` |
-| `research` | Extract queries from plan, call `research_sources` once | `/sources/registry.json` |
-| `source-reading` | Fetch/read a single source, write condensed notes | `/sources/notes/{source_id}.json` |
+| Template | Context variables | Output |
+|----------|-------------------|--------|
+| `intake.j2` | `extracted_text`, `extra_prompt` | `AssignmentBrief` JSON |
+| `validate.j2` | `brief_json` | `ValidationResult` JSON |
+| `plan.j2` | `brief_json` | `EssayPlan` JSON |
+| `source_reading.j2` | `source_id`, `title`, `authors`, `year`, `doi`, `abstract`, `content` | `SourceNote` JSON |
+| `essay_writing.j2` | `brief_json`, `plan_json`, `source_notes`, `target_words` | Essay markdown |
+| `essay_review.j2` | `brief_json`, `plan_json`, `draft_text`, `target_words` | Reviewed markdown |
+| `section_writing.j2` | `plan_json`, `source_notes`, `section`, `prior_sections` | Section markdown |
+| `section_review.j2` | `section`, `full_essay` | Reviewed section markdown |
 
-Writer skills (`src/skills/writer/`):
+### File Layout (run directory)
 
-| Skill | Purpose | VFS output |
-|-------|---------|------------|
-| `essay-writing` | Write the complete essay using plan and source notes | `/essay/draft.md` |
-| `essay-review` | Review and polish the draft | `/essay/reviewed.md` |
+Each run uses a directory with these subdirectories:
 
-### VFS (Virtual File System)
+- `brief/assignment.json` — assignment brief (Pydantic `AssignmentBrief`)
+- `brief/validation.json` — validation result (Pydantic `ValidationResult`)
+- `plan/plan.json` — essay plan (Pydantic `EssayPlan`)
+- `sources/registry.json` — source metadata (from `run_research()`)
+- `sources/notes/{source_id}.json` — reader notes, one file per source (Pydantic `SourceNote`)
+- `sources/selected.json` — best N sources selected for the essay
+- `essay/draft.md` — initial essay draft
+- `essay/reviewed.md` — reviewed/polished essay (used for export)
+- `input/extracted.md` — pre-extracted document text
 
-All VFS paths are disk-backed via `CompositeBackend` with `FilesystemBackend` routes. Each path maps to a subdirectory of the run directory:
-
-- `/brief/assignment.json` — assignment brief (Pydantic `AssignmentBrief`)
-- `/brief/validation.json` — validation result (Pydantic `ValidationResult`)
-- `/plan/plan.json` — essay plan (Pydantic `EssayPlan`)
-- `/sources/registry.json` — source metadata (from `research_sources` tool)
-- `/sources/notes/{source_id}.json` — reader notes, one file per source (Pydantic `SourceNote`)
-- `/essay/draft.md` — initial essay draft
-- `/essay/reviewed.md` — reviewed/polished essay (used for export)
-- `/input/extracted.md` — pre-extracted document text for the worker
-- `/skills/` — routes to `src/skills/` on disk (agents read SKILL.md via VFS)
-
-Files persist between agent invocations because they're on disk. `StateBackend` is the default fallback for unrouted paths.
-
-**Critical constraint**: `write_file` errors on existing files. Modifications must use `edit_file`.
+All file I/O is done by the pipeline Python code — LLMs never read or write files.
 
 ### Input Handling
 
@@ -97,7 +93,6 @@ The CLI accepts a file or directory path. The intake module (`src/intake.py`):
 - Extracts text from `.md`, `.txt`, `.pdf`, `.docx`, `.pptx`
 - For scanned PDFs (sparse text extraction), falls back to rendering pages as images
 - Encodes images (`.png`, `.jpg`, etc.) as base64 for multimodal LLM consumption
-- Stages originals into a temp directory for the agent's `/input/` backend route
 
 Supported: `.md`, `.txt`, `.text`, `.rst`, `.csv`, `.tsv`, `.log`, `.pdf`, `.docx`, `.pptx`, `.png`, `.jpg`, `.jpeg`, `.gif`, `.bmp`, `.tiff`, `.webp`, `.svg`
 
@@ -113,25 +108,20 @@ No `default.yaml` exists; field defaults in `schemas.py` are canonical.
 
 ### Key Invariants
 
-- **Deterministic pipeline** — `src/pipeline.py` runs 8 fixed steps in sequence. No LLM decides the flow. Steps 1–5 use the worker; step 6 uses the writer; step 7 uses the reviewer; step 8 is pure Python.
-- **Jinja2 templates** (`src/templates/*.j2`) render system prompts. 2 templates: `worker.j2`, `writer.j2` — one per agent type. The reviewer reuses `writer.j2`.
-- **Skills** (`src/skills/{worker,writer}/*/SKILL.md`) provide task-specific instructions via progressive disclosure. 7 skills total: 5 worker, 2 writer. Each agent only sees its own skills directory.
-- **Tool separation** — worker has `read_pdf`, `read_docx`, `fetch_url`, `research_sources`; writer and reviewer have no custom tools (use only framework-provided `read_file`/`write_file`). `_BlockToolsMiddleware` blocks `edit_file`, `grep`, `glob`, `write_todos` on both at code level.
-- **Retry middleware** — `_RetryMalformedMiddleware` retries on `MALFORMED_FUNCTION_CALL` / zero-output `STOP` (Gemini glitch). `ModelRetryMiddleware` retries on transient 503/429 errors with exponential backoff. Both applied to all agents.
-- **Input flow** — `build_message_content()` writes extracted text to `/input/extracted.md` for the worker. Multimodal content (scanned PDF images) stays in `/input/` for the worker to access via `read_pdf`.
-- **`research_sources` tool** — owned by the worker, fans out queries across Semantic Scholar, OpenAlex, and Crossref in parallel, deduplicates by DOI/title, writes registry JSON. Zero LLM tokens consumed by the tool itself.
-- **Agent independence** — each pipeline step uses a unique `thread_id`, giving agents a clean conversation. Agents read what they need from VFS (disk).
-- **Parallel source reading** — step 4 uses `ThreadPoolExecutor(max_workers=5)` to read multiple sources concurrently.
-- **CompositeBackend** routes `/brief/`, `/plan/`, `/sources/`, `/essay/`, `/output/`, `/input/` to `FilesystemBackend` (run_dir subdirectories on disk); `/skills/` routes to `src/skills/` on disk.
+- **Deterministic pipeline** — `src/pipeline.py` runs steps in sequence. No LLM decides the flow. Steps 1–5 use the worker model; step 6 uses the writer model; step 7 uses the reviewer model; step 8 is pure Python.
+- **Direct model calls** — no agent framework. `_structured_call()` uses `model.with_structured_output(Schema)` for JSON steps with auto-retry on validation failure. `_text_call()` uses `model.invoke()` for text steps.
+- **Jinja2 templates** (`src/templates/*.j2`) render prompts. 8 templates, one per pipeline task.
+- **Plain function tools** — `run_research()`, `fetch_url_content()`, `read_pdf_text()`, `read_docx_text()` are plain Python functions called by the pipeline. No `@tool` decorators.
+- **Retry logic** — `invoke_with_retry()` in `src/agent.py` handles transient 429/503 API errors with exponential backoff. `_structured_call()` retries on Pydantic `ValidationError`.
+- **Input flow** — `build_message_content()` extracts text and writes to `input/extracted.md`. The pipeline reads this and passes it to the intake template.
+- **`run_research()`** — fans out queries across Semantic Scholar, OpenAlex, and Crossref in parallel, deduplicates by DOI/title, writes registry JSON. Zero LLM tokens consumed.
+- **Parallel source reading** — `ThreadPoolExecutor(max_workers=3)` reads multiple sources concurrently.
+- **Short vs long path** — essays ≤ `long_essay_threshold` (default 4000 words) use full-essay write/review. Longer essays use section-by-section write/review.
 - **Custom AI endpoint** — when `AI_BASE_URL` is set in `.env`, all models route through an OpenAI-compatible endpoint using `AI_API_KEY` and `AI_MODEL`.
-- **Deterministic export** — step 8 calls `_build_document` directly from Python. No LLM involved. Prefers `/essay/reviewed.md`, falls back to `/essay/draft.md`.
-- **Validate step** — after intake, the worker evaluates the brief for significant gaps. If found, prints numbered questions with options and collects answers via `input()`. Answers are stored as `clarifications` in `assignment.json`. If no gaps, pipeline continues automatically. The `on_questions` callback in `run_pipeline` makes this interactive behavior pluggable.
-- **Structured VFS outputs** — brief, validation, plan, and source notes are JSON files validated by Pydantic models in `src/schemas.py`. Essays remain markdown. This eliminates regex parsing of intermediate artifacts.
+- **Deterministic export** — step 8 calls `build_document()` directly from Python. No LLM involved. Prefers `reviewed.md`, falls back to `draft.md`.
+- **Validate step** — after intake, the worker evaluates the brief for significant gaps. If found, prints numbered questions with options and collects answers via `input()`. Answers are stored as `clarifications` in `assignment.json`. The `on_questions` callback in `run_pipeline` makes this interactive behavior pluggable.
+- **Structured outputs** — brief, validation, plan, and source notes are JSON files validated by Pydantic models in `src/schemas.py`. Essays remain markdown.
 
 ### Test Fixtures
 
 Place test assignment directories under `examples/`. Each subdirectory is a self-contained test case with assignment files (PDFs, images, text).
-
-## Design Documents
-
-- `docs/DEEPAGENTS_REFERENCE.md` — framework API reference from source code analysis

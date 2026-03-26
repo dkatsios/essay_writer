@@ -1,4 +1,4 @@
-"""DOCX document assembly tool.
+"""DOCX document assembly.
 
 Converts structured essay text (markdown-like) into a formatted .docx file
 with cover page, table of contents, headings, body text, and references.
@@ -8,14 +8,12 @@ from __future__ import annotations
 
 import json
 import re
-from typing import Annotated
 
 from docx import Document
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
 from docx.shared import Cm, Pt
-from langchain_core.tools import tool
 
 
 def _safe_json_loads(s: str) -> dict:
@@ -357,7 +355,7 @@ def _parse_and_add_content(doc: Document, essay_text: str) -> None:
     flush_paragraph()
 
 
-def _build_document(
+def build_document(
     essay_text: str, config: dict, sources: dict | None = None
 ) -> Document:
     """Build a complete .docx document from essay text and config."""
@@ -373,71 +371,3 @@ def _build_document(
     _parse_and_add_content(doc, essay_text)
     _add_page_numbers(doc, config.get("page_numbers", "bottom_center"))
     return doc
-
-
-def make_build_docx(
-    output_dir: str,
-    sources_dir: str | None = None,
-    essay_dir: str | None = None,
-):
-    """Create a build_docx tool bound to real directories.
-
-    The tool reads essay text from *essay_dir*/reviewed.md (or draft.md as
-    fallback) and source metadata from *sources_dir*/registry.json so the LLM
-    never needs to pass these large blobs as tool arguments (keeping them out
-    of conversation history).
-    """
-    from pathlib import Path
-
-    output_dir_path = Path(output_dir)
-    _sources_path = Path(sources_dir) / "registry.json" if sources_dir else None
-    _essay_dir = Path(essay_dir) if essay_dir else None
-
-    @tool
-    def build_docx(
-        output_path: Annotated[str, "Output file path for the .docx file."],
-        config_json: Annotated[
-            str,
-            "JSON string with document config: title, author, institution, "
-            "course, professor, date, font, font_size, line_spacing, "
-            "margins_cm, citation_style, page_numbers, paragraph_indent.",
-        ],
-    ) -> str:
-        """Build a formatted .docx document.
-
-        Reads the essay from /essay/reviewed.md (or /essay/draft.md as
-        fallback) and source metadata from /sources/registry.json
-        automatically.  Creates a document with cover page, table of
-        contents, formatted body, and page numbers.
-        """
-        # Read essay text from disk — prefer reviewed, fall back to draft
-        essay_text = None
-        if _essay_dir:
-            for name in ("reviewed.md", "draft.md"):
-                p = _essay_dir / name
-                if p.exists():
-                    essay_text = p.read_text(encoding="utf-8")
-                    break
-        if not essay_text:
-            return "ERROR: no essay file found on disk."
-
-        # Read source registry from disk
-        sources: dict = {}
-        if _sources_path and _sources_path.exists():
-            raw = _sources_path.read_text(encoding="utf-8")
-            sources = _safe_json_loads(raw)
-
-        config = json.loads(config_json)
-        doc = _build_document(essay_text, config, sources)
-
-        # Resolve VFS path → real filesystem path
-        clean = output_path.lstrip("/")
-        if clean.startswith("output/"):
-            clean = clean[len("output/") :]
-        real_path = output_dir_path / clean
-        real_path.parent.mkdir(parents=True, exist_ok=True)
-
-        doc.save(str(real_path))
-        return f"Document saved to {output_path}"
-
-    return build_docx

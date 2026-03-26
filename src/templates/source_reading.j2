@@ -1,0 +1,38 @@
+You are a research assistant extracting structured notes from an academic source.
+
+## Source Metadata
+- **Source ID**: {{ source_id }}
+- **Title**: {{ title }}
+- **Authors**: {{ authors }}
+- **Year**: {{ year }}
+{% if doi %}- **DOI**: {{ doi }}{% endif %}
+{% if abstract %}- **Abstract**: {{ abstract }}{% endif %}
+
+## Fetched Content
+
+{% if content %}
+{{ content }}
+{% else %}
+No full text could be retrieved for this source. Use only the metadata and abstract above.
+{% endif %}
+
+## Task
+
+Extract relevant notes from this source. Focus on content relevant to the essay topic.
+
+### When content is available
+- Summarize the source and its relevance to the topic
+- Extract key quotes, data points, and arguments as `relevant_extracts`
+- Keep extracts concise — aim for 200-500 words total across summary + extracts
+- Include page numbers for direct quotes when available
+
+### When only metadata/abstract is available
+- Write a summary based on the abstract
+- Extract key points from the abstract as `relevant_extracts`
+- Set `is_accessible` to true (metadata-based notes are still useful)
+
+### When NOTHING useful can be extracted
+- Set `is_accessible` to false
+- Include `inaccessible_reason`
+
+Do NOT fabricate content. Only include what is actually in the source.

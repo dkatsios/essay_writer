@@ -1,4 +1,4 @@
-"""OpenAlex academic search tool.
+"""OpenAlex academic search.
 
 Uses the OpenAlex API (https://docs.openalex.org/) for broad scholarly
 coverage, especially strong for non-English sources.
@@ -7,15 +7,12 @@ No API key required — uses the polite pool with a mailto parameter.
 
 from __future__ import annotations
 
-import json
 import logging
 import os
-from typing import Annotated
 
 import httpx
-from langchain_core.tools import tool
 
-from src.tools._http import DEFAULT_MAILTO, get_ssl_verify, search_error_response
+from src.tools._http import DEFAULT_MAILTO, get_ssl_verify
 
 logger = logging.getLogger(__name__)
 
@@ -81,17 +78,3 @@ def search_openalex(query: str, max_results: int = 5) -> tuple[list[dict], dict]
         )
 
     return results, data
-
-
-@tool
-def openalex_search(
-    query: Annotated[str, "The search query for finding academic papers."],
-    max_results: Annotated[int, "Maximum number of results to return."] = 5,
-) -> str:
-    """Search OpenAlex for academic papers.
-
-    Returns structured metadata: title, authors, year, abstract, DOI, URL.
-    Good coverage of non-English and European sources.
-    """
-    results, _ = search_openalex(query, max_results)
-    return json.dumps(results, ensure_ascii=False, indent=2)

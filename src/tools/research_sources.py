@@ -1,9 +1,8 @@
-"""Unified research tool — searches all academic APIs and builds a source registry.
+"""Unified research — searches all academic APIs and builds a source registry.
 
-Replaces the researcher subagent with a deterministic Python tool.
-The orchestrator's plan provides targeted search queries; this tool
-fans them out across Semantic Scholar, OpenAlex, and Crossref in
-parallel, deduplicates, and writes /sources/registry.json.
+The pipeline provides targeted search queries; this module fans them out
+across Semantic Scholar, OpenAlex, and Crossref in parallel, deduplicates,
+and writes /sources/registry.json.
 """
 
 from __future__ import annotations
@@ -13,9 +12,6 @@ import logging
 import re
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
-from typing import Annotated
-
-from langchain_core.tools import tool
 
 from src.tools.academic_search import search_semantic_scholar
 from src.tools.crossref_search import search_crossref
@@ -186,78 +182,55 @@ def _build_registry(
     return registry
 
 
-def make_research_sources(sources_dir: str | None = None):
-    """Create a research_sources tool that writes registry.json to sources_dir."""
+def run_research(
+    queries: list[str],
+    max_sources: int,
+    sources_dir: str | None = None,
+) -> dict[str, dict]:
+    """Search academic databases and build a source registry.
+
+    Fans out *queries* across Semantic Scholar, OpenAlex, and Crossref
+    in parallel.  Deduplicates by DOI and title, writes the registry to
+    *sources_dir*/registry.json, and returns it.
+    """
     sources_path = Path(sources_dir) if sources_dir else None
 
-    @tool
-    def research_sources(
-        queries_json: Annotated[
-            str,
-            'JSON array of search query strings, e.g. \'["query 1", "query 2"]\'',
-        ],
-        max_sources: Annotated[
-            int,
-            "Maximum number of sources to include in the registry.",
-        ] = 15,
-    ) -> str:
-        """Search academic databases and build a source registry.
+    logger.info(
+        "run_research: %d queries, max_sources=%d", len(queries), max_sources
+    )
 
-        Fans out the provided queries across Semantic Scholar, OpenAlex, and
-        Crossref in parallel.  Deduplicates by DOI and title, filters by year
-        and URL availability.  Writes the registry to /sources/registry.json
-        and returns a short summary.
-        """
-        try:
-            queries = json.loads(queries_json)
-        except (json.JSONDecodeError, TypeError):
-            return "ERROR: Invalid queries_json — expected a JSON array of strings."
+    max_per_api = max(3, max_sources // max(len(queries), 1))
 
-        if not queries:
-            return "ERROR: No queries provided."
+    all_results: list[dict] = []
+    all_raw: list[dict] = []
+    for q in queries:
+        results, raw_responses = _search_one_query(q, max_per_api)
+        all_results.extend(results)
+        for api_name, raw_data in raw_responses.items():
+            all_raw.append({"query": q, "api": api_name, "response": raw_data})
 
-        logger.info(
-            "research_sources: %d queries, max_sources=%d", len(queries), max_sources
+    registry = _build_registry(all_results, max_sources)
+    logger.info(
+        "run_research: %d sources registered from %d raw results",
+        len(registry),
+        len(all_results),
+    )
+
+    if sources_path:
+        sources_path.mkdir(parents=True, exist_ok=True)
+        reg_path = sources_path / "registry.json"
+        reg_path.write_text(
+            json.dumps(registry, ensure_ascii=False, indent=2), encoding="utf-8"
         )
+        logger.info("Registry written to %s", reg_path)
 
-        max_per_api = max(3, max_sources // len(queries))
-
-        # Run queries sequentially to respect Semantic Scholar's 1 req/s limit
-        all_results: list[dict] = []
-        all_raw: list[dict] = []  # {query, api_name, response} per query
-        for q in queries:
-            results, raw_responses = _search_one_query(q, max_per_api)
-            all_results.extend(results)
-            for api_name, raw_data in raw_responses.items():
-                all_raw.append({"query": q, "api": api_name, "response": raw_data})
-
-        registry = _build_registry(all_results, max_sources)
-        logger.info(
-            "research_sources: %d sources registered from %d raw results",
-            len(registry),
-            len(all_results),
-        )
-
-        # Write registry to disk (served by FilesystemBackend at /sources/)
-        if sources_path:
-            sources_path.mkdir(parents=True, exist_ok=True)
-            reg_path = sources_path / "registry.json"
-            reg_path.write_text(
-                json.dumps(registry, ensure_ascii=False, indent=2), encoding="utf-8"
+        raw_dir = sources_path / "raw"
+        raw_dir.mkdir(parents=True, exist_ok=True)
+        for i, entry in enumerate(all_raw):
+            filename = f"{i:02d}_{entry['api']}.json"
+            (raw_dir / filename).write_text(
+                json.dumps(entry, ensure_ascii=False, indent=2),
+                encoding="utf-8",
             )
-            logger.info("Registry written to %s", reg_path)
 
-            # Save raw API payloads for traceability
-            raw_dir = sources_path / "raw"
-            raw_dir.mkdir(parents=True, exist_ok=True)
-            for i, entry in enumerate(all_raw):
-                filename = f"{i:02d}_{entry['api']}.json"
-                (raw_dir / filename).write_text(
-                    json.dumps(entry, ensure_ascii=False, indent=2),
-                    encoding="utf-8",
-                )
-
-        source_ids = ", ".join(registry.keys())
-        return f"OK: {len(registry)} sources registered. IDs: {source_ids}"
-
-    return research_sources
+    return registry

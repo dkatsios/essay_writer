@@ -53,7 +53,6 @@ class PathsConfig(BaseModel):
     """File system paths."""
 
     output_dir: str = "./output"
-    skills_dir: str = "/skills/"
 
 
 class EssayWriterConfig(BaseSettings):
