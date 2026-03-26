@@ -44,8 +44,9 @@ class SearchConfig(BaseModel):
     prefer_greek_sources: bool = True
     search_language: list[str] = ["el", "en"]
     sources_per_1k_words: int = 3
-    min_sources: int = 5
+    min_sources: int = 8
     max_sources: int = 25
+    overfetch_multiplier: float = 2.5
 
 
 class PathsConfig(BaseModel):

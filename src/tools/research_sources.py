@@ -93,15 +93,26 @@ def _search_one_query(
     return results, raw_responses
 
 
+def _accessibility_tier(hit: dict) -> int:
+    """Score a result by accessibility: lower = better.
+
+    0 = has OA PDF URL, 1 = has DOI URL, 2 = metadata-only URL.
+    """
+    if hit.get("pdf_url"):
+        return 0
+    if hit.get("doi"):
+        return 1
+    return 2
+
+
 def _build_registry(
     raw_results: list[dict],
     max_sources: int,
 ) -> dict[str, dict]:
-    """Deduplicate, filter, and build the source registry dict."""
+    """Deduplicate, filter, sort by accessibility, and build the registry."""
     seen_titles: set[str] = set()
     seen_dois: set[str] = set()
-    used_ids: set[str] = set()
-    registry: dict[str, dict] = {}
+    candidates: list[dict] = []
 
     for hit in raw_results:
         title = hit.get("title", "") or ""
@@ -140,19 +151,33 @@ def _build_registry(
         if normalised_type in _EXCLUDED_TYPES:
             continue
 
+        hit["_url"] = pdf_url or url
+        hit["_pdf_url"] = pdf_url
+        hit["_doi"] = doi
+        hit["_source_type"] = source_type
+        candidates.append(hit)
+
+    # Sort: OA PDF first, then DOI, then metadata-only
+    candidates.sort(key=_accessibility_tier)
+
+    used_ids: set[str] = set()
+    registry: dict[str, dict] = {}
+
+    for hit in candidates:
         authors = hit.get("authors", [])
-        source_id = _make_source_id(authors, year)
+        source_id = _make_source_id(authors, hit.get("year"))
         source_id = _dedup_source_id(source_id, used_ids)
         used_ids.add(source_id)
 
         registry[source_id] = {
             "authors": authors,
-            "year": str(year) if year else "",
-            "title": title,
-            "doi": doi,
-            "url": pdf_url or url,
-            "pdf_url": pdf_url,
-            "source_type": source_type,
+            "year": str(hit.get("year", "") or ""),
+            "title": hit.get("title", ""),
+            "abstract": hit.get("abstract", "") or "",
+            "doi": hit["_doi"],
+            "url": hit["_url"],
+            "pdf_url": hit["_pdf_url"],
+            "source_type": hit["_source_type"],
         }
 
         if len(registry) >= max_sources:

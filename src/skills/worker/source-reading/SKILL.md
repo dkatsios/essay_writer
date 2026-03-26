@@ -10,10 +10,11 @@ description: Read a single academic source and extract relevant notes to /source
 
 ## Process
 1. Use `fetch_url`, `read_pdf`, or `read_docx` to access the source content.
-2. Identify content relevant to the given topic focus.
-3. Extract key quotes, data points, and arguments.
-4. Write notes to `/sources/notes/{source_id}.md` using `write_file`.
-5. Return a short status: "OK: {source_id} — {one-line summary}" on success, or "FAIL: {source_id} — {reason}" on failure.
+2. If the URL returns a 403/paywall/error, you still have the **title, authors, year, abstract, and DOI** from the task message. Use that metadata to write a useful note.
+3. Identify content relevant to the given topic focus.
+4. Extract key quotes, data points, and arguments.
+5. Write notes to `/sources/notes/{source_id}.md` using `write_file`.
+6. Return a short status: "OK: {source_id} — {one-line summary}" on success, or "OK: {source_id} — metadata only (inaccessible)" if you used only metadata.
 
 ## Notes Format
 
@@ -34,7 +35,25 @@ Write the following to `/sources/notes/{source_id}.md`:
 - ...
 ```
 
-For inaccessible sources, write:
+If the URL is inaccessible but you have an abstract or other metadata, write a note using that information:
+
+```markdown
+# {source_id}
+
+## Source Summary
+- **Title**: [title]
+- **Authors**: [authors]
+- **Year**: [year]
+- **Type**: [type]
+- **Access**: Metadata only (full text inaccessible)
+
+## From Abstract
+- [Key point from abstract relevant to the topic]
+- [Another relevant point]
+- ...
+```
+
+Only write a bare INACCESSIBLE stub if you have NO abstract and NO useful metadata at all:
 
 ```markdown
 # {source_id}
@@ -48,6 +67,7 @@ For inaccessible sources, write:
 - The `source_id` will be provided in the task description — use it exactly as given for the VFS path.
 - Focus ONLY on content relevant to the given topic.
 - Keep extracts concise — aim for 200-500 words total per source.
+- A note from metadata/abstract is much more valuable than an INACCESSIBLE stub. Always prefer writing something useful.
 - **HARD LIMIT**: If `fetch_url` returns an error (404, timeout, etc.), do NOT retry the same URL or try URL variations. Write the INACCESSIBLE note immediately and return "FAIL". Maximum 2 fetch attempts per source.
 - Include page numbers for direct quotes when available.
 - If the source is inaccessible (paywall, 404, etc.), still write a notes file documenting the failure, then return "FAIL: {source_id} — {reason}".

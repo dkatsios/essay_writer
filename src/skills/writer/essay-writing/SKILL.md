@@ -9,7 +9,7 @@ description: Write complete academic essays in Greek with proper source integrat
 
 1. Read `/brief/assignment.md` for the assignment requirements.
 2. Read `/plan/plan.md` for the section structure and word targets.
-3. Read source notes — `ls /sources/notes/` then `read_file` for each.
+3. Read `/sources/selected.json` to see which sources to use, then read notes — `read_file` for each `/sources/notes/{source_id}.md`.
 4. Write the COMPLETE essay in a **single `write_file` call** to `/essay/draft.md`.
 5. Return: "OK: essay written"
 

@@ -214,11 +214,19 @@ def _parse_sections(run_dir: Path) -> list[Section]:
     return sections
 
 
-def _compute_max_sources(target_words: int, config: EssayWriterConfig) -> int:
-    """Compute max_sources based on target word count and config."""
+def _compute_max_sources(
+    target_words: int, config: EssayWriterConfig
+) -> tuple[int, int]:
+    """Compute (target_sources, fetch_sources) based on word count and config.
+
+    target_sources: how many the writer should use (final selection)
+    fetch_sources:  how many to register/read (overfetch for filtering)
+    """
     sc = config.search
     raw = math.ceil(target_words / 1000) * sc.sources_per_1k_words
-    return max(sc.min_sources, min(raw, sc.max_sources))
+    target = max(sc.min_sources, min(raw, sc.max_sources))
+    fetch = min(int(target * sc.overfetch_multiplier), sc.max_sources * 2)
+    return target, fetch
 
 
 # ---------------------------------------------------------------------------
@@ -287,59 +295,132 @@ def _make_research(max_sources: int) -> Callable[[PipelineContext], None]:
     return _do_research
 
 
-def _do_read_sources(ctx: PipelineContext) -> None:
-    registry_path = ctx.run_dir / "sources" / "registry.json"
-    if not registry_path.exists():
-        logger.warning("No registry.json found -- skipping source reading.")
-        return
+def _select_best_sources(
+    run_dir: Path, registry: dict, target_sources: int
+) -> dict[str, dict]:
+    """Select the best target_sources from read notes.
 
-    registry = json.loads(registry_path.read_text(encoding="utf-8"))
-    tasks = [
-        (sid, meta.get("url", ""), meta.get("topic", ""))
-        for sid, meta in registry.items()
-        if meta.get("url")
-    ]
-    if not tasks:
-        logger.info("No sources with URLs to read.")
-        return
+    Accessible sources ranked by note length (substance) come first.
+    If fewer accessible than target, pad with inaccessible to fill.
+    """
+    notes_dir = run_dir / "sources" / "notes"
+    accessible: list[tuple[str, int]] = []  # (source_id, word_count)
+    inaccessible: list[str] = []
 
-    logger.info("Reading %d sources in parallel...", len(tasks))
+    for sid in registry:
+        note_path = notes_dir / f"{sid}.md"
+        if not note_path.exists():
+            inaccessible.append(sid)
+            continue
+        text = note_path.read_text(encoding="utf-8")
+        if "INACCESSIBLE" in text.upper()[:500]:
+            inaccessible.append(sid)
+        else:
+            accessible.append((sid, len(text.split())))
 
-    def read_one(args):
-        source_id, url, topic = args
-        _invoke(
-            ctx.worker,
-            f"read_{source_id}",
-            f"Read /skills/worker/source-reading/SKILL.md. "
-            f"Source: {source_id}, URL: {url}, Topic: {topic}.",
-            ctx.callbacks,
+    # Sort accessible by note substance (more words = richer content)
+    accessible.sort(key=lambda x: x[1], reverse=True)
+    selected_ids = [sid for sid, _ in accessible[:target_sources]]
+
+    # If not enough accessible, pad with inaccessible (writer will cope)
+    remaining = target_sources - len(selected_ids)
+    if remaining > 0:
+        selected_ids.extend(inaccessible[:remaining])
+
+    return {sid: registry[sid] for sid in selected_ids if sid in registry}
+
+
+def _make_read_sources(target_sources: int) -> Callable[[PipelineContext], None]:
+    def _do_read_sources(ctx: PipelineContext) -> None:
+        registry_path = ctx.run_dir / "sources" / "registry.json"
+        if not registry_path.exists():
+            logger.warning("No registry.json found -- skipping source reading.")
+            return
+
+        registry = json.loads(registry_path.read_text(encoding="utf-8"))
+        tasks = []
+        for sid, meta in registry.items():
+            if not meta.get("url"):
+                continue
+            tasks.append((sid, meta))
+        if not tasks:
+            logger.info("No sources with URLs to read.")
+            return
+
+        logger.info("Reading %d sources in parallel...", len(tasks))
+
+        def read_one(args):
+            source_id, meta = args
+            url = meta.get("url", "")
+            title = meta.get("title", "")
+            authors = ", ".join(meta.get("authors", []))
+            year = meta.get("year", "")
+            abstract = meta.get("abstract", "")
+            doi = meta.get("doi", "")
+
+            msg = (
+                f"Read /skills/worker/source-reading/SKILL.md.\n"
+                f"Source: {source_id}\n"
+                f"URL: {url}\n"
+                f"Title: {title}\n"
+                f"Authors: {authors}\n"
+                f"Year: {year}\n"
+            )
+            if doi:
+                msg += f"DOI: {doi}\n"
+            if abstract:
+                msg += f"Abstract: {abstract}\n"
+
+            _invoke(
+                ctx.worker,
+                f"read_{source_id}",
+                msg,
+                ctx.callbacks,
+            )
+
+        with ThreadPoolExecutor(max_workers=3) as pool:
+            futures = {pool.submit(read_one, t): t[0] for t in tasks}
+            for future in as_completed(futures):
+                sid = futures[future]
+                try:
+                    future.result()
+                except Exception:
+                    logger.exception("Failed to read source %s", sid)
+
+        # Select best N sources and write selected.json
+        selected = _select_best_sources(ctx.run_dir, registry, target_sources)
+        total_read = len(tasks)
+        accessible_count = sum(
+            1
+            for sid in registry
+            if (ctx.run_dir / "sources" / "notes" / f"{sid}.md").exists()
+            and "INACCESSIBLE"
+            not in (ctx.run_dir / "sources" / "notes" / f"{sid}.md")
+            .read_text(encoding="utf-8")
+            .upper()[:500]
+        )
+        inaccessible_count = total_read - accessible_count
+
+        selected_path = ctx.run_dir / "sources" / "selected.json"
+        selected_path.write_text(
+            json.dumps(selected, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
+        logger.info(
+            "Selected %d/%d sources (%d accessible, %d inaccessible)",
+            len(selected),
+            total_read,
+            accessible_count,
+            inaccessible_count,
         )
 
-    with ThreadPoolExecutor(max_workers=3) as pool:
-        futures = {pool.submit(read_one, t): t[0] for t in tasks}
-        for future in as_completed(futures):
-            sid = futures[future]
-            try:
-                future.result()
-            except Exception:
-                logger.exception("Failed to read source %s", sid)
-
-    # Warn about inaccessible sources
-    notes_dir = ctx.run_dir / "sources" / "notes"
-    if notes_dir.exists():
-        inaccessible = []
-        for note in notes_dir.glob("*.md"):
-            text = note.read_text(encoding="utf-8")
-            if "INACCESSIBLE" in text.upper()[:500]:
-                inaccessible.append(note.stem)
-        total = len(list(notes_dir.glob("*.md")))
-        accessible = total - len(inaccessible)
-        if inaccessible:
+        if inaccessible_count:
             print(
-                f"  ⚠ {len(inaccessible)}/{total} sources inaccessible "
-                f"({accessible} usable). Continuing with available sources.",
+                f"  ⚠ {inaccessible_count}/{total_read} sources inaccessible "
+                f"({accessible_count} usable). Selected {len(selected)} best sources.",
                 file=sys.stderr,
             )
+
+    return _do_read_sources
 
 
 # -- Short path: full-essay write & review --------------------------------
@@ -587,13 +668,16 @@ def _do_export(ctx: PipelineContext) -> None:
         return
 
     sources: dict = {}
-    registry_path = ctx.run_dir / "sources" / "registry.json"
-    if registry_path.exists():
-        raw = registry_path.read_text(encoding="utf-8")
-        try:
-            sources = json.loads(raw)
-        except json.JSONDecodeError:
-            sources = json.loads(raw.encode().decode("unicode_escape"))
+    # Prefer selected.json (post-read filter) over full registry
+    for fname in ("selected.json", "registry.json"):
+        src_path = ctx.run_dir / "sources" / fname
+        if src_path.exists():
+            raw = src_path.read_text(encoding="utf-8")
+            try:
+                sources = json.loads(raw)
+            except json.JSONDecodeError:
+                sources = json.loads(raw.encode().decode("unicode_escape"))
+            break
 
     doc_config = ctx.config.formatting.model_dump()
     brief_path = ctx.run_dir / "brief" / "assignment.md"
@@ -639,12 +723,12 @@ def _build_execution_steps(
     target_words: int,
 ) -> list[PipelineStep]:
     """Build the dynamic portion of the pipeline after plan is available."""
-    max_sources = _compute_max_sources(target_words, ctx.config)
+    target_sources, fetch_sources = _compute_max_sources(target_words, ctx.config)
     threshold = ctx.config.writing.long_essay_threshold
 
     steps: list[PipelineStep] = [
-        PipelineStep("research", _make_research(max_sources)),
-        PipelineStep("read_sources", _do_read_sources),
+        PipelineStep("research", _make_research(fetch_sources)),
+        PipelineStep("read_sources", _make_read_sources(target_sources)),
     ]
 
     if target_words <= threshold:
