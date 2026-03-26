@@ -324,6 +324,23 @@ def _do_read_sources(ctx: PipelineContext) -> None:
             except Exception:
                 logger.exception("Failed to read source %s", sid)
 
+    # Warn about inaccessible sources
+    notes_dir = ctx.run_dir / "sources" / "notes"
+    if notes_dir.exists():
+        inaccessible = []
+        for note in notes_dir.glob("*.md"):
+            text = note.read_text(encoding="utf-8")
+            if "INACCESSIBLE" in text.upper()[:500]:
+                inaccessible.append(note.stem)
+        total = len(list(notes_dir.glob("*.md")))
+        accessible = total - len(inaccessible)
+        if inaccessible:
+            print(
+                f"  ⚠ {len(inaccessible)}/{total} sources inaccessible "
+                f"({accessible} usable). Continuing with available sources.",
+                file=sys.stderr,
+            )
+
 
 # -- Short path: full-essay write & review --------------------------------
 
@@ -581,10 +598,20 @@ def _do_export(ctx: PipelineContext) -> None:
     doc_config = ctx.config.formatting.model_dump()
     brief_path = ctx.run_dir / "brief" / "assignment.md"
     if brief_path.exists():
-        for line in brief_path.read_text(encoding="utf-8").split("\n"):
-            if line.startswith("# "):
-                doc_config.setdefault("title", line[2:].strip())
-                break
+        brief_text = brief_path.read_text(encoding="utf-8")
+        # Extract title from ## Topic section (first non-empty line after it)
+        in_topic = False
+        for line in brief_text.split("\n"):
+            if line.strip().startswith("## Topic"):
+                in_topic = True
+                continue
+            if in_topic:
+                stripped = line.strip()
+                if stripped.startswith("## "):
+                    break  # hit next section
+                if stripped:
+                    doc_config.setdefault("title", stripped)
+                    break
 
     doc = _build_document(essay_text, doc_config, sources)
 
@@ -593,6 +620,13 @@ def _do_export(ctx: PipelineContext) -> None:
     doc.save(str(output_path))
     logger.info("essay.docx saved to %s", output_path)
     print(f"  essay.docx -> {output_path}", file=sys.stderr)
+
+    # Also copy into run_dir for easy access
+    run_docx = ctx.run_dir / "essay.docx"
+    if run_docx.resolve() != output_path.resolve():
+        import shutil
+
+        shutil.copy2(str(output_path), str(run_docx))
 
 
 # ---------------------------------------------------------------------------

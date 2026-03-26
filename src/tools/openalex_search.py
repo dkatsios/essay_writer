@@ -22,8 +22,8 @@ logger = logging.getLogger(__name__)
 _OPENALEX_API = "https://api.openalex.org/works"
 
 
-def search_openalex(query: str, max_results: int = 5) -> list[dict]:
-    """Search OpenAlex and return a list of result dicts."""
+def search_openalex(query: str, max_results: int = 5) -> tuple[list[dict], dict]:
+    """Search OpenAlex and return (results, raw_api_response)."""
     mailto = os.environ.get("OPENALEX_MAILTO", DEFAULT_MAILTO)
     params = {
         "search": query,
@@ -38,7 +38,7 @@ def search_openalex(query: str, max_results: int = 5) -> list[dict]:
         resp.raise_for_status()
     except httpx.HTTPError as exc:
         logger.error("OpenAlex request failed for query %r: %s", query, exc)
-        return []
+        return [], {}
 
     data = resp.json()
 
@@ -63,6 +63,10 @@ def search_openalex(query: str, max_results: int = 5) -> list[dict]:
         if doi.startswith("https://doi.org/"):
             doi = doi[len("https://doi.org/") :]
 
+        oa = work.get("open_access") or {}
+        pdf_url = oa.get("oa_url") or ""
+        source_type = (work.get("type") or "").lower()
+
         results.append(
             {
                 "title": work.get("title", ""),
@@ -71,10 +75,12 @@ def search_openalex(query: str, max_results: int = 5) -> list[dict]:
                 "abstract": abstract,
                 "doi": doi,
                 "url": work.get("id", ""),
+                "pdf_url": pdf_url,
+                "source_type": source_type,
             }
         )
 
-    return results
+    return results, data
 
 
 @tool
@@ -87,5 +93,5 @@ def openalex_search(
     Returns structured metadata: title, authors, year, abstract, DOI, URL.
     Good coverage of non-English and European sources.
     """
-    results = search_openalex(query, max_results)
+    results, _ = search_openalex(query, max_results)
     return json.dumps(results, ensure_ascii=False, indent=2)

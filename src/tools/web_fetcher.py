@@ -135,7 +135,19 @@ def make_fetch_url(sources_dir: str | None = None):
                 return f"Downloaded PDF from {url} but could not extract text."
 
         if "html" in content_type:
-            return _html_to_text(resp.text)
-        return resp.text
+            text = _html_to_text(resp.text)
+        else:
+            text = resp.text
+
+        # Save fetched text content to sources dir — only if substantive
+        if sources_path is not None and text:
+            word_count = len(text.split())
+            if word_count >= 200:
+                sources_path.mkdir(parents=True, exist_ok=True)
+                filename = _slugify_url(url) + ".txt"
+                content_path = sources_path / filename
+                content_path.write_text(text[:50_000], encoding="utf-8")
+
+        return text
 
     return fetch_url

@@ -24,14 +24,14 @@ logger = logging.getLogger(__name__)
 _CROSSREF_API = "https://api.crossref.org/works"
 
 
-def search_crossref(query: str, max_results: int = 5) -> list[dict]:
-    """Search Crossref and return a list of result dicts."""
+def search_crossref(query: str, max_results: int = 5) -> tuple[list[dict], dict]:
+    """Search Crossref and return (results, raw_api_response)."""
     mailto = os.environ.get("CROSSREF_MAILTO", DEFAULT_MAILTO)
     params = {
         "query": query,
         "rows": max_results,
         "mailto": mailto,
-        "select": "title,author,published,abstract,DOI,URL",
+        "select": "title,author,published,abstract,DOI,URL,type",
     }
 
     try:
@@ -41,7 +41,7 @@ def search_crossref(query: str, max_results: int = 5) -> list[dict]:
         resp.raise_for_status()
     except httpx.HTTPError as exc:
         logger.error("Crossref request failed for query %r: %s", query, exc)
-        return []
+        return [], {}
 
     data = resp.json()
 
@@ -74,10 +74,12 @@ def search_crossref(query: str, max_results: int = 5) -> list[dict]:
                 "abstract": abstract,
                 "doi": item.get("DOI", ""),
                 "url": item.get("URL", ""),
+                "pdf_url": "",
+                "source_type": (item.get("type") or "").lower(),
             }
         )
 
-    return results
+    return results, data
 
 
 @tool
@@ -90,5 +92,5 @@ def crossref_search(
     Returns structured metadata: title, authors, year, abstract, DOI, URL.
     Broad journal article coverage across all disciplines.
     """
-    results = search_crossref(query, max_results)
+    results, _ = search_crossref(query, max_results)
     return json.dumps(results, ensure_ascii=False, indent=2)

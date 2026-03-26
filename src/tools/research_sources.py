@@ -26,6 +26,17 @@ logger = logging.getLogger(__name__)
 # Year threshold — skip very old results
 _MIN_YEAR = 2000
 
+# Source types to exclude (dissertations, theses, etc.)
+_EXCLUDED_TYPES = frozenset(
+    {
+        "dissertation",
+        "thesis",
+        "mastersthesis",
+        "phdthesis",
+        "posted-content",
+    }
+)
+
 
 def _normalise_title(title: str) -> str:
     """Lowercase, strip punctuation/whitespace for dedup comparison."""
@@ -54,9 +65,12 @@ def _dedup_source_id(source_id: str, existing: set[str]) -> str:
     return f"{source_id}_x"
 
 
-def _search_one_query(query: str, max_per_api: int) -> list[dict]:
-    """Run a single query against all three APIs and return merged results."""
+def _search_one_query(
+    query: str, max_per_api: int
+) -> tuple[list[dict], dict[str, dict]]:
+    """Run a single query against all three APIs and return (merged_results, raw_responses)."""
     results: list[dict] = []
+    raw_responses: dict[str, dict] = {}
 
     with ThreadPoolExecutor(max_workers=3) as pool:
         futures = {
@@ -69,12 +83,14 @@ def _search_one_query(query: str, max_per_api: int) -> list[dict]:
         for fut in as_completed(futures):
             api_name = futures[fut]
             try:
-                hits = fut.result()
+                hits, raw = fut.result()
                 results.extend(hits)
+                if raw:
+                    raw_responses[api_name] = raw
             except Exception:
                 logger.warning("Search API %s failed for query %r", api_name, query)
 
-    return results
+    return results, raw_responses
 
 
 def _build_registry(
@@ -112,9 +128,16 @@ def _build_registry(
 
         # Must have a URL for the reader to fetch
         url = hit.get("url", "") or ""
+        pdf_url = hit.get("pdf_url", "") or ""
         if doi and not url:
             url = f"https://doi.org/{doi}"
-        if not url:
+        if not url and not pdf_url:
+            continue
+
+        # Filter out dissertations/theses
+        source_type = (hit.get("source_type", "") or "").lower()
+        normalised_type = source_type.replace("-", "").replace("_", "").replace(" ", "")
+        if normalised_type in _EXCLUDED_TYPES:
             continue
 
         authors = hit.get("authors", [])
@@ -127,7 +150,9 @@ def _build_registry(
             "year": str(year) if year else "",
             "title": title,
             "doi": doi,
-            "url": url,
+            "url": pdf_url or url,
+            "pdf_url": pdf_url,
+            "source_type": source_type,
         }
 
         if len(registry) >= max_sources:
@@ -174,8 +199,12 @@ def make_research_sources(sources_dir: str | None = None):
 
         # Run queries sequentially to respect Semantic Scholar's 1 req/s limit
         all_results: list[dict] = []
+        all_raw: list[dict] = []  # {query, api_name, response} per query
         for q in queries:
-            all_results.extend(_search_one_query(q, max_per_api))
+            results, raw_responses = _search_one_query(q, max_per_api)
+            all_results.extend(results)
+            for api_name, raw_data in raw_responses.items():
+                all_raw.append({"query": q, "api": api_name, "response": raw_data})
 
         registry = _build_registry(all_results, max_sources)
         logger.info(
@@ -192,6 +221,16 @@ def make_research_sources(sources_dir: str | None = None):
                 json.dumps(registry, ensure_ascii=False, indent=2), encoding="utf-8"
             )
             logger.info("Registry written to %s", reg_path)
+
+            # Save raw API payloads for traceability
+            raw_dir = sources_path / "raw"
+            raw_dir.mkdir(parents=True, exist_ok=True)
+            for i, entry in enumerate(all_raw):
+                filename = f"{i:02d}_{entry['api']}.json"
+                (raw_dir / filename).write_text(
+                    json.dumps(entry, ensure_ascii=False, indent=2),
+                    encoding="utf-8",
+                )
 
         source_ids = ", ".join(registry.keys())
         return f"OK: {len(registry)} sources registered. IDs: {source_ids}"

@@ -51,12 +51,14 @@ def _get_headers() -> dict[str, str]:
     return headers
 
 
-def search_semantic_scholar(query: str, max_results: int = 5) -> list[dict]:
-    """Search Semantic Scholar and return a list of result dicts."""
+def search_semantic_scholar(
+    query: str, max_results: int = 5
+) -> tuple[list[dict], dict]:
+    """Search Semantic Scholar and return (results, raw_api_response)."""
     params = {
         "query": query,
         "limit": max_results,
-        "fields": "title,authors,year,abstract,externalIds,url",
+        "fields": "title,authors,year,abstract,externalIds,url,openAccessPdf,publicationTypes",
     }
 
     headers = _get_headers()
@@ -85,7 +87,7 @@ def search_semantic_scholar(query: str, max_results: int = 5) -> list[dict]:
                 resp.status_code,
                 query,
             )
-            return []
+            return [], {}
         break
     else:
         logger.error(
@@ -93,7 +95,7 @@ def search_semantic_scholar(query: str, max_results: int = 5) -> list[dict]:
             _MAX_RETRIES,
             query,
         )
-        return []
+        return [], {}
 
     data = resp.json()
 
@@ -101,6 +103,8 @@ def search_semantic_scholar(query: str, max_results: int = 5) -> list[dict]:
     for paper in data.get("data", []):
         authors = [a.get("name", "") for a in paper.get("authors", [])]
         external_ids = paper.get("externalIds") or {}
+        oa_pdf = paper.get("openAccessPdf") or {}
+        pub_types = paper.get("publicationTypes") or []
         results.append(
             {
                 "title": paper.get("title", ""),
@@ -109,10 +113,12 @@ def search_semantic_scholar(query: str, max_results: int = 5) -> list[dict]:
                 "abstract": paper.get("abstract", ""),
                 "doi": external_ids.get("DOI", ""),
                 "url": paper.get("url", ""),
+                "pdf_url": oa_pdf.get("url", ""),
+                "source_type": pub_types[0].lower() if pub_types else "",
             }
         )
 
-    return results
+    return results, data
 
 
 @tool
@@ -124,5 +130,5 @@ def academic_search(
 
     Returns structured metadata: title, authors, year, abstract, DOI, URL.
     """
-    results = search_semantic_scholar(query, max_results)
+    results, _ = search_semantic_scholar(query, max_results)
     return json.dumps(results, ensure_ascii=False, indent=2)
