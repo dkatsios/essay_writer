@@ -447,6 +447,34 @@ def _setup_file_logging(output_dir: Path) -> logging.FileHandler:
 
 
 # ---------------------------------------------------------------------------
+# Validation callback
+# ---------------------------------------------------------------------------
+
+
+def _handle_questions(questions: str, run_dir: Path) -> None:
+    """Print validator questions, collect answers via stdin, append to brief."""
+    print(
+        "\n"
+        + "=" * 50
+        + "\n  The assignment brief has gaps that may affect quality."
+        + "\n  Please answer the following:\n",
+        file=sys.stderr,
+    )
+    print(questions, file=sys.stderr)
+    print(
+        "\n  Enter answers (e.g. '1. a, 2. c') or press Enter to skip:",
+        file=sys.stderr,
+    )
+    answers = input("> ").strip()
+    if not answers:
+        return
+    brief_path = run_dir / "brief" / "assignment.md"
+    text = brief_path.read_text(encoding="utf-8")
+    text += f"\n\n## Clarifications\n\n{questions}\n\n**User answers**: {answers}\n"
+    brief_path.write_text(text, encoding="utf-8")
+
+
+# ---------------------------------------------------------------------------
 # Run entry points
 # ---------------------------------------------------------------------------
 
@@ -496,6 +524,7 @@ def run(
             extra_prompt=prompt,
             callbacks=callbacks,
             token_tracker=tracker,
+            on_questions=_handle_questions,
         )
     finally:
         shutil.rmtree(staging_dir, ignore_errors=True)
@@ -553,6 +582,7 @@ def run_prompt(
             config,
             callbacks=callbacks,
             token_tracker=tracker,
+            on_questions=_handle_questions,
         )
     finally:
         if log_handler:

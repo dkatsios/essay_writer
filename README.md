@@ -4,8 +4,9 @@ AI-powered academic essay generator for Greek university students. Uses a determ
 
 ## Features
 
-- Deterministic 7-step Python pipeline (intake → plan → research → read → write → review → export)
+- Deterministic 8-step Python pipeline (intake → validate → plan → research → read → write → review → export)
 - Two agent types: worker (fast model for research/planning) and writer (quality model for essay text)
+- Interactive validation: catches incomplete assignments and prompts for missing info before proceeding
 - Deterministic academic source research via Semantic Scholar, OpenAlex, and Crossref
 - Formatted `.docx` output with cover page, table of contents, and page numbers
 - Supports multiple input formats: PDF, DOCX, PPTX, images, text files

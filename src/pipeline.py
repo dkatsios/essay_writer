@@ -240,6 +240,29 @@ def _do_intake(ctx: PipelineContext) -> None:
     )
 
 
+def _do_validate(ctx: PipelineContext) -> None:
+    _invoke(
+        ctx.worker,
+        "validate",
+        "Read /skills/worker/validate/SKILL.md. The brief is at /brief/assignment.md.",
+        ctx.callbacks,
+    )
+
+
+def _read_validation(run_dir: Path) -> str | None:
+    """Read validation.md and return questions if any, else None."""
+    path = run_dir / "brief" / "validation.md"
+    if not path.exists():
+        return None
+    content = path.read_text(encoding="utf-8").strip()
+    if content.upper().startswith("PASS"):
+        return None
+    # Strip the QUESTIONS header if present
+    if content.upper().startswith("QUESTIONS"):
+        content = content[len("QUESTIONS") :].strip()
+    return content
+
+
 def _do_plan(ctx: PipelineContext) -> None:
     _invoke(
         ctx.worker,
@@ -625,11 +648,16 @@ def run_pipeline(
     extra_prompt: str | None = None,
     callbacks: list | None = None,
     token_tracker=None,
+    on_questions: Callable[[str, Path], None] | None = None,
 ) -> None:
     """Execute the essay writing pipeline.
 
-    Phase 1 (fixed):  intake -> plan
+    Phase 1 (fixed):  intake -> validate -> plan
     Phase 2 (dynamic): research -> read_sources -> write -> review -> export
+
+    If *on_questions* is provided and the validator finds gaps, it is called
+    with ``(questions_text, run_dir)``.  The callback should collect user
+    answers and append them to ``/brief/assignment.md``.
     """
     ctx = PipelineContext(
         worker=worker,
@@ -641,12 +669,17 @@ def run_pipeline(
         tracker=token_tracker,
     )
 
-    # Phase 1: always the same
-    phase1 = [
-        PipelineStep("intake", _do_intake),
-        PipelineStep("plan", _do_plan),
-    ]
-    _execute(phase1, ctx)
+    # Phase 1a: intake + validate
+    _execute([PipelineStep("intake", _do_intake)], ctx)
+    _execute([PipelineStep("validate", _do_validate)], ctx)
+
+    # Check validation result
+    questions = _read_validation(run_dir)
+    if questions and on_questions:
+        on_questions(questions, run_dir)
+
+    # Phase 1b: plan
+    _execute([PipelineStep("plan", _do_plan)], ctx)
 
     # Analyze plan to decide strategy
     target_words = _get_target_words(run_dir)
