@@ -81,9 +81,7 @@ def fetch_url_content(url: str, sources_dir: str | None = None) -> str:
     """
     sources_path = Path(sources_dir) if sources_dir else None
 
-    resp = httpx.get(
-        url, follow_redirects=True, timeout=30, verify=get_ssl_verify()
-    )
+    resp = httpx.get(url, follow_redirects=True, timeout=30, verify=get_ssl_verify())
     resp.raise_for_status()
 
     content_type = resp.headers.get("content-type", "")

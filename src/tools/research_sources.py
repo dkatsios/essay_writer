@@ -195,9 +195,7 @@ def run_research(
     """
     sources_path = Path(sources_dir) if sources_dir else None
 
-    logger.info(
-        "run_research: %d queries, max_sources=%d", len(queries), max_sources
-    )
+    logger.info("run_research: %d queries, max_sources=%d", len(queries), max_sources)
 
     max_per_api = max(3, max_sources // max(len(queries), 1))
 

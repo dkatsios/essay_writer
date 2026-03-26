@@ -35,6 +35,7 @@ class TestInvokeWithRetry:
         ]
         # Patch sleep to avoid waiting
         import src.agent
+
         original_sleep = src.agent.time.sleep
         src.agent.time.sleep = lambda _: None
         try:
@@ -164,7 +165,9 @@ class TestRendering:
         from src.rendering import render_prompt
 
         # Test new per-task templates
-        result = render_prompt("intake.j2", extracted_text="Test content", extra_prompt=None)
+        result = render_prompt(
+            "intake.j2", extracted_text="Test content", extra_prompt=None
+        )
         assert isinstance(result, str)
         assert len(result) > 0
 

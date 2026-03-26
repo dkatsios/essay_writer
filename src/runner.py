@@ -470,9 +470,7 @@ def _handle_questions(questions: str, run_dir: Path) -> None:
     from src.schemas import AssignmentBrief, Clarification
 
     brief_path = run_dir / "brief" / "assignment.json"
-    brief = AssignmentBrief.model_validate_json(
-        brief_path.read_text(encoding="utf-8")
-    )
+    brief = AssignmentBrief.model_validate_json(brief_path.read_text(encoding="utf-8"))
     if brief.clarifications is None:
         brief.clarifications = []
     brief.clarifications.append(Clarification(question=questions, answer=answers))

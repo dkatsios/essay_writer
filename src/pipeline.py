@@ -195,7 +195,9 @@ def _text_call(
 def _write_json(path: Path, data: BaseModel) -> None:
     """Write a Pydantic model as JSON to disk."""
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(data.model_dump_json(indent=2, ensure_ascii=False), encoding="utf-8")
+    path.write_text(
+        data.model_dump_json(indent=2, ensure_ascii=False), encoding="utf-8"
+    )
 
 
 def _write_text(path: Path, text: str) -> None:
@@ -302,9 +304,7 @@ def _do_intake(ctx: PipelineContext) -> None:
         extra_prompt=ctx.extra_prompt,
     )
 
-    brief = _structured_call(
-        ctx.worker, prompt, AssignmentBrief, ctx.callbacks
-    )
+    brief = _structured_call(ctx.worker, prompt, AssignmentBrief, ctx.callbacks)
     _write_json(ctx.run_dir / "brief" / "assignment.json", brief)
 
 
@@ -312,9 +312,7 @@ def _do_validate(ctx: PipelineContext) -> None:
     brief_json = _read_text(ctx.run_dir / "brief" / "assignment.json")
     prompt = render_prompt("validate.j2", brief_json=brief_json)
 
-    result = _structured_call(
-        ctx.worker, prompt, ValidationResult, ctx.callbacks
-    )
+    result = _structured_call(ctx.worker, prompt, ValidationResult, ctx.callbacks)
     _write_json(ctx.run_dir / "brief" / "validation.json", result)
 
 
@@ -340,9 +338,7 @@ def _do_plan(ctx: PipelineContext) -> None:
     brief_json = _read_text(ctx.run_dir / "brief" / "assignment.json")
     prompt = render_prompt("plan.j2", brief_json=brief_json)
 
-    plan = _structured_call(
-        ctx.worker, prompt, EssayPlan, ctx.callbacks
-    )
+    plan = _structured_call(ctx.worker, prompt, EssayPlan, ctx.callbacks)
     _write_json(ctx.run_dir / "plan" / "plan.json", plan)
 
 
@@ -460,7 +456,11 @@ def _make_read_sources(target_sources: int) -> Callable[[PipelineContext], None]
             return
 
         registry = json.loads(registry_path.read_text(encoding="utf-8"))
-        tasks = [(sid, meta) for sid, meta in registry.items() if meta.get("url") or meta.get("pdf_url")]
+        tasks = [
+            (sid, meta)
+            for sid, meta in registry.items()
+            if meta.get("url") or meta.get("pdf_url")
+        ]
         if not tasks:
             logger.info("No sources with URLs to read.")
             return
@@ -498,7 +498,10 @@ def _make_read_sources(target_sources: int) -> Callable[[PipelineContext], None]
         )
         logger.info(
             "Selected %d/%d sources (%d accessible, %d inaccessible)",
-            len(selected), len(tasks), accessible_count, inaccessible_count,
+            len(selected),
+            len(tasks),
+            accessible_count,
+            inaccessible_count,
         )
 
         if inaccessible_count:
@@ -729,7 +732,9 @@ def _make_review_sections(
                 reviewed_parts.append(fp.read_text(encoding="utf-8"))
 
         _write_text(ctx.run_dir / "essay" / "reviewed.md", "\n\n".join(reviewed_parts))
-        logger.info("Combined %d reviewed sections into reviewed.md", len(reviewed_parts))
+        logger.info(
+            "Combined %d reviewed sections into reviewed.md", len(reviewed_parts)
+        )
 
     return _do_review_sections
 
