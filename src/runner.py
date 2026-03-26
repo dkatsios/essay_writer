@@ -187,7 +187,7 @@ class TokenTracker:
         # Word counts from essay files
         draft_words = _count_words(run_dir / "essay" / "draft.md")
         reviewed_words = _count_words(run_dir / "essay" / "reviewed.md")
-        target_words = _parse_target_words(run_dir / "plan" / "plan.md")
+        target_words = _parse_target_words(run_dir / "plan" / "plan.json")
         sources_count = _count_sources(run_dir / "sources" / "registry.json")
 
         lines = [
@@ -262,17 +262,16 @@ def _count_sources(path: Path) -> int:
 
 
 def _parse_target_words(path: Path) -> int:
-    """Sum word targets from plan.md (lines like '- **Word target**: 350 words')."""
+    """Read total word target from plan.json."""
     if not path.exists():
         return 0
-    import re
+    import json
 
-    total = 0
-    for match in re.finditer(
-        r"\*\*Word target\*\*:\s*(\d[\d,]*)", path.read_text(encoding="utf-8")
-    ):
-        total += int(match.group(1).replace(",", ""))
-    return total
+    try:
+        plan = json.loads(path.read_text(encoding="utf-8"))
+        return plan.get("total_word_target", 0)
+    except (json.JSONDecodeError, ValueError):
+        return 0
 
 
 # ---------------------------------------------------------------------------
@@ -468,10 +467,19 @@ def _handle_questions(questions: str, run_dir: Path) -> None:
     answers = input("> ").strip()
     if not answers:
         return
-    brief_path = run_dir / "brief" / "assignment.md"
-    text = brief_path.read_text(encoding="utf-8")
-    text += f"\n\n## Clarifications\n\n{questions}\n\n**User answers**: {answers}\n"
-    brief_path.write_text(text, encoding="utf-8")
+    from src.pipeline import _sanitize_json
+    from src.schemas import AssignmentBrief, Clarification
+
+    brief_path = run_dir / "brief" / "assignment.json"
+    brief = AssignmentBrief.model_validate_json(
+        _sanitize_json(brief_path.read_text(encoding="utf-8"))
+    )
+    if brief.clarifications is None:
+        brief.clarifications = []
+    brief.clarifications.append(Clarification(question=questions, answer=answers))
+    brief_path.write_text(
+        brief.model_dump_json(indent=2, ensure_ascii=False), encoding="utf-8"
+    )
 
 
 # ---------------------------------------------------------------------------

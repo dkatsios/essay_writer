@@ -32,11 +32,11 @@ Deterministic Python pipeline for academic essay writing, built on the `deepagen
 
 ### Flow
 
-1. **Intake** (worker) — reads user documents, writes `/brief/assignment.md`
-2. **Validate** (worker) — checks brief completeness; if gaps found, prompts user interactively and appends answers to brief
-3. **Plan** (worker) — creates sections, word targets, research queries → `/plan/plan.md`
+1. **Intake** (worker) — reads user documents, writes `/brief/assignment.json`
+2. **Validate** (worker) — checks brief completeness; if gaps found, prompts user interactively and updates brief JSON
+3. **Plan** (worker) — creates sections, word targets, research queries → `/plan/plan.json`
 4. **Research** (worker) — extracts queries from plan, calls `research_sources` → `/sources/registry.json`
-5. **Read sources** (worker, parallel) — fetches full-text sources → `/sources/notes/{source_id}.md`
+5. **Read sources** (worker, parallel) — fetches full-text sources → `/sources/notes/{source_id}.json`
 6. **Write** (writer) — writes the complete essay → `/essay/draft.md`
 7. **Review** (writer) — reviews draft, writes polished version to `/essay/reviewed.md`
 8. **Export** — pure Python `_build_document` call → `essay.docx`
@@ -59,11 +59,11 @@ Worker skills (`src/skills/worker/`):
 
 | Skill | Purpose | VFS output |
 |-------|---------|------------|
-| `intake` | Synthesize pre-extracted document content into a structured brief | `/brief/assignment.md` |
-| `validate` | Evaluate brief completeness; write PASS or structured questions | `/brief/validation.md` |
-| `essay-planning` | Create essay plan with sections, word targets, research queries | `/plan/plan.md` |
+| `intake` | Synthesize pre-extracted document content into a structured brief | `/brief/assignment.json` |
+| `validate` | Evaluate brief completeness; write pass/fail with structured questions | `/brief/validation.json` |
+| `essay-planning` | Create essay plan with sections, word targets, research queries | `/plan/plan.json` |
 | `research` | Extract queries from plan, call `research_sources` once | `/sources/registry.json` |
-| `source-reading` | Fetch/read a single source, write condensed notes | `/sources/notes/{source_id}.md` |
+| `source-reading` | Fetch/read a single source, write condensed notes | `/sources/notes/{source_id}.json` |
 
 Writer skills (`src/skills/writer/`):
 
@@ -76,11 +76,11 @@ Writer skills (`src/skills/writer/`):
 
 All VFS paths are disk-backed via `CompositeBackend` with `FilesystemBackend` routes. Each path maps to a subdirectory of the run directory:
 
-- `/brief/assignment.md` — assignment brief
-- `/brief/validation.md` — validation result (PASS or questions)
-- `/plan/plan.md` — essay plan
+- `/brief/assignment.json` — assignment brief (Pydantic `AssignmentBrief`)
+- `/brief/validation.json` — validation result (Pydantic `ValidationResult`)
+- `/plan/plan.json` — essay plan (Pydantic `EssayPlan`)
 - `/sources/registry.json` — source metadata (from `research_sources` tool)
-- `/sources/notes/{source_id}.md` — reader notes, one file per source
+- `/sources/notes/{source_id}.json` — reader notes, one file per source (Pydantic `SourceNote`)
 - `/essay/draft.md` — initial essay draft
 - `/essay/reviewed.md` — reviewed/polished essay (used for export)
 - `/input/extracted.md` — pre-extracted document text for the worker
@@ -125,7 +125,8 @@ No `default.yaml` exists; field defaults in `schemas.py` are canonical.
 - **CompositeBackend** routes `/brief/`, `/plan/`, `/sources/`, `/essay/`, `/output/`, `/input/` to `FilesystemBackend` (run_dir subdirectories on disk); `/skills/` routes to `src/skills/` on disk.
 - **Custom AI endpoint** — when `AI_BASE_URL` is set in `.env`, all models route through an OpenAI-compatible endpoint using `AI_API_KEY` and `AI_MODEL`.
 - **Deterministic export** — step 8 calls `_build_document` directly from Python. No LLM involved. Prefers `/essay/reviewed.md`, falls back to `/essay/draft.md`.
-- **Validate step** — after intake, the worker evaluates the brief for significant gaps. If found, prints numbered questions with options and collects answers via `input()`. Answers are appended to `assignment.md` as a `## Clarifications` section. If no gaps, pipeline continues automatically. The `on_questions` callback in `run_pipeline` makes this interactive behavior pluggable.
+- **Validate step** — after intake, the worker evaluates the brief for significant gaps. If found, prints numbered questions with options and collects answers via `input()`. Answers are stored as `clarifications` in `assignment.json`. If no gaps, pipeline continues automatically. The `on_questions` callback in `run_pipeline` makes this interactive behavior pluggable.
+- **Structured VFS outputs** — brief, validation, plan, and source notes are JSON files validated by Pydantic models in `src/schemas.py`. Essays remain markdown. This eliminates regex parsing of intermediate artifacts.
 
 ### Test Fixtures
 

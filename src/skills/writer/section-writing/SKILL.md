@@ -7,7 +7,7 @@ description: Write a single essay section given plan entry, sources, and prior s
 
 ## Process
 
-1. Read `/plan/plan.md` to understand the overall essay structure.
+1. Read `/plan/plan.json` to understand the overall essay structure.
 2. Read the source notes provided in the task message.
 3. If prior sections are mentioned, read them to maintain coherence and avoid repetition.
 4. Write ONLY the assigned section in a **single `write_file` call** to the path specified in the task message.

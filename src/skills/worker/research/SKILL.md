@@ -9,8 +9,8 @@ description: Extract research queries from the plan and call research_sources to
 - After the essay plan is written (Step 3) to find academic sources
 
 ## Process
-1. Read `/plan/plan.md` using `read_file`.
-2. Extract the research queries from the "Research Queries" section.
+1. Read `/plan/plan.json` using `read_file`.
+2. Extract the research queries from the `research_queries` array in the JSON.
 3. Call `research_sources` **ONCE** with:
    - `queries_json`: a JSON array of the query strings (e.g., `["query 1", "query 2"]`)
    - `max_sources`: use the value specified in the task message (default 10 if not specified)

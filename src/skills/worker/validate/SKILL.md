@@ -9,9 +9,9 @@ description: Evaluate whether the assignment brief has enough information to pro
 - After intake (Step 2) to check whether the brief supports a quality essay
 
 ## Process
-1. Read the brief at `/brief/assignment.md` using `read_file`.
+1. Read the brief at `/brief/assignment.json` using `read_file`.
 2. Evaluate whether the brief contains enough information for a planner and writer to produce a strong essay.
-3. Write the result to `/brief/validation.md`.
+3. Write the result as JSON to `/brief/validation.json`.
 
 ## Evaluation Criteria
 
@@ -33,33 +33,39 @@ Examples of gaps NOT worth flagging:
 - Number of sources not specified (planner can decide)
 - Formatting preferences not mentioned (use standard academic)
 
-## Output Format (`/brief/validation.md`)
+## Output Format (`/brief/validation.json`)
 
-If the brief is **sufficient** — write exactly:
+If the brief is **sufficient**, write:
 
+```json
+{
+  "is_pass": true
+}
 ```
-PASS
-```
 
-If the brief has **significant gaps** — write:
+If the brief has **significant gaps**, write:
 
-```
-QUESTIONS
-
-1. [Question text]
-   a) [Option A]
-   b) [Option B]
-   c) [Option C]
-
-2. [Question text]
-   a) [Option A]
-   b) [Option B]
+```json
+{
+  "is_pass": false,
+  "questions": [
+    {
+      "question": "Question text",
+      "options": ["Option A", "Option B", "Option C"]
+    },
+    {
+      "question": "Another question",
+      "options": ["Option A", "Option B"]
+    }
+  ]
+}
 ```
 
 ### Rules for questions:
-- Each question MUST propose 2–4 concrete answer options (labeled a, b, c, d)
+- Each question MUST have 2–4 options in the `options` array
 - Options should cover the most likely/reasonable answers
 - Write questions and options in the **same language as the brief** (usually Greek)
 - Keep questions concise — one line each
 - Maximum 4 questions total
 - Do NOT repeat information already in the brief
+- The output MUST be valid JSON. Do not wrap in markdown code fences inside `write_file`.

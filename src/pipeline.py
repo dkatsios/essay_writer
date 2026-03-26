@@ -13,7 +13,6 @@ from __future__ import annotations
 import json
 import logging
 import math
-import re
 import sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
@@ -22,6 +21,8 @@ from time import monotonic
 from typing import TYPE_CHECKING
 
 from langchain_core.messages import HumanMessage
+
+from src.schemas import EssayPlan, SourceNote, ValidationResult
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -53,7 +54,7 @@ class PipelineContext:
 
 @dataclass
 class Section:
-    """A single section parsed from plan.md."""
+    """A single section with computed intro/conclusion flags."""
 
     number: int
     title: str
@@ -122,90 +123,84 @@ def _invoke(
 
 
 # ---------------------------------------------------------------------------
+# JSON helpers
+# ---------------------------------------------------------------------------
+
+
+def _sanitize_json(raw: str) -> str:
+    """Fix unescaped newlines inside JSON string values.
+
+    LLMs sometimes write literal newlines in JSON strings instead of ``\\n``.
+    This walks the text character-by-character, and when inside a quoted string,
+    replaces bare ``\\n`` with ``\\\\n``.
+    """
+    out: list[str] = []
+    in_string = False
+    escape_next = False
+    for ch in raw:
+        if escape_next:
+            out.append(ch)
+            escape_next = False
+            continue
+        if ch == "\\":
+            escape_next = True
+            out.append(ch)
+            continue
+        if ch == '"':
+            in_string = not in_string
+            out.append(ch)
+            continue
+        if in_string and ch == "\n":
+            out.append("\\n")
+            continue
+        out.append(ch)
+    return "".join(out)
+
+
+# ---------------------------------------------------------------------------
 # Plan parsing
 # ---------------------------------------------------------------------------
 
 
 def _get_target_words(run_dir: Path) -> int:
-    """Sum word targets from plan.md."""
-    plan = run_dir / "plan" / "plan.md"
-    if not plan.exists():
+    """Read total word target from plan.json."""
+    plan_path = run_dir / "plan" / "plan.json"
+    if not plan_path.exists():
         return 0
-    total = 0
-    for m in re.finditer(
-        r"\*\*Word target\*\*:\s*(\d[\d,]*)", plan.read_text(encoding="utf-8")
-    ):
-        total += int(m.group(1).replace(",", ""))
-    return total
+    raw = _sanitize_json(plan_path.read_text(encoding="utf-8"))
+    plan = EssayPlan.model_validate_json(raw)
+    return plan.total_word_target
 
 
 def _parse_sections(run_dir: Path) -> list[Section]:
-    """Parse section metadata from plan.md."""
-    plan_path = run_dir / "plan" / "plan.md"
+    """Load sections from plan.json."""
+    plan_path = run_dir / "plan" / "plan.json"
     if not plan_path.exists():
         return []
 
-    text = plan_path.read_text(encoding="utf-8")
+    raw = _sanitize_json(plan_path.read_text(encoding="utf-8"))
+    plan = EssayPlan.model_validate_json(raw)
     sections: list[Section] = []
 
-    # Split on section headers: ### N. Title
-    section_pattern = re.compile(r"^###\s+(\d+)\.\s+(.+?)$", re.MULTILINE)
-    matches = list(section_pattern.finditer(text))
-
-    for i, match in enumerate(matches):
-        number = int(match.group(1))
-        title = match.group(2).strip()
-
-        # Extract content between this header and the next
-        start = match.end()
-        end = matches[i + 1].start() if i + 1 < len(matches) else len(text)
-        block = text[start:end]
-
-        # Stop at "## Research Queries" if present
-        rq_match = re.search(r"^##\s+Research", block, re.MULTILINE)
-        if rq_match:
-            block = block[: rq_match.start()]
-
-        # Extract word target
-        wt_match = re.search(r"\*\*Word target\*\*:\s*(\d[\d,]*)", block)
-        word_target = int(wt_match.group(1).replace(",", "")) if wt_match else 0
-
-        # Extract heading
-        heading_match = re.search(r"\*\*Heading\*\*:\s*(.+)", block)
-        heading = (
-            heading_match.group(1).strip() if heading_match else f"# {number}. {title}"
-        )
-
-        # Extract key points
-        kp_match = re.search(r"\*\*Key points\*\*:\s*(.+)", block)
-        key_points = kp_match.group(1).strip() if kp_match else ""
-
-        # Extract content outline (may span multiple lines)
-        co_match = re.search(
-            r"\*\*Content outline\*\*:\s*(.*?)(?=\n-\s*\*\*|\n###|\Z)",
-            block,
-            re.DOTALL,
-        )
-        content_outline = co_match.group(1).strip() if co_match else ""
-
+    for ps in plan.sections:
         is_intro = (
-            number == 1
-            or "introduction" in title.lower()
-            or "\u03b5\u03b9\u03c3\u03b1\u03b3\u03c9\u03b3" in title.lower()
+            ps.number == 1
+            or "introduction" in ps.title.lower()
+            or "\u03b5\u03b9\u03c3\u03b1\u03b3\u03c9\u03b3" in ps.title.lower()
         )
         is_conclusion = (
-            "conclusion" in title.lower()
-            or "\u03c3\u03c5\u03bc\u03c0\u03ad\u03c1\u03b1\u03c3\u03bc" in title.lower()
+            "conclusion" in ps.title.lower()
+            or "\u03c3\u03c5\u03bc\u03c0\u03ad\u03c1\u03b1\u03c3\u03bc"
+            in ps.title.lower()
         )
-
         sections.append(
             Section(
-                number=number,
-                title=title,
-                heading=heading,
-                word_target=word_target,
-                key_points=key_points,
-                content_outline=content_outline,
+                number=ps.number,
+                title=ps.title,
+                heading=ps.heading,
+                word_target=ps.word_target,
+                key_points=ps.key_points,
+                content_outline=ps.content_outline,
                 is_intro=is_intro,
                 is_conclusion=is_conclusion,
             )
@@ -253,23 +248,29 @@ def _do_validate(ctx: PipelineContext) -> None:
     _invoke(
         ctx.worker,
         "validate",
-        "Read /skills/worker/validate/SKILL.md. The brief is at /brief/assignment.md.",
+        "Read /skills/worker/validate/SKILL.md. The brief is at /brief/assignment.json.",
         ctx.callbacks,
     )
 
 
 def _read_validation(run_dir: Path) -> str | None:
-    """Read validation.md and return questions if any, else None."""
-    path = run_dir / "brief" / "validation.md"
+    """Read validation.json and return formatted questions if any, else None."""
+    path = run_dir / "brief" / "validation.json"
     if not path.exists():
         return None
-    content = path.read_text(encoding="utf-8").strip()
-    if content.upper().startswith("PASS"):
+    result = ValidationResult.model_validate_json(
+        _sanitize_json(path.read_text(encoding="utf-8"))
+    )
+    if result.is_pass or not result.questions:
         return None
-    # Strip the QUESTIONS header if present
-    if content.upper().startswith("QUESTIONS"):
-        content = content[len("QUESTIONS") :].strip()
-    return content
+    lines: list[str] = []
+    for i, q in enumerate(result.questions, 1):
+        lines.append(f"{i}. {q.question}")
+        for j, opt in enumerate(q.options):
+            label = chr(ord("a") + j)
+            lines.append(f"   {label}) {opt}")
+        lines.append("")
+    return "\n".join(lines).strip()
 
 
 def _do_plan(ctx: PipelineContext) -> None:
@@ -277,7 +278,7 @@ def _do_plan(ctx: PipelineContext) -> None:
         ctx.worker,
         "plan",
         "Read /skills/worker/essay-planning/SKILL.md. "
-        "The brief is at /brief/assignment.md.",
+        "The brief is at /brief/assignment.json.",
         ctx.callbacks,
     )
 
@@ -287,7 +288,7 @@ def _make_research(max_sources: int) -> Callable[[PipelineContext], None]:
         _invoke(
             ctx.worker,
             "research",
-            f"Read /skills/worker/research/SKILL.md. The plan is at /plan/plan.md. "
+            f"Read /skills/worker/research/SKILL.md. The plan is at /plan/plan.json. "
             f"Use max_sources={max_sources}.",
             ctx.callbacks,
         )
@@ -308,15 +309,17 @@ def _select_best_sources(
     inaccessible: list[str] = []
 
     for sid in registry:
-        note_path = notes_dir / f"{sid}.md"
+        note_path = notes_dir / f"{sid}.json"
         if not note_path.exists():
             inaccessible.append(sid)
             continue
-        text = note_path.read_text(encoding="utf-8")
-        if "INACCESSIBLE" in text.upper()[:500]:
-            inaccessible.append(sid)
+        note = SourceNote.model_validate_json(
+            _sanitize_json(note_path.read_text(encoding="utf-8"))
+        )
+        if note.is_accessible:
+            accessible.append((sid, note.content_word_count))
         else:
-            accessible.append((sid, len(text.split())))
+            inaccessible.append(sid)
 
     # Sort accessible by note substance (more words = richer content)
     accessible.sort(key=lambda x: x[1], reverse=True)
@@ -390,15 +393,16 @@ def _make_read_sources(target_sources: int) -> Callable[[PipelineContext], None]
         # Select best N sources and write selected.json
         selected = _select_best_sources(ctx.run_dir, registry, target_sources)
         total_read = len(tasks)
-        accessible_count = sum(
-            1
-            for sid in registry
-            if (ctx.run_dir / "sources" / "notes" / f"{sid}.md").exists()
-            and "INACCESSIBLE"
-            not in (ctx.run_dir / "sources" / "notes" / f"{sid}.md")
-            .read_text(encoding="utf-8")
-            .upper()[:500]
-        )
+        accessible_count = 0
+        for sid in registry:
+            note_path = ctx.run_dir / "sources" / "notes" / f"{sid}.json"
+            if not note_path.exists():
+                continue
+            note = SourceNote.model_validate_json(
+                _sanitize_json(note_path.read_text(encoding="utf-8"))
+            )
+            if note.is_accessible:
+                accessible_count += 1
         inaccessible_count = total_read - accessible_count
 
         selected_path = ctx.run_dir / "sources" / "selected.json"
@@ -441,8 +445,8 @@ def _make_write_full(target_words: int) -> Callable[[PipelineContext], None]:
 
 def _make_review_full(target_words: int) -> Callable[[PipelineContext], None]:
     def _do_review_full(ctx: PipelineContext) -> None:
-        brief = (ctx.run_dir / "brief" / "assignment.md").read_text(encoding="utf-8")
-        plan = (ctx.run_dir / "plan" / "plan.md").read_text(encoding="utf-8")
+        brief = (ctx.run_dir / "brief" / "assignment.json").read_text(encoding="utf-8")
+        plan = (ctx.run_dir / "plan" / "plan.json").read_text(encoding="utf-8")
         draft = (ctx.run_dir / "essay" / "draft.md").read_text(encoding="utf-8")
 
         msg = "Read /skills/writer/essay-review/SKILL.md.\n\n"
@@ -689,22 +693,14 @@ def _do_export(ctx: PipelineContext) -> None:
             break
 
     doc_config = ctx.config.formatting.model_dump()
-    brief_path = ctx.run_dir / "brief" / "assignment.md"
+    brief_path = ctx.run_dir / "brief" / "assignment.json"
     if brief_path.exists():
-        brief_text = brief_path.read_text(encoding="utf-8")
-        # Extract title from ## Topic section (first non-empty line after it)
-        in_topic = False
-        for line in brief_text.split("\n"):
-            if line.strip().startswith("## Topic"):
-                in_topic = True
-                continue
-            if in_topic:
-                stripped = line.strip()
-                if stripped.startswith("## "):
-                    break  # hit next section
-                if stripped:
-                    doc_config.setdefault("title", stripped)
-                    break
+        from src.schemas import AssignmentBrief
+
+        brief = AssignmentBrief.model_validate_json(
+            _sanitize_json(brief_path.read_text(encoding="utf-8"))
+        )
+        doc_config.setdefault("title", brief.topic)
 
     doc = _build_document(essay_text, doc_config, sources)
 
@@ -786,7 +782,7 @@ def run_pipeline(
 
     If *on_questions* is provided and the validator finds gaps, it is called
     with ``(questions_text, run_dir)``.  The callback should collect user
-    answers and append them to ``/brief/assignment.md``.
+    answers and update ``/brief/assignment.json``.
     """
     ctx = PipelineContext(
         worker=worker,
