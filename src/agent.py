@@ -39,12 +39,14 @@ def _is_retryable(exc: Exception) -> bool:
     return bool(code and (code == 429 or 500 <= code < 600))
 
 
-def invoke_with_retry(model: BaseChatModel, messages: list, **kwargs):
+def invoke_with_retry(
+    model: BaseChatModel, messages: list, *, config: dict | None = None
+):
     """Invoke a model with exponential backoff on transient errors."""
     delay = _RETRY_INITIAL_DELAY
     for attempt in range(_RETRY_MAX + 1):
         try:
-            return model.invoke(messages, **kwargs)
+            return model.invoke(messages, config=config)
         except Exception as exc:
             if attempt < _RETRY_MAX and _is_retryable(exc):
                 logger.warning(

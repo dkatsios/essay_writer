@@ -138,11 +138,11 @@ def _structured_call(
 
     structured = model.with_structured_output(schema, method="json_schema")
     messages = [HumanMessage(content=prompt)]
-    config = {"callbacks": callbacks} if callbacks else {}
+    run_config = {"callbacks": callbacks} if callbacks else None
 
     for attempt in range(retries + 1):
         try:
-            result = invoke_with_retry(structured, messages, **config)
+            result = invoke_with_retry(structured, messages, config=run_config)
             if isinstance(result, BaseModel):
                 return result
             # Some providers return dict instead of model
@@ -182,9 +182,16 @@ def _text_call(
         SystemMessage(content=system_prompt),
         HumanMessage(content=user_prompt),
     ]
-    config = {"callbacks": callbacks} if callbacks else {}
-    response = invoke_with_retry(model, messages, **config)
-    return response.content
+    run_config = {"callbacks": callbacks} if callbacks else None
+    response = invoke_with_retry(model, messages, config=run_config)
+    content = response.content
+    # Some providers return content as a list of blocks
+    if isinstance(content, list):
+        content = "\n".join(
+            block.get("text", "") if isinstance(block, dict) else str(block)
+            for block in content
+        )
+    return content
 
 
 # ---------------------------------------------------------------------------
