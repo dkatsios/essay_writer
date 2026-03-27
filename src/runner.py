@@ -536,7 +536,9 @@ def run(
             extra_prompt=prompt,
             callbacks=callbacks,
             token_tracker=tracker,
-            on_questions=_handle_questions,
+            on_questions=_handle_questions
+            if config.writing.interactive_validation
+            else None,
         )
     finally:
         shutil.rmtree(staging_dir, ignore_errors=True)
@@ -596,7 +598,9 @@ def run_prompt(
             config,
             callbacks=callbacks,
             token_tracker=tracker,
-            on_questions=_handle_questions,
+            on_questions=_handle_questions
+            if config.writing.interactive_validation
+            else None,
         )
     finally:
         if log_handler:

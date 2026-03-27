@@ -22,6 +22,7 @@ class WritingConfig(BaseModel):
 
     word_count_tolerance: float = 0.10
     long_essay_threshold: int = 4000
+    interactive_validation: bool = True
 
 
 class FormattingConfig(BaseModel):
