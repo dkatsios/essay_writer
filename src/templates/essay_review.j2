@@ -24,7 +24,16 @@ Review and improve the draft following the criteria below. Output the complete p
 - Preserve the argument structure — improve, don't rewrite from scratch.
 
 ## Word Count — CRITICAL
-- Target: **{{ target_words }}** words.
-- The reviewed essay MUST be at least as long as the draft.
-- Do NOT cut, summarize, or shorten sections.
-- If a section is below its plan target, EXPAND it with more detail and analysis.
+{% set delta = draft_words - target_words %}
+{% set tolerance = (target_words * 0.10) | int %}
+{% if delta > tolerance %}
+⚠ The draft is **{{ draft_words }}** words — **{{ delta }}** words OVER the target of {{ target_words }}.
+You MUST cut approximately {{ delta }} words. Remove redundancy, tighten phrasing, eliminate filler.
+Do NOT add new content. Focus on making the text leaner while preserving every argument and citation.
+{% elif delta < -tolerance %}
+⚠ The draft is **{{ draft_words }}** words — **{{ (-delta) }}** words UNDER the target of {{ target_words }}.
+You MUST expand by approximately {{ (-delta) }} words. Add deeper analysis, more supporting evidence, and richer discussion.
+{% else %}
+The draft is **{{ draft_words }}** words (target: {{ target_words }}). Length is acceptable (within ±10%).
+Focus on quality improvements only. Do NOT significantly change the total word count.
+{% endif %}

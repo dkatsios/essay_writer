@@ -19,6 +19,16 @@ The section to review is between the delimiters below. Output ONLY the improved 
 - Do NOT add a References/Βιβλιογραφία section.
 
 ## Word Count — CRITICAL
-- The reviewed section MUST be at least as long as the original.
-- Do NOT cut, summarize, or shorten the section.
-- If the section is below its plan target, EXPAND it with more detail and analysis.
+{% set delta = section_words - section.word_target %}
+{% set tolerance = (section.word_target * 0.10) | int %}
+{% if delta > tolerance %}
+⚠ The section is **{{ section_words }}** words — **{{ delta }}** words OVER the target of {{ section.word_target }}.
+You MUST cut approximately {{ delta }} words. Remove redundancy, tighten phrasing, eliminate filler.
+Do NOT add new content. Focus on making the text leaner while preserving every argument and citation.
+{% elif delta < -tolerance %}
+⚠ The section is **{{ section_words }}** words — **{{ (-delta) }}** words UNDER the target of {{ section.word_target }}.
+You MUST expand by approximately {{ (-delta) }} words. Add deeper analysis, more supporting evidence, and richer discussion.
+{% else %}
+The section is **{{ section_words }}** words (target: {{ section.word_target }}). Length is acceptable (within ±10%).
+Focus on quality improvements only. Do NOT significantly change the word count.
+{% endif %}

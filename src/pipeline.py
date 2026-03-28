@@ -554,6 +554,7 @@ def _make_review_full(target_words: int) -> Callable[[PipelineContext], None]:
         brief_json = _read_text(ctx.run_dir / "brief" / "assignment.json")
         plan_json = _read_text(ctx.run_dir / "plan" / "plan.json")
         draft = _read_text(ctx.run_dir / "essay" / "draft.md")
+        draft_words = len(draft.split())
 
         prompt = render_prompt(
             "essay_review.j2",
@@ -561,6 +562,7 @@ def _make_review_full(target_words: int) -> Callable[[PipelineContext], None]:
             plan_json=plan_json,
             draft_text=draft,
             target_words=target_words,
+            draft_words=draft_words,
         )
 
         reviewed = _text_call(
@@ -702,10 +704,14 @@ def _make_review_sections(
                 full_essay_parts.append(text)
             full_essay = "\n\n---\n\n".join(full_essay_parts)
 
+            section_text = section_path.read_text(encoding="utf-8")
+            section_words = len(section_text.split())
+
             prompt = render_prompt(
                 "section_review.j2",
                 section=section,
                 full_essay=full_essay,
+                section_words=section_words,
             )
 
             tracker_step = f"review:{section.number}"
