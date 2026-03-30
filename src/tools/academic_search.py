@@ -19,7 +19,7 @@ _MAX_RETRIES = 3
 _INITIAL_BACKOFF = 2  # seconds
 _MIN_REQUEST_INTERVAL = 1.0  # seconds between requests (unauthenticated limit: 1 req/s)
 
-# Thread-safe throttle: parallel subagents share this to avoid bursting
+# Thread-safe throttle: parallel searches share this to avoid bursting
 _request_lock = threading.Lock()
 _last_request_time = 0.0
 

@@ -1,15 +1,9 @@
-"""Input scanning and content extraction for the essay writer.
-
-Accepts a file or directory path, detects file types, extracts text
-content and prepares image data for multimodal LLM input.
-"""
+"""Input scanning and content extraction for the essay writer."""
 
 from __future__ import annotations
 
 import base64
 import mimetypes
-import shutil
-import tempfile
 from pathlib import Path
 
 import pymupdf
@@ -254,81 +248,32 @@ def scan(input_path: str | Path) -> list[InputFile]:
     return results
 
 
-def stage_files(input_files: list[InputFile]) -> Path:
-    """Copy recognized source files into a temporary staging directory.
-
-    Returns the path to the temp directory. The caller is responsible for
-    cleanup (or can let the OS clean it up on reboot). This directory is
-    used as the root for the /input/ FilesystemBackend route so the agent
-    can re-read original files during the pipeline.
-    """
-    staging = Path(tempfile.mkdtemp(prefix="essay_input_"))
-
-    for f in input_files:
-        if f.category == "unsupported":
-            continue
-        target = staging / f.path.name
-        counter = 1
-        while target.exists():
-            target = staging / f"{f.path.stem}_{counter}{f.path.suffix}"
-            counter += 1
-        shutil.copy2(f.path, target)
-
-    return staging
-
-
-def build_message_content(
+def build_extracted_text(
     input_files: list[InputFile],
     extra_prompt: str | None = None,
 ) -> str:
-    """Build a text-only summary for the orchestrator.
-
-    Extracted text content is written to the staging directory as
-    ``extracted.md`` so the worker subagent can read it from VFS at
-    ``/input/extracted.md``.  The orchestrator receives only a short
-    summary listing the files and topic — no extracted text, no images.
-
-    Returns a plain string (never multimodal).
-    """
+    """Build the extracted text document consumed by the intake step."""
     text_parts: list[str] = []
-    file_list: list[str] = []
     warnings: list[str] = []
-    has_images = False
 
     for f in input_files:
         if f.warning:
             warnings.append(f"- {f.path.name}: {f.warning}")
             continue
-        file_list.append(f"- {f.path.name} ({f.category})")
         if f.text:
             text_parts.append(f"### File: {f.path.name}\n\n{f.text}")
         if f.image_blocks:
-            has_images = True
             n_pages = len(f.image_blocks)
             label = f"{n_pages} page image(s)" if n_pages > 1 else "image"
             text_parts.append(
                 f"### Image: {f.path.name}\n\n"
-                f"(Scanned document with {label} — "
-                f"worker should use read_pdf to access this file from /input/.)"
+                f"(Scanned document with {label}; text extraction was sparse.)"
             )
 
-    # Write full extracted text to staging dir for worker to read via VFS
     extracted_text = "\n\n".join(text_parts) if text_parts else "(no text extracted)"
-
-    # Build orchestrator summary — minimal, no extracted content
-    sections = ["# Assignment Materials\n"]
-    sections.append("Files have been staged at `/input/` for the worker to process.\n")
-    sections.append("## File List\n")
-    sections.extend(file_list)
     if warnings:
-        sections.append("\n## Warnings\n")
-        sections.extend(warnings)
-    if has_images:
-        sections.append(
-            "\n## Note\nSome files are scanned documents (images). "
-            "The worker has access to the original files via `/input/`."
-        )
+        extracted_text += "\n\n## Warnings\n\n" + "\n".join(warnings)
     if extra_prompt:
-        sections.append(f"\n## Additional Instructions\n\n{extra_prompt}")
+        extracted_text += f"\n\n## Additional Instructions\n\n{extra_prompt}"
 
-    return "\n".join(sections), extracted_text
+    return extracted_text

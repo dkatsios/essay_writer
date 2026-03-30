@@ -36,7 +36,7 @@ load_dotenv()
 
 from config.schemas import load_config  # noqa: E402
 from src.agent import create_model  # noqa: E402
-from src.intake import build_message_content, scan, stage_files  # noqa: E402
+from src.intake import build_extracted_text, scan  # noqa: E402
 from src.pipeline import run_pipeline  # noqa: E402
 
 
@@ -193,8 +193,8 @@ class TokenTracker:
         lines = [
             "# Run Report",
             "",
-            f"| Metric | Value |",
-            f"|--------|-------|",
+            "| Metric | Value |",
+            "|--------|-------|",
             f"| Duration | {m}m {s}s |",
             f"| Total cost | ${total_cost:.4f} |",
             f"| Tokens (in / out / think) | {total_in:,} / {total_out:,} / {total_think:,} |",
@@ -499,10 +499,7 @@ def run(
     for f in input_files:
         status = f.category if not f.warning else f"SKIPPED ({f.warning})"
         print(f"  [{status}] {f.path.name}", file=sys.stderr)
-
-    staging_dir = stage_files(input_files)
-    _, extracted_text = build_message_content(input_files, extra_prompt=prompt)
-    (Path(staging_dir) / "extracted.md").write_text(extracted_text, encoding="utf-8")
+    extracted_text = build_extracted_text(input_files, extra_prompt=prompt)
 
     # Setup run directory
     if output_dir:
@@ -541,7 +538,6 @@ def run(
             else None,
         )
     finally:
-        shutil.rmtree(staging_dir, ignore_errors=True)
         if log_handler:
             logging.getLogger().removeHandler(log_handler)
             log_handler.close()
@@ -640,15 +636,17 @@ def main() -> None:
         "--config", default=None, help="Path to a custom YAML config file."
     )
     parser.add_argument(
+        "--dump-run",
         "--dump-vfs",
+        dest="dump_run",
         action="store_true",
         default=False,
-        help="Save outputs to a timestamped directory under .output/.",
+        help="Save run outputs to a timestamped directory under .output/.",
     )
     args = parser.parse_args()
 
     output_dir = None
-    if args.dump_vfs:
+    if args.dump_run:
         timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
         output_dir = Path(".output") / f"run_{timestamp}"
 

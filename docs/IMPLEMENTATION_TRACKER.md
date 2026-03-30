@@ -19,8 +19,8 @@ This file tracks the proposal backlog, what has been completed, and what remains
    - Bound section-writing context.
    - Replace full-essay per-section review with narrower adjacent-section context.
 
-3. [ ] Remove dead staging and VFS-era abstractions
-   - Simplify `stage_files()` / `build_message_content()` usage.
+3. [x] Remove dead staging and VFS-era abstractions
+   - Simplify input extraction to write `input/extracted.md` directly.
    - Remove stale VFS and subagent references from runtime code.
 
 4. [ ] Clean up documentation drift aggressively
@@ -56,3 +56,6 @@ This file tracks the proposal backlog, what has been completed, and what remains
 - [x] Proposal #2 implemented.
 - [x] Proposal #2 tests passing: `uv run python -m pytest tests/test_refactoring.py -v`.
 - [x] Proposal #2 tracker updated to completed.
+- [x] Proposal #3 implemented.
+- [x] Proposal #3 tests passing: `uv run python -m pytest tests/test_refactoring.py -v`.
+- [x] Proposal #3 tracker updated to completed.

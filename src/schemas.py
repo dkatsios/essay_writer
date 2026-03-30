@@ -1,4 +1,4 @@
-"""Pydantic models for structured VFS artifacts.
+"""Pydantic models for structured pipeline artifacts.
 
 These models define the JSON schemas for pipeline intermediates:
 brief, validation, plan, and source notes. Essays remain markdown.

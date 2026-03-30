@@ -113,7 +113,7 @@ No `default.yaml` exists; field defaults in `schemas.py` are canonical.
 - **Jinja2 templates** (`src/templates/*.j2`) render prompts. 8 templates, one per pipeline task.
 - **Plain function tools** — `run_research()`, `fetch_url_content()`, `read_pdf_text()`, `read_docx_text()` are plain Python functions called by the pipeline. No `@tool` decorators.
 - **Retry logic** — `invoke_with_retry()` in `src/agent.py` handles transient 429/503 API errors with exponential backoff. `_structured_call()` retries on Pydantic `ValidationError`.
-- **Input flow** — `build_message_content()` extracts text and writes to `input/extracted.md`. The pipeline reads this and passes it to the intake template.
+- **Input flow** — `scan()` extracts content and `build_extracted_text()` writes `input/extracted.md` directly into the run directory. The pipeline reads that file and passes it to the intake template.
 - **`run_research()`** — fans out queries across Semantic Scholar, OpenAlex, and Crossref in parallel, deduplicates by DOI/title, writes registry JSON. Zero LLM tokens consumed.
 - **Parallel source reading** — `ThreadPoolExecutor(max_workers=3)` reads multiple sources concurrently.
 - **Selected sources drive writing** — after source reading, `sources/selected.json` is the preferred source set for essay generation. If the selected set has no accessible notes, the pipeline falls back to all accessible notes.

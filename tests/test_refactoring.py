@@ -138,6 +138,32 @@ class TestMakeImageBlock:
         assert base64.standard_b64decode(encoded) == b"fake-png-data"
 
 
+class TestBuildExtractedText:
+    def test_builds_extracted_text_with_prompt_and_warnings(self):
+        from src.intake import InputFile, build_extracted_text
+
+        files = [
+            InputFile(Path("topic.txt"), "text", text="Essay topic"),
+            InputFile(Path("scan.pdf"), "pdf", image_blocks=[{"type": "image_url"}]),
+            InputFile(
+                Path("legacy.doc"),
+                "unsupported",
+                warning="Old Word binary format — save as .docx first",
+            ),
+        ]
+
+        extracted = build_extracted_text(files, extra_prompt="Focus on economics")
+
+        assert "### File: topic.txt" in extracted
+        assert "Essay topic" in extracted
+        assert "### Image: scan.pdf" in extracted
+        assert "text extraction was sparse" in extracted
+        assert "## Warnings" in extracted
+        assert "legacy.doc" in extracted
+        assert "## Additional Instructions" in extracted
+        assert "Focus on economics" in extracted
+
+
 # ── docx extraction dedup ────────────────────────────────────────────────
 
 
