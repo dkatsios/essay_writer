@@ -14,7 +14,7 @@ import re
 
 import httpx
 
-from src.tools._http import DEFAULT_MAILTO, get_ssl_verify
+from src.tools._http import DEFAULT_MAILTO, http_get
 
 logger = logging.getLogger(__name__)
 
@@ -32,10 +32,13 @@ def search_crossref(query: str, max_results: int = 5) -> tuple[list[dict], dict]
     }
 
     try:
-        resp = httpx.get(
-            _CROSSREF_API, params=params, timeout=30, verify=get_ssl_verify()
+        resp = http_get(
+            _CROSSREF_API,
+            params=params,
+            max_retries=2,
+            initial_backoff=1.0,
+            request_name="Crossref",
         )
-        resp.raise_for_status()
     except httpx.HTTPError as exc:
         logger.error("Crossref request failed for query %r: %s", query, exc)
         return [], {}

@@ -10,7 +10,7 @@ from urllib.parse import urlparse
 
 import httpx
 
-from src.tools._http import get_ssl_verify
+from src.tools._http import http_get
 
 logger = logging.getLogger(__name__)
 
@@ -81,8 +81,13 @@ def fetch_url_content(url: str, sources_dir: str | None = None) -> str:
     """
     sources_path = Path(sources_dir) if sources_dir else None
 
-    resp = httpx.get(url, follow_redirects=True, timeout=30, verify=get_ssl_verify())
-    resp.raise_for_status()
+    resp = http_get(
+        url,
+        follow_redirects=True,
+        max_retries=2,
+        initial_backoff=1.0,
+        request_name="web fetch",
+    )
 
     content_type = resp.headers.get("content-type", "")
 

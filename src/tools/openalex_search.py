@@ -12,7 +12,7 @@ import os
 
 import httpx
 
-from src.tools._http import DEFAULT_MAILTO, get_ssl_verify
+from src.tools._http import DEFAULT_MAILTO, http_get
 
 logger = logging.getLogger(__name__)
 
@@ -29,10 +29,13 @@ def search_openalex(query: str, max_results: int = 5) -> tuple[list[dict], dict]
     }
 
     try:
-        resp = httpx.get(
-            _OPENALEX_API, params=params, timeout=30, verify=get_ssl_verify()
+        resp = http_get(
+            _OPENALEX_API,
+            params=params,
+            max_retries=2,
+            initial_backoff=1.0,
+            request_name="OpenAlex",
         )
-        resp.raise_for_status()
     except httpx.HTTPError as exc:
         logger.error("OpenAlex request failed for query %r: %s", query, exc)
         return [], {}

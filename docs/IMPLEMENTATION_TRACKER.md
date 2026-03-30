@@ -27,7 +27,7 @@ This file tracks the proposal backlog, what has been completed, and what remains
    - Archive the deepagents-specific reference with a historical warning.
    - Align runtime module docstrings and live guidance with the current deterministic pipeline.
 
-5. [ ] Centralize HTTP transport, retries, and connection pooling
+5. [x] Centralize HTTP transport, retries, and connection pooling
    - Introduce one shared `httpx` client policy.
    - Consolidate timeout, SSL, retry, and header behavior.
 
@@ -62,3 +62,6 @@ This file tracks the proposal backlog, what has been completed, and what remains
 - [x] Proposal #4 implemented.
 - [x] Proposal #4 tests passing: `uv run python -m pytest tests/test_refactoring.py -v`.
 - [x] Proposal #4 tracker updated to completed.
+- [x] Proposal #5 implemented.
+- [x] Proposal #5 tests passing: `uv run python -m pytest tests/test_refactoring.py -v`.
+- [x] Proposal #5 tracker updated to completed.

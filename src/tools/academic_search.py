@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import logging
 import os
 import threading
@@ -10,7 +9,7 @@ import time
 
 import httpx
 
-from src.tools._http import get_ssl_verify
+from src.tools._http import http_get
 
 logger = logging.getLogger(__name__)
 
@@ -57,31 +56,36 @@ def search_semantic_scholar(
     headers = _get_headers()
     for attempt in range(_MAX_RETRIES):
         _throttle()
-        resp = httpx.get(
-            _SEMANTIC_SCHOLAR_API,
-            params=params,
-            headers=headers,
-            timeout=30,
-            verify=get_ssl_verify(),
-        )
-        if resp.status_code == 429:
-            wait = _INITIAL_BACKOFF * (2**attempt)
-            logger.warning(
-                "Semantic Scholar 429 — retrying in %ds (attempt %d/%d)",
-                wait,
-                attempt + 1,
-                _MAX_RETRIES,
+        try:
+            resp = http_get(
+                _SEMANTIC_SCHOLAR_API,
+                params=params,
+                headers=headers,
+                max_retries=0,
+                request_name="Semantic Scholar",
             )
-            time.sleep(wait)
-            continue
-        if resp.is_error:
+            break
+        except httpx.HTTPStatusError as exc:
+            resp = exc.response
+            if resp.status_code == 429:
+                wait = _INITIAL_BACKOFF * (2**attempt)
+                logger.warning(
+                    "Semantic Scholar 429 — retrying in %ds (attempt %d/%d)",
+                    wait,
+                    attempt + 1,
+                    _MAX_RETRIES,
+                )
+                time.sleep(wait)
+                continue
             logger.error(
                 "Semantic Scholar HTTP %d for query: %s",
                 resp.status_code,
                 query,
             )
             return [], {}
-        break
+        except httpx.RequestError as exc:
+            logger.error("Semantic Scholar request failed for query %r: %s", query, exc)
+            return [], {}
     else:
         logger.error(
             "Semantic Scholar rate limit exceeded after %d retries for query: %s",

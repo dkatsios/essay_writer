@@ -13,6 +13,7 @@ AI-powered academic essay generator for Greek university students. Uses a determ
 - Selects the best source subset and uses that selection during essay generation
 - Long essays use bounded section-local context instead of repeatedly sending the whole draft during section review
 - Input extraction writes a single `input/extracted.md` artifact directly into each run directory
+- Search and fetch requests share one HTTP transport with pooled connections and centralized retry behavior
 - Formatted `.docx` output with cover page, table of contents, and page numbers
 - Supports multiple input formats: PDF, DOCX, PPTX, images, text files
 - Source PDFs saved alongside run artifacts for inspection

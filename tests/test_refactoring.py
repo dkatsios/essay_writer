@@ -8,6 +8,7 @@ import logging
 from pathlib import Path
 from unittest.mock import MagicMock
 
+import httpx
 import pytest
 
 
@@ -96,6 +97,68 @@ class TestSearchErrorResponse:
         assert result["source"] == "crossref"
         assert result["query"] == "test query"
         assert "oops" in result["message"]
+
+
+class _FakeResponse:
+    def __init__(self, status_code=200, text="ok", headers=None):
+        self.status_code = status_code
+        self.text = text
+        self.headers = headers or {}
+        self.content = text.encode("utf-8")
+
+    @property
+    def is_error(self):
+        return self.status_code >= 400
+
+    def raise_for_status(self):
+        if self.is_error:
+            request = httpx.Request("GET", "https://example.com")
+            response = httpx.Response(self.status_code, request=request)
+            raise httpx.HTTPStatusError("boom", request=request, response=response)
+
+
+class TestSharedHttp:
+    def test_http_get_retries_request_errors(self, monkeypatch):
+        from src.tools import _http
+
+        calls = {"count": 0}
+
+        class FakeClient:
+            def get(self, *args, **kwargs):
+                calls["count"] += 1
+                if calls["count"] == 1:
+                    raise httpx.ConnectError(
+                        "nope", request=httpx.Request("GET", "https://example.com")
+                    )
+                return _FakeResponse()
+
+        monkeypatch.setattr(_http, "get_http_client", lambda: FakeClient())
+        monkeypatch.setattr(_http.time, "sleep", lambda _: None)
+
+        response = _http.http_get(
+            "https://example.com", max_retries=1, request_name="test"
+        )
+
+        assert response.status_code == 200
+        assert calls["count"] == 2
+
+    def test_http_get_retries_retryable_statuses(self, monkeypatch):
+        from src.tools import _http
+
+        responses = [_FakeResponse(status_code=503), _FakeResponse(status_code=200)]
+
+        class FakeClient:
+            def get(self, *args, **kwargs):
+                return responses.pop(0)
+
+        monkeypatch.setattr(_http, "get_http_client", lambda: FakeClient())
+        monkeypatch.setattr(_http.time, "sleep", lambda _: None)
+
+        response = _http.http_get(
+            "https://example.com", max_retries=1, request_name="test"
+        )
+
+        assert response.status_code == 200
 
 
 # ── intake classify ──────────────────────────────────────────────────────
