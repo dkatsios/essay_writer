@@ -10,7 +10,7 @@ For full architecture, conventions, and invariants, see `.github/copilot-instruc
 # Install dependencies
 uv sync
 
-# Run the agent — point at a file or directory with assignment materials
+# Run the pipeline — point at a file or directory with assignment materials
 uv run python -m src.runner /path/to/assignment/
 uv run python -m src.runner /path/to/brief.pdf
 uv run python -m src.runner /path/to/files/ -p "Focus on economic aspects"

@@ -23,9 +23,9 @@ This file tracks the proposal backlog, what has been completed, and what remains
    - Simplify input extraction to write `input/extracted.md` directly.
    - Remove stale VFS and subagent references from runtime code.
 
-4. [ ] Clean up documentation drift aggressively
-   - Archive or remove deepagents-specific reference material from the active docs surface.
-   - Align runtime module docstrings with the current deterministic pipeline.
+4. [x] Clean up documentation drift aggressively
+   - Archive the deepagents-specific reference with a historical warning.
+   - Align runtime module docstrings and live guidance with the current deterministic pipeline.
 
 5. [ ] Centralize HTTP transport, retries, and connection pooling
    - Introduce one shared `httpx` client policy.
@@ -59,3 +59,6 @@ This file tracks the proposal backlog, what has been completed, and what remains
 - [x] Proposal #3 implemented.
 - [x] Proposal #3 tests passing: `uv run python -m pytest tests/test_refactoring.py -v`.
 - [x] Proposal #3 tracker updated to completed.
+- [x] Proposal #4 implemented.
+- [x] Proposal #4 tests passing: `uv run python -m pytest tests/test_refactoring.py -v`.
+- [x] Proposal #4 tracker updated to completed.

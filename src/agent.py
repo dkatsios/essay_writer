@@ -1,10 +1,10 @@
-"""Model factories — creates configured LangChain chat models.
+"""Model factories and retry helpers for direct LangChain model calls.
 
-The Python pipeline (``src/pipeline.py``) calls models directly:
-- ``model.with_structured_output(Schema)`` for JSON steps (with auto-retry)
-- ``model.invoke(messages)`` for text steps (essay writing/review)
+The runtime uses a deterministic Python pipeline:
+- ``model.with_structured_output(Schema)`` for JSON steps
+- ``model.invoke(messages)`` for text steps
 
-No agents, no VFS, no middleware — just models.
+There is no orchestration framework or virtual filesystem layer in the runtime.
 """
 
 from __future__ import annotations

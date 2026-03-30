@@ -1,6 +1,12 @@
-# Deepagents Framework Reference
+# Historical Archive: Deepagents Reference
 
-This document captures the relevant APIs, patterns, and constraints of the `deepagents` package (v0.4.11) as they apply to our essay writer project. It is based on direct source code analysis of the installed package.
+This document is retained only as historical design research.
+
+The current essay writer does **not** use `deepagents`, LangGraph orchestration, subagents, or a VFS backend. The authoritative architecture is the deterministic direct-call pipeline described in `README.md` and `.github/copilot-instructions.md`.
+
+Do **not** use the rest of this file as guidance for current implementation work unless you are explicitly researching abandoned or historical design ideas.
+
+The remaining content captures the relevant APIs, patterns, and constraints of the `deepagents` package (v0.4.11) that were evaluated earlier in the project.
 
 ---
 

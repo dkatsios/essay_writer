@@ -8,7 +8,7 @@ This is the canonical AI guidance file for the essay writer project. See `.githu
 # Install dependencies
 uv sync
 
-# Run the agent — point at a file or directory with assignment materials
+# Run the pipeline — point at a file or directory with assignment materials
 uv run python -m src.runner /path/to/assignment/
 uv run python -m src.runner /path/to/brief.pdf
 uv run python -m src.runner /path/to/files/ -p "Focus on economic aspects"
@@ -28,7 +28,7 @@ uv run python -c "from src.agent import create_model, invoke_with_retry"
 
 ## Architecture
 
-Deterministic Python pipeline for academic essay writing using direct LangChain model calls (no agent framework). Produces academic essays in Greek as formatted `.docx` files. A Python pipeline (`src/pipeline.py`) controls the 8-step workflow; three LLM model roles — **worker**, **writer**, and **reviewer** — perform the language tasks.
+Deterministic Python pipeline for academic essay writing using direct LangChain model calls rather than a deepagents/LangGraph orchestration layer. Produces academic essays in Greek as formatted `.docx` files. A Python pipeline (`src/pipeline.py`) controls the 8-step workflow; three LLM model roles — **worker**, **writer**, and **reviewer** — perform the language tasks.
 
 ### Flow
 
@@ -49,9 +49,11 @@ Deterministic Python pipeline for academic essay writing using direct LangChain 
 | **writer** | `gemini-2.5-pro` | `essay_writing.j2`, `section_writing.j2` | Essay text generation |
 | **reviewer** | `gemini-3.1-pro-preview` | `essay_review.j2`, `section_review.j2` | Essay review and polish |
 
-No agents, no VFS, no middleware. The pipeline calls models directly:
+This runtime is a direct pipeline, not a deepagents/LangGraph system. The pipeline calls models directly:
 - `model.with_structured_output(PydanticSchema)` for JSON steps (auto-retry on validation failure)
 - `model.invoke([SystemMessage, HumanMessage])` for text steps (essays)
+
+Historical note: `docs/DEEPAGENTS_REFERENCE.md` is archival design material only and is not authoritative for the current codebase.
 
 All tool calls (research, URL fetching, PDF reading) are plain Python functions called by the pipeline, not by the LLM.
 
