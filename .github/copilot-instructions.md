@@ -118,6 +118,7 @@ No `default.yaml` exists; field defaults in `schemas.py` are canonical.
 - **Parallel source reading** — `ThreadPoolExecutor(max_workers=3)` reads multiple sources concurrently.
 - **Selected sources drive writing** — after source reading, `sources/selected.json` is the preferred source set for essay generation. If the selected set has no accessible notes, the pipeline falls back to all accessible notes.
 - **Short vs long path** — essays ≤ `long_essay_threshold` (default 4000 words) use full-essay write/review. Longer essays use section-by-section write/review.
+- **Bounded long-essay context** — section writing includes only the most recent prior sections, and section review includes only adjacent sections with the current section delimited. This keeps prompt growth roughly linear instead of resending the full essay on every section review.
 - **Custom AI endpoint** — when `AI_BASE_URL` is set in `.env`, all models route through an OpenAI-compatible endpoint using `AI_API_KEY` and `AI_MODEL`.
 - **Deterministic export** — step 8 calls `build_document()` directly from Python. No LLM involved. Prefers `reviewed.md`, falls back to `draft.md`.
 - **Validate step** — after intake, the worker evaluates the brief for significant gaps. If found, prints numbered questions with options and collects answers via `input()`. Answers are stored as `clarifications` in `assignment.json`. The `on_questions` callback in `run_pipeline` makes this interactive behavior pluggable.

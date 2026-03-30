@@ -239,3 +239,49 @@ class TestSelectedSourceNotes:
 
         assert [note.source_id for note in notes] == ["alpha2024", "beta2024"]
         assert "Selected sources had no accessible notes" in caplog.text
+
+
+class TestLongEssayContextHelpers:
+    def test_prior_section_context_uses_recent_sections_only(self):
+        from src.pipeline import Section, _build_prior_sections_context
+
+        sections = [
+            (Section(number=1, title="One", heading="One", word_target=100), "intro"),
+            (Section(number=2, title="Two", heading="Two", word_target=100), "body a"),
+            (
+                Section(number=3, title="Three", heading="Three", word_target=100),
+                "body b",
+            ),
+        ]
+
+        context = _build_prior_sections_context(sections, max_sections=2)
+
+        assert "intro" not in context
+        assert "body a" in context
+        assert "body b" in context
+
+    def test_review_context_uses_only_adjacent_sections(self):
+        from src.pipeline import Section, _build_review_context
+
+        sections = [
+            Section(number=1, title="One", heading="One", word_target=100),
+            Section(number=2, title="Two", heading="Two", word_target=100),
+            Section(number=3, title="Three", heading="Three", word_target=100),
+            Section(number=4, title="Four", heading="Four", word_target=100),
+            Section(number=5, title="Five", heading="Five", word_target=100),
+        ]
+        section_texts = {
+            2: "section two",
+            3: "section three",
+            4: "section four",
+        }
+
+        context = _build_review_context(sections[2], sections, section_texts)
+
+        assert "section two" in context
+        assert "section three" in context
+        assert "section four" in context
+        assert "SECTION TO REVIEW: START" in context
+        assert "SECTION TO REVIEW: END" in context
+        assert "section one" not in context
+        assert "section five" not in context

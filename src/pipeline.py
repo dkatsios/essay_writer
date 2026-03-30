@@ -45,6 +45,9 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+_MAX_PRIOR_SECTION_CONTEXT = 2
+_REVIEW_SECTION_NEIGHBORS = 1
+
 
 # ---------------------------------------------------------------------------
 # Data structures
@@ -324,6 +327,56 @@ def _load_selected_source_notes(run_dir: Path) -> list[SourceNote]:
         "Selected sources had no accessible notes; using all accessible notes"
     )
     return all_notes
+
+
+def _build_prior_sections_context(
+    written_sections: list[tuple[Section, str]],
+    max_sections: int = _MAX_PRIOR_SECTION_CONTEXT,
+) -> str:
+    """Build bounded prior-section context for section writing."""
+    if not written_sections:
+        return ""
+
+    recent_sections = sorted(
+        written_sections[-max_sections:], key=lambda item: item[0].number
+    )
+    return "\n\n---\n\n".join(text for _, text in recent_sections if text)
+
+
+def _section_window(
+    sections: list[Section],
+    target_number: int,
+    neighbor_count: int = _REVIEW_SECTION_NEIGHBORS,
+) -> list[Section]:
+    """Return the target section plus a bounded number of neighbors."""
+    for index, section in enumerate(sections):
+        if section.number == target_number:
+            start = max(0, index - neighbor_count)
+            end = min(len(sections), index + neighbor_count + 1)
+            return sections[start:end]
+    return []
+
+
+def _build_review_context(
+    section: Section,
+    sections: list[Section],
+    section_texts: dict[int, str],
+    neighbor_count: int = _REVIEW_SECTION_NEIGHBORS,
+) -> str:
+    """Build bounded review context around the target section."""
+    parts: list[str] = []
+    for current in _section_window(sections, section.number, neighbor_count):
+        text = section_texts.get(current.number, "")
+        if not text:
+            continue
+        if current.number == section.number:
+            text = (
+                "<!-- >>> SECTION TO REVIEW: START >>> -->\n"
+                f"{text}\n"
+                "<!-- <<< SECTION TO REVIEW: END <<< -->"
+            )
+        parts.append(text)
+    return "\n\n---\n\n".join(parts)
 
 
 # ---------------------------------------------------------------------------
@@ -632,22 +685,11 @@ def _make_write_sections(
         plan_json = _read_text(ctx.run_dir / "plan" / "plan.json")
         source_notes = _load_selected_source_notes(ctx.run_dir)
         order = _writing_order(sections)
-        written_files: list[tuple[Section, str]] = []
+        written_sections: list[tuple[Section, str]] = []
 
         for section in order:
             fname = _section_filename(section)
-
-            # Build context of already-written sections
-            prior_context = ""
-            if written_files:
-                sorted_written = sorted(written_files, key=lambda x: x[0].number)
-                parts = []
-                for ws, wf in sorted_written:
-                    wp = sections_dir / wf
-                    if wp.exists():
-                        parts.append(wp.read_text(encoding="utf-8"))
-                if parts:
-                    prior_context = "\n\n---\n\n".join(parts)
+            prior_context = _build_prior_sections_context(written_sections)
 
             prompt = render_prompt(
                 "section_writing.j2",
@@ -679,7 +721,7 @@ def _make_write_sections(
                 f"    section {section.number} ({section.title}) -- {dur:.1f}s",
                 file=sys.stderr,
             )
-            written_files.append((section, fname))
+            written_sections.append((section, text))
 
         # Concatenate all sections in plan order into draft.md
         plan_order = sorted(sections, key=lambda s: s.number)
@@ -718,21 +760,15 @@ def _make_review_sections(
                 logger.warning("Section %d missing, skipping review", section.number)
                 continue
 
-            # Build full essay with target section delimited
-            full_essay_parts = []
-            for s in plan_order:
-                fp = _best_path(s)
-                if not fp.exists():
-                    continue
-                text = fp.read_text(encoding="utf-8")
-                if s.number == section.number:
-                    text = (
-                        "<!-- >>> SECTION TO REVIEW: START >>> -->\n"
-                        f"{text}\n"
-                        "<!-- <<< SECTION TO REVIEW: END <<< -->"
+            section_texts: dict[int, str] = {}
+            for current in _section_window(plan_order, section.number):
+                current_path = _best_path(current)
+                if current_path.exists():
+                    section_texts[current.number] = current_path.read_text(
+                        encoding="utf-8"
                     )
-                full_essay_parts.append(text)
-            full_essay = "\n\n---\n\n".join(full_essay_parts)
+
+            full_essay = _build_review_context(section, plan_order, section_texts)
 
             section_text = section_path.read_text(encoding="utf-8")
             section_words = len(section_text.split())

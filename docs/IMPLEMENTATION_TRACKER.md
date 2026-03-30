@@ -15,9 +15,9 @@ This file tracks the proposal backlog, what has been completed, and what remains
    - Fall back to all accessible notes when `selected.json` is missing or unusable.
    - Add tests that verify selected-source filtering and fallback behavior.
 
-2. [ ] Reduce quadratic token growth in the long-essay path
+2. [x] Reduce quadratic token growth in the long-essay path
    - Bound section-writing context.
-   - Replace full-essay per-section review with narrower context plus an optional final pass.
+   - Replace full-essay per-section review with narrower adjacent-section context.
 
 3. [ ] Remove dead staging and VFS-era abstractions
    - Simplify `stage_files()` / `build_message_content()` usage.
@@ -53,3 +53,6 @@ This file tracks the proposal backlog, what has been completed, and what remains
 - [x] Proposal #1 implemented.
 - [x] Proposal #1 tests passing: `uv run python -m pytest tests/test_refactoring.py -v`.
 - [x] Proposal #1 tracker updated to completed.
+- [x] Proposal #2 implemented.
+- [x] Proposal #2 tests passing: `uv run python -m pytest tests/test_refactoring.py -v`.
+- [x] Proposal #2 tracker updated to completed.
