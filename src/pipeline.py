@@ -296,6 +296,36 @@ def _load_source_notes(run_dir: Path) -> list[SourceNote]:
     return notes
 
 
+def _load_selected_source_notes(run_dir: Path) -> list[SourceNote]:
+    """Load selected accessible notes, falling back to all accessible notes."""
+    all_notes = _load_source_notes(run_dir)
+    if not all_notes:
+        return []
+
+    selected_path = run_dir / "sources" / "selected.json"
+    if not selected_path.exists():
+        return all_notes
+
+    try:
+        selected = json.loads(selected_path.read_text(encoding="utf-8"))
+    except Exception:
+        logger.warning("Failed to load selected sources; using all accessible notes")
+        return all_notes
+
+    if not isinstance(selected, dict) or not selected:
+        return all_notes
+
+    selected_ids = set(selected)
+    selected_notes = [note for note in all_notes if note.source_id in selected_ids]
+    if selected_notes:
+        return selected_notes
+
+    logger.warning(
+        "Selected sources had no accessible notes; using all accessible notes"
+    )
+    return all_notes
+
+
 # ---------------------------------------------------------------------------
 # Step implementations
 # ---------------------------------------------------------------------------
@@ -528,7 +558,7 @@ def _make_write_full(target_words: int) -> Callable[[PipelineContext], None]:
     def _do_write_full(ctx: PipelineContext) -> None:
         brief_json = _read_text(ctx.run_dir / "brief" / "assignment.json")
         plan_json = _read_text(ctx.run_dir / "plan" / "plan.json")
-        source_notes = _load_source_notes(ctx.run_dir)
+        source_notes = _load_selected_source_notes(ctx.run_dir)
 
         prompt = render_prompt(
             "essay_writing.j2",
@@ -600,7 +630,7 @@ def _make_write_sections(
         sections_dir.mkdir(parents=True, exist_ok=True)
 
         plan_json = _read_text(ctx.run_dir / "plan" / "plan.json")
-        source_notes = _load_source_notes(ctx.run_dir)
+        source_notes = _load_selected_source_notes(ctx.run_dir)
         order = _writing_order(sections)
         written_files: list[tuple[Section, str]] = []
 

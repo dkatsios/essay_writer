@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+import json
 import logging
 from pathlib import Path
 from unittest.mock import MagicMock
@@ -182,3 +183,59 @@ class TestRendering:
         env1 = _get_env("/tmp/dummy")
         env2 = _get_env("/tmp/dummy")
         assert env1 is env2
+
+
+# ── selected source filtering ─────────────────────────────────────────────
+
+
+class TestSelectedSourceNotes:
+    def test_uses_selected_accessible_notes_when_available(self, tmp_path):
+        from src.pipeline import _load_selected_source_notes
+        from src.schemas import SourceNote
+
+        notes_dir = tmp_path / "sources" / "notes"
+        notes_dir.mkdir(parents=True)
+
+        note_a = SourceNote(source_id="alpha2024", is_accessible=True, title="A")
+        note_b = SourceNote(source_id="beta2024", is_accessible=True, title="B")
+        (notes_dir / "alpha2024.json").write_text(
+            note_a.model_dump_json(), encoding="utf-8"
+        )
+        (notes_dir / "beta2024.json").write_text(
+            note_b.model_dump_json(), encoding="utf-8"
+        )
+
+        (tmp_path / "sources" / "selected.json").write_text(
+            json.dumps({"beta2024": {"title": "B"}}), encoding="utf-8"
+        )
+
+        notes = _load_selected_source_notes(tmp_path)
+        assert [note.source_id for note in notes] == ["beta2024"]
+
+    def test_falls_back_to_all_accessible_notes_when_selection_is_unusable(
+        self, tmp_path, caplog
+    ):
+        from src.pipeline import _load_selected_source_notes
+        from src.schemas import SourceNote
+
+        notes_dir = tmp_path / "sources" / "notes"
+        notes_dir.mkdir(parents=True)
+
+        note_a = SourceNote(source_id="alpha2024", is_accessible=True, title="A")
+        note_b = SourceNote(source_id="beta2024", is_accessible=True, title="B")
+        (notes_dir / "alpha2024.json").write_text(
+            note_a.model_dump_json(), encoding="utf-8"
+        )
+        (notes_dir / "beta2024.json").write_text(
+            note_b.model_dump_json(), encoding="utf-8"
+        )
+
+        (tmp_path / "sources" / "selected.json").write_text(
+            json.dumps({"missing2024": {"title": "Missing"}}), encoding="utf-8"
+        )
+
+        with caplog.at_level(logging.WARNING):
+            notes = _load_selected_source_notes(tmp_path)
+
+        assert [note.source_id for note in notes] == ["alpha2024", "beta2024"]
+        assert "Selected sources had no accessible notes" in caplog.text

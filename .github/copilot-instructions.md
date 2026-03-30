@@ -116,6 +116,7 @@ No `default.yaml` exists; field defaults in `schemas.py` are canonical.
 - **Input flow** — `build_message_content()` extracts text and writes to `input/extracted.md`. The pipeline reads this and passes it to the intake template.
 - **`run_research()`** — fans out queries across Semantic Scholar, OpenAlex, and Crossref in parallel, deduplicates by DOI/title, writes registry JSON. Zero LLM tokens consumed.
 - **Parallel source reading** — `ThreadPoolExecutor(max_workers=3)` reads multiple sources concurrently.
+- **Selected sources drive writing** — after source reading, `sources/selected.json` is the preferred source set for essay generation. If the selected set has no accessible notes, the pipeline falls back to all accessible notes.
 - **Short vs long path** — essays ≤ `long_essay_threshold` (default 4000 words) use full-essay write/review. Longer essays use section-by-section write/review.
 - **Custom AI endpoint** — when `AI_BASE_URL` is set in `.env`, all models route through an OpenAI-compatible endpoint using `AI_API_KEY` and `AI_MODEL`.
 - **Deterministic export** — step 8 calls `build_document()` directly from Python. No LLM involved. Prefers `reviewed.md`, falls back to `draft.md`.
