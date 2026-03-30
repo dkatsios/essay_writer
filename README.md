@@ -11,6 +11,7 @@ AI-powered academic essay generator for Greek university students. Uses a determ
 - Interactive validation: catches incomplete assignments and prompts for missing info before proceeding
 - Deterministic academic source research via Semantic Scholar, OpenAlex, and Crossref
 - Selects the best source subset and uses that selection during essay generation
+- Bounds source reading to the top ranked candidates instead of LLM-reading every fetched result
 - Long essays use bounded section-local context instead of repeatedly sending the whole draft during section review
 - Input extraction writes a single `input/extracted.md` artifact directly into each run directory
 - Search and fetch requests share one HTTP transport with pooled connections and centralized retry behavior

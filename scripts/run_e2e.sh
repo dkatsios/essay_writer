@@ -50,6 +50,9 @@ echo "================================================================"
 echo "  Results: ${#PASS[@]} passed, ${#FAIL[@]} failed"
 echo "================================================================"
 for s in "${PASS[@]}"; do echo "  PASS  $s"; done
-for s in "${FAIL[@]}"; do echo "  FAIL  $s"; done
+
+if (( ${#FAIL[@]} > 0 )); then
+    for s in "${FAIL[@]}"; do echo "  FAIL  $s"; done
+fi
 
 [[ ${#FAIL[@]} -eq 0 ]]

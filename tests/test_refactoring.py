@@ -536,6 +536,21 @@ class TestSelectedSourceNotes:
         assert [note.source_id for note in notes] == ["alpha2024", "beta2024"]
         assert "Selected sources had no accessible notes" in caplog.text
 
+    def test_source_read_candidates_limits_detail_reads(self):
+        from src.pipeline import _source_read_candidates
+
+        registry = {
+            f"s{i}": {"title": f"Source {i}", "url": f"https://example.com/{i}"}
+            for i in range(1, 21)
+        }
+
+        candidates = _source_read_candidates(registry, target_sources=8)
+
+        assert len(candidates) == 12
+        assert [source_id for source_id, _ in candidates] == [
+            f"s{i}" for i in range(1, 13)
+        ]
+
 
 class TestLongEssayContextHelpers:
     def test_prior_section_context_uses_recent_sections_only(self):

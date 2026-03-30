@@ -546,6 +546,20 @@ def _select_best_sources(
     return {sid: registry[sid] for sid in selected_ids if sid in registry}
 
 
+def _source_read_candidates(
+    registry: dict[str, dict],
+    target_sources: int,
+) -> list[tuple[str, dict]]:
+    """Return the ranked source subset worth reading in detail."""
+    candidates = [
+        (sid, meta)
+        for sid, meta in registry.items()
+        if meta.get("url") or meta.get("pdf_url")
+    ]
+    read_limit = max(target_sources, math.ceil(target_sources * 1.5))
+    return candidates[:read_limit]
+
+
 def _make_read_sources(target_sources: int) -> Callable[[PipelineContext], None]:
     def _do_read_sources(ctx: PipelineContext) -> None:
         registry_path = ctx.run_dir / "sources" / "registry.json"
@@ -554,16 +568,12 @@ def _make_read_sources(target_sources: int) -> Callable[[PipelineContext], None]
             return
 
         registry = json.loads(registry_path.read_text(encoding="utf-8"))
-        tasks = [
-            (sid, meta)
-            for sid, meta in registry.items()
-            if meta.get("url") or meta.get("pdf_url")
-        ]
+        tasks = _source_read_candidates(registry, target_sources)
         if not tasks:
             logger.info("No sources with URLs to read.")
             return
 
-        logger.info("Reading %d sources in parallel...", len(tasks))
+        logger.info("Reading %d ranked source candidates in parallel...", len(tasks))
         sources_dir = str(ctx.run_dir / "sources")
         notes_dir = ctx.run_dir / "sources" / "notes"
         notes_dir.mkdir(parents=True, exist_ok=True)

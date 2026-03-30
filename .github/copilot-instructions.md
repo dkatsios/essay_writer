@@ -120,7 +120,7 @@ No `default.yaml` exists; field defaults in `schemas.py` are canonical.
 - **Config-backed search controls** — `search.max_sources_per_direction` caps per-API fetch size, and `search.prefer_greek_sources` plus `search.search_language` influence result ranking.
 - **Shared HTTP transport** — search APIs and URL fetching use a shared `httpx.Client` with centralized retry behavior and connection pooling in `src/tools/_http.py`.
 - **Pricing source of truth** — cost reporting in `src/runner.py` loads model pricing from `config/gemini_pricing.json`.
-- **Parallel source reading** — `ThreadPoolExecutor(max_workers=3)` reads multiple sources concurrently.
+- **Parallel source reading** — `ThreadPoolExecutor(max_workers=3)` reads a bounded, ranked candidate subset concurrently instead of every fetched source.
 - **Selected sources drive writing** — after source reading, `sources/selected.json` is the preferred source set for essay generation. If the selected set has no accessible notes, the pipeline falls back to all accessible notes.
 - **Short vs long path** — essays ≤ `long_essay_threshold` (default 4000 words) use full-essay write/review. Longer essays use section-by-section write/review.
 - **Bounded long-essay context** — section writing includes only the most recent prior sections, and section review includes only adjacent sections with the current section delimited. This keeps prompt growth roughly linear instead of resending the full essay on every section review.
