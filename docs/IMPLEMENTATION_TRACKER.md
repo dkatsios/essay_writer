@@ -31,7 +31,7 @@ This file tracks the proposal backlog, what has been completed, and what remains
    - Introduce one shared `httpx` client policy.
    - Consolidate timeout, SSL, retry, and header behavior.
 
-6. [ ] Parallelize research more intelligently across queries
+6. [x] Parallelize research more intelligently across queries
    - Keep host-specific limits.
    - Add bounded query-level concurrency.
 
@@ -65,3 +65,6 @@ This file tracks the proposal backlog, what has been completed, and what remains
 - [x] Proposal #5 implemented.
 - [x] Proposal #5 tests passing: `uv run python -m pytest tests/test_refactoring.py -v`.
 - [x] Proposal #5 tracker updated to completed.
+- [x] Proposal #6 implemented.
+- [x] Proposal #6 tests passing: `uv run python -m pytest tests/test_refactoring.py -v`.
+- [x] Proposal #6 tracker updated to completed.

@@ -5,6 +5,8 @@ from __future__ import annotations
 import base64
 import json
 import logging
+import threading
+import time
 from pathlib import Path
 from unittest.mock import MagicMock
 
@@ -141,6 +143,49 @@ class TestSharedHttp:
 
         assert response.status_code == 200
         assert calls["count"] == 2
+
+
+class TestResearchConcurrency:
+    def test_query_worker_count_is_bounded(self):
+        from src.tools.research_sources import _query_worker_count
+
+        assert _query_worker_count(0) == 1
+        assert _query_worker_count(1) == 1
+        assert _query_worker_count(2) == 2
+        assert _query_worker_count(10) == 3
+
+    def test_run_queries_parallelizes_but_preserves_query_order(self, monkeypatch):
+        from src.tools import research_sources
+
+        active = 0
+        max_active = 0
+        lock = threading.Lock()
+
+        def fake_search_one_query(query, max_per_api):
+            nonlocal active, max_active
+            with lock:
+                active += 1
+                max_active = max(max_active, active)
+            try:
+                if query == "q1":
+                    time.sleep(0.03)
+                else:
+                    time.sleep(0.01)
+            finally:
+                with lock:
+                    active -= 1
+
+            return ([{"title": query}], {"crossref": {"query": query}})
+
+        monkeypatch.setattr(
+            research_sources, "_search_one_query", fake_search_one_query
+        )
+
+        all_results, all_raw = research_sources._run_queries(["q1", "q2", "q3"], 2)
+
+        assert max_active > 1
+        assert [item["title"] for item in all_results] == ["q1", "q2", "q3"]
+        assert [item["query"] for item in all_raw] == ["q1", "q2", "q3"]
 
     def test_http_get_retries_retryable_statuses(self, monkeypatch):
         from src.tools import _http

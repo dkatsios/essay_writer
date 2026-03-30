@@ -116,7 +116,7 @@ No `default.yaml` exists; field defaults in `schemas.py` are canonical.
 - **Plain function tools** — `run_research()`, `fetch_url_content()`, `read_pdf_text()`, `read_docx_text()` are plain Python functions called by the pipeline. No `@tool` decorators.
 - **Retry logic** — `invoke_with_retry()` in `src/agent.py` handles transient 429/503 API errors with exponential backoff. `_structured_call()` retries on Pydantic `ValidationError`.
 - **Input flow** — `scan()` extracts content and `build_extracted_text()` writes `input/extracted.md` directly into the run directory. The pipeline reads that file and passes it to the intake template.
-- **`run_research()`** — fans out queries across Semantic Scholar, OpenAlex, and Crossref in parallel, deduplicates by DOI/title, writes registry JSON. Zero LLM tokens consumed.
+- **`run_research()`** — runs queries with bounded query-level concurrency, fans each query out across Semantic Scholar, OpenAlex, and Crossref, deduplicates by DOI/title, and writes registry JSON. Zero LLM tokens consumed.
 - **Shared HTTP transport** — search APIs and URL fetching use a shared `httpx.Client` with centralized retry behavior and connection pooling in `src/tools/_http.py`.
 - **Parallel source reading** — `ThreadPoolExecutor(max_workers=3)` reads multiple sources concurrently.
 - **Selected sources drive writing** — after source reading, `sources/selected.json` is the preferred source set for essay generation. If the selected set has no accessible notes, the pipeline falls back to all accessible notes.

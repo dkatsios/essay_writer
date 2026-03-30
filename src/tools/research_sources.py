@@ -19,6 +19,8 @@ from src.tools.openalex_search import search_openalex
 
 logger = logging.getLogger(__name__)
 
+_QUERY_CONCURRENCY = 3
+
 # Year threshold — skip very old results
 _MIN_YEAR = 2000
 
@@ -87,6 +89,50 @@ def _search_one_query(
                 logger.warning("Search API %s failed for query %r", api_name, query)
 
     return results, raw_responses
+
+
+def _query_worker_count(query_count: int) -> int:
+    """Return a bounded worker count for query-level concurrency."""
+    if query_count <= 0:
+        return 1
+    return min(_QUERY_CONCURRENCY, query_count)
+
+
+def _run_queries(queries: list[str], max_per_api: int) -> tuple[list[dict], list[dict]]:
+    """Run multiple queries with bounded concurrency and stable merge order."""
+    if not queries:
+        return [], []
+
+    collected: dict[int, tuple[str, list[dict], dict[str, dict]]] = {}
+    with ThreadPoolExecutor(max_workers=_query_worker_count(len(queries))) as pool:
+        futures = {
+            pool.submit(_search_one_query, query, max_per_api): (index, query)
+            for index, query in enumerate(queries)
+        }
+        for future in as_completed(futures):
+            index, query = futures[future]
+            try:
+                results, raw_responses = future.result()
+            except Exception:
+                logger.warning("Query search failed for %r", query)
+                results, raw_responses = [], {}
+            collected[index] = (query, results, raw_responses)
+
+    all_results: list[dict] = []
+    all_raw: list[dict] = []
+    for index, query in enumerate(queries):
+        _, results, raw_responses = collected.get(index, (query, [], {}))
+        all_results.extend(results)
+        for api_name in sorted(raw_responses):
+            all_raw.append(
+                {
+                    "query": query,
+                    "api": api_name,
+                    "response": raw_responses[api_name],
+                }
+            )
+
+    return all_results, all_raw
 
 
 def _accessibility_tier(hit: dict) -> int:
@@ -199,13 +245,7 @@ def run_research(
 
     max_per_api = max(3, max_sources // max(len(queries), 1))
 
-    all_results: list[dict] = []
-    all_raw: list[dict] = []
-    for q in queries:
-        results, raw_responses = _search_one_query(q, max_per_api)
-        all_results.extend(results)
-        for api_name, raw_data in raw_responses.items():
-            all_raw.append({"query": q, "api": api_name, "response": raw_data})
+    all_results, all_raw = _run_queries(queries, max_per_api)
 
     registry = _build_registry(all_results, max_sources)
     logger.info(
