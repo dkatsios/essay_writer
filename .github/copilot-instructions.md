@@ -117,14 +117,17 @@ No `default.yaml` exists; field defaults in `schemas.py` are canonical.
 - **Retry logic** — `invoke_with_retry()` in `src/agent.py` handles transient 429/503 API errors with exponential backoff. `_structured_call()` retries on Pydantic `ValidationError`.
 - **Input flow** — `scan()` extracts content and `build_extracted_text()` writes `input/extracted.md` directly into the run directory. The pipeline reads that file and passes it to the intake template.
 - **`run_research()`** — runs queries with bounded query-level concurrency, fans each query out across Semantic Scholar, OpenAlex, and Crossref, deduplicates by DOI/title, and writes registry JSON. Zero LLM tokens consumed.
+- **Config-backed search controls** — `search.max_sources_per_direction` caps per-API fetch size, and `search.prefer_greek_sources` plus `search.search_language` influence result ranking.
 - **Shared HTTP transport** — search APIs and URL fetching use a shared `httpx.Client` with centralized retry behavior and connection pooling in `src/tools/_http.py`.
+- **Pricing source of truth** — cost reporting in `src/runner.py` loads model pricing from `config/gemini_pricing.json`.
 - **Parallel source reading** — `ThreadPoolExecutor(max_workers=3)` reads multiple sources concurrently.
 - **Selected sources drive writing** — after source reading, `sources/selected.json` is the preferred source set for essay generation. If the selected set has no accessible notes, the pipeline falls back to all accessible notes.
 - **Short vs long path** — essays ≤ `long_essay_threshold` (default 4000 words) use full-essay write/review. Longer essays use section-by-section write/review.
 - **Bounded long-essay context** — section writing includes only the most recent prior sections, and section review includes only adjacent sections with the current section delimited. This keeps prompt growth roughly linear instead of resending the full essay on every section review.
+- **Config-backed word tolerance** — `writing.word_count_tolerance` controls the tolerance used in the writing and review prompts.
 - **Custom AI endpoint** — when `AI_BASE_URL` is set in `.env`, all models route through an OpenAI-compatible endpoint using `AI_API_KEY` and `AI_MODEL`.
 - **Deterministic export** — step 8 calls `build_document()` directly from Python. No LLM involved. Prefers `reviewed.md`, falls back to `draft.md`.
-- **Validate step** — after intake, the worker evaluates the brief for significant gaps. If found, prints numbered questions with options and collects answers via `input()`. Answers are stored as `clarifications` in `assignment.json`. The `on_questions` callback in `run_pipeline` makes this interactive behavior pluggable.
+- **Validate step** — after intake, the worker evaluates the brief for significant gaps. If found, prints numbered questions with options and collects answers via `input()`. Answers are stored as structured `clarifications` in `assignment.json`, one entry per answered question. The `on_questions` callback in `run_pipeline` makes this interactive behavior pluggable.
 - **Structured outputs** — brief, validation, plan, and source notes are JSON files validated by Pydantic models in `src/schemas.py`. Essays remain markdown.
 
 ### Test Fixtures

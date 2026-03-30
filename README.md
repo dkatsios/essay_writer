@@ -15,6 +15,8 @@ AI-powered academic essay generator for Greek university students. Uses a determ
 - Input extraction writes a single `input/extracted.md` artifact directly into each run directory
 - Search and fetch requests share one HTTP transport with pooled connections and centralized retry behavior
 - Research queries run with bounded query-level concurrency while preserving deterministic merge order
+- Search ranking honors the configured language preference and per-API source cap, and review prompts honor the configured word-count tolerance
+- Cost reporting loads model pricing from `config/gemini_pricing.json`
 - Formatted `.docx` output with cover page, table of contents, and page numbers
 - Supports multiple input formats: PDF, DOCX, PPTX, images, text files
 - Source PDFs saved alongside run artifacts for inspection

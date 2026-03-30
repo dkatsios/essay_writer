@@ -35,10 +35,12 @@ _EXCLUDED_TYPES = frozenset(
     }
 )
 
+_GREEK_CHAR_RE = re.compile(r"[\u0370-\u03ff\u1f00-\u1fff]")
+
 
 def _normalise_title(title: str) -> str:
     """Lowercase, strip punctuation/whitespace for dedup comparison."""
-    return re.sub(r"[^a-z0-9]", "", title.lower())
+    return re.sub(r"[\W_]+", "", title.casefold(), flags=re.UNICODE)
 
 
 def _make_source_id(authors: list[str], year: int | None) -> str:
@@ -147,9 +149,37 @@ def _accessibility_tier(hit: dict) -> int:
     return 2
 
 
+def _compute_max_per_api(
+    max_sources: int,
+    query_count: int,
+    max_sources_per_direction: int,
+) -> int:
+    """Compute a bounded per-API result count."""
+    raw = max(3, max_sources // max(query_count, 1))
+    return min(raw, max_sources_per_direction)
+
+
+def _language_rank(hit: dict, search_languages: list[str]) -> int:
+    """Score a hit by language preference order. Lower is better."""
+    text = " ".join(
+        part for part in [hit.get("title", ""), hit.get("abstract", "")] if part
+    )
+    has_greek = bool(_GREEK_CHAR_RE.search(text))
+
+    for index, language in enumerate(search_languages):
+        if language == "el" and has_greek:
+            return index
+        if language == "en" and text and not has_greek:
+            return index
+    return len(search_languages)
+
+
 def _build_registry(
     raw_results: list[dict],
     max_sources: int,
+    *,
+    prefer_greek_sources: bool = True,
+    search_languages: list[str] | None = None,
 ) -> dict[str, dict]:
     """Deduplicate, filter, sort by accessibility, and build the registry."""
     seen_titles: set[str] = set()
@@ -199,8 +229,17 @@ def _build_registry(
         hit["_source_type"] = source_type
         candidates.append(hit)
 
-    # Sort: OA PDF first, then DOI, then metadata-only
-    candidates.sort(key=_accessibility_tier)
+    language_order = list(search_languages or [])
+    if prefer_greek_sources and "el" not in language_order:
+        language_order.insert(0, "el")
+
+    # Sort: accessibility first, then preferred language order.
+    candidates.sort(
+        key=lambda hit: (
+            _accessibility_tier(hit),
+            _language_rank(hit, language_order),
+        )
+    )
 
     used_ids: set[str] = set()
     registry: dict[str, dict] = {}
@@ -232,6 +271,10 @@ def run_research(
     queries: list[str],
     max_sources: int,
     sources_dir: str | None = None,
+    *,
+    max_sources_per_direction: int = 5,
+    prefer_greek_sources: bool = True,
+    search_languages: list[str] | None = None,
 ) -> dict[str, dict]:
     """Search academic databases and build a source registry.
 
@@ -243,11 +286,20 @@ def run_research(
 
     logger.info("run_research: %d queries, max_sources=%d", len(queries), max_sources)
 
-    max_per_api = max(3, max_sources // max(len(queries), 1))
+    max_per_api = _compute_max_per_api(
+        max_sources,
+        len(queries),
+        max_sources_per_direction,
+    )
 
     all_results, all_raw = _run_queries(queries, max_per_api)
 
-    registry = _build_registry(all_results, max_sources)
+    registry = _build_registry(
+        all_results,
+        max_sources,
+        prefer_greek_sources=prefer_greek_sources,
+        search_languages=search_languages,
+    )
     logger.info(
         "run_research: %d sources registered from %d raw results",
         len(registry),

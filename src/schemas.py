@@ -16,7 +16,10 @@ class Clarification(BaseModel):
     """A Q&A pair appended after interactive validation."""
 
     question: str
+    options: list[str] | None = None
     answer: str
+    selected_label: str | None = None
+    selected_option: str | None = None
 
 
 class AssignmentBrief(BaseModel):

@@ -25,7 +25,7 @@ Review and improve the draft following the criteria below. Output the complete p
 
 ## Word Count — CRITICAL
 {% set delta = draft_words - target_words %}
-{% set tolerance = (target_words * 0.10) | int %}
+{% set tolerance = (target_words * tolerance_ratio) | int %}
 {% if delta > tolerance %}
 ⚠ The draft is **{{ draft_words }}** words — **{{ delta }}** words OVER the target of {{ target_words }}.
 You MUST cut approximately {{ delta }} words. Remove redundancy, tighten phrasing, eliminate filler.
@@ -34,6 +34,6 @@ Do NOT add new content. Focus on making the text leaner while preserving every a
 ⚠ The draft is **{{ draft_words }}** words — **{{ (-delta) }}** words UNDER the target of {{ target_words }}.
 You MUST expand by approximately {{ (-delta) }} words. Add deeper analysis, more supporting evidence, and richer discussion.
 {% else %}
-The draft is **{{ draft_words }}** words (target: {{ target_words }}). Length is acceptable (within ±10%).
+The draft is **{{ draft_words }}** words (target: {{ target_words }}). Length is acceptable (within ±{{ tolerance_percent }}%).
 Focus on quality improvements only. Do NOT significantly change the total word count.
 {% endif %}

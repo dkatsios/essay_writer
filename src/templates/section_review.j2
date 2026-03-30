@@ -20,7 +20,7 @@ The section to review is between the delimiters below. Output ONLY the improved 
 
 ## Word Count — CRITICAL
 {% set delta = section_words - section.word_target %}
-{% set tolerance = (section.word_target * 0.10) | int %}
+{% set tolerance = (section.word_target * tolerance_ratio) | int %}
 {% if delta > tolerance %}
 ⚠ The section is **{{ section_words }}** words — **{{ delta }}** words OVER the target of {{ section.word_target }}.
 You MUST cut approximately {{ delta }} words. Remove redundancy, tighten phrasing, eliminate filler.
@@ -29,6 +29,6 @@ Do NOT add new content. Focus on making the text leaner while preserving every a
 ⚠ The section is **{{ section_words }}** words — **{{ (-delta) }}** words UNDER the target of {{ section.word_target }}.
 You MUST expand by approximately {{ (-delta) }} words. Add deeper analysis, more supporting evidence, and richer discussion.
 {% else %}
-The section is **{{ section_words }}** words (target: {{ section.word_target }}). Length is acceptable (within ±10%).
+The section is **{{ section_words }}** words (target: {{ section.word_target }}). Length is acceptable (within ±{{ tolerance_percent }}%).
 Focus on quality improvements only. Do NOT significantly change the word count.
 {% endif %}

@@ -206,6 +206,168 @@ class TestResearchConcurrency:
         assert response.status_code == 200
 
 
+class TestConfigBackedBehavior:
+    def test_compute_max_per_api_respects_direction_cap(self):
+        from src.tools.research_sources import _compute_max_per_api
+
+        assert _compute_max_per_api(30, 2, 5) == 5
+        assert _compute_max_per_api(6, 4, 5) == 3
+
+    def test_build_registry_prefers_greek_sources_when_enabled(self):
+        from src.tools.research_sources import _build_registry
+
+        raw_results = [
+            {
+                "title": "English title",
+                "authors": ["Alice Smith"],
+                "year": 2024,
+                "abstract": "English abstract",
+                "doi": "10.1/a",
+                "url": "https://example.com/en",
+                "pdf_url": "",
+                "source_type": "journal-article",
+            },
+            {
+                "title": "Ελληνικός τίτλος",
+                "authors": ["Nikos Papadopoulos"],
+                "year": 2024,
+                "abstract": "Ελληνική περίληψη",
+                "doi": "10.1/b",
+                "url": "https://example.com/el",
+                "pdf_url": "",
+                "source_type": "journal-article",
+            },
+        ]
+
+        registry = _build_registry(
+            raw_results,
+            max_sources=2,
+            prefer_greek_sources=True,
+            search_languages=["el", "en"],
+        )
+
+        assert list(registry.values())[0]["title"] == "Ελληνικός τίτλος"
+
+    def test_rendered_review_prompt_uses_configured_tolerance(self):
+        from src.rendering import render_prompt
+        from src.pipeline import Section
+
+        prompt = render_prompt(
+            "section_review.j2",
+            section=Section(number=1, title="Intro", heading="Intro", word_target=100),
+            full_essay="Body",
+            section_words=96,
+            tolerance_ratio=0.05,
+            tolerance_percent=5,
+        )
+
+        assert "within ±5%" in prompt
+
+
+class TestValidationClarifications:
+    def test_parse_validation_answers_maps_letter_choices(self):
+        from src.runner import _parse_validation_answers
+        from src.schemas import ValidationQuestion
+
+        questions = [
+            ValidationQuestion(
+                question="Choose scope",
+                options=["Macro", "Micro", "Mixed"],
+            ),
+            ValidationQuestion(
+                question="Need case study",
+                options=["Yes", "No"],
+            ),
+        ]
+
+        clarifications = _parse_validation_answers(questions, "1. b, 2. a")
+
+        assert len(clarifications) == 2
+        assert clarifications[0].answer == "Micro"
+        assert clarifications[0].selected_label == "b"
+        assert clarifications[0].selected_option == "Micro"
+        assert clarifications[1].answer == "Yes"
+
+    def test_parse_validation_answers_allows_single_question_freeform(self):
+        from src.runner import _parse_validation_answers
+        from src.schemas import ValidationQuestion
+
+        questions = [
+            ValidationQuestion(
+                question="Clarify the focus",
+                options=["Option A", "Option B"],
+            )
+        ]
+
+        clarifications = _parse_validation_answers(
+            questions, "Focus on public policy implications"
+        )
+
+        assert len(clarifications) == 1
+        assert clarifications[0].answer == "Focus on public policy implications"
+        assert clarifications[0].selected_option is None
+
+    def test_handle_questions_persists_structured_clarifications(
+        self, tmp_path, monkeypatch
+    ):
+        from src.runner import _handle_questions
+        from src.schemas import AssignmentBrief, ValidationQuestion
+
+        brief_path = tmp_path / "brief" / "assignment.json"
+        brief_path.parent.mkdir(parents=True)
+        brief = AssignmentBrief(topic="Topic", description="Desc")
+        brief_path.write_text(brief.model_dump_json(), encoding="utf-8")
+
+        questions = [
+            ValidationQuestion(
+                question="Choose scope",
+                options=["Macro", "Micro"],
+            ),
+            ValidationQuestion(
+                question="Need case study",
+                options=["Yes", "No"],
+            ),
+        ]
+        monkeypatch.setattr("builtins.input", lambda _prompt="": "1. b, 2. a")
+
+        _handle_questions(questions, tmp_path)
+
+        saved = AssignmentBrief.model_validate_json(
+            brief_path.read_text(encoding="utf-8")
+        )
+
+        assert saved.clarifications is not None
+        assert len(saved.clarifications) == 2
+        assert saved.clarifications[0].question == "Choose scope"
+        assert saved.clarifications[0].selected_option == "Micro"
+        assert saved.clarifications[1].selected_option == "Yes"
+
+
+class TestPricingLoader:
+    def test_load_pricing_table_uses_json_file(self, tmp_path, monkeypatch):
+        from src import runner
+
+        pricing_file = tmp_path / "pricing.json"
+        pricing_file.write_text(
+            json.dumps(
+                {
+                    "_note": "test",
+                    "gemini-test": {"input": 1.5, "output": 3.0},
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        runner._load_pricing_table.cache_clear()
+        monkeypatch.setattr(runner, "_pricing_file_path", lambda: pricing_file)
+
+        pricing = runner._load_pricing_table()
+
+        assert pricing["gemini-test"]["input"] == 1.5
+        assert pricing["gemini-test"]["output"] == 3.0
+        assert pricing["gemini-test"]["thinking"] == 3.0
+
+
 # ── intake classify ──────────────────────────────────────────────────────
 
 

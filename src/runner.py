@@ -21,10 +21,12 @@ Usage (via uv):
 from __future__ import annotations
 
 import argparse
+import json
 import logging
 import shutil
 import sys
 from datetime import datetime, timezone
+from functools import lru_cache
 from pathlib import Path
 from time import monotonic
 
@@ -38,21 +40,41 @@ from config.schemas import load_config  # noqa: E402
 from src.agent import create_model  # noqa: E402
 from src.intake import build_extracted_text, scan  # noqa: E402
 from src.pipeline import run_pipeline  # noqa: E402
+from src.schemas import Clarification, ValidationQuestion  # noqa: E402
 
 
 # ---------------------------------------------------------------------------
 # Pricing per 1M tokens (google_genai models)
 # ---------------------------------------------------------------------------
-_PRICING: dict[str, dict[str, float]] = {
-    "gemini-3.1-pro-preview": {"input": 2.00, "output": 12.00, "thinking": 12.00},
-    "gemini-2.5-pro": {"input": 1.25, "output": 10.00, "thinking": 10.00},
-    "gemini-3-flash-preview": {"input": 0.50, "output": 3.00, "thinking": 3.00},
-    "gemini-2.5-flash": {"input": 0.30, "output": 2.50, "thinking": 2.50},
-    "gemini-2.5-flash-lite": {"input": 0.10, "output": 0.40, "thinking": 0.0},
-    "gemini-2.0-flash": {"input": 0.10, "output": 0.40, "thinking": 0.0},
-}
 # Fallback pricing for unknown models
 _DEFAULT_PRICING = {"input": 0.30, "output": 2.50, "thinking": 2.50}
+
+
+def _pricing_file_path() -> Path:
+    return Path(__file__).resolve().parent.parent / "config" / "gemini_pricing.json"
+
+
+@lru_cache(maxsize=1)
+def _load_pricing_table() -> dict[str, dict[str, float]]:
+    """Load per-model pricing from the canonical JSON file."""
+    try:
+        raw = json.loads(_pricing_file_path().read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        logger.warning("Failed to load pricing table: %s", exc)
+        return {}
+
+    pricing: dict[str, dict[str, float]] = {}
+    for model, values in raw.items():
+        if model.startswith("_") or not isinstance(values, dict):
+            continue
+        input_price = float(values.get("input", _DEFAULT_PRICING["input"]))
+        output_price = float(values.get("output", _DEFAULT_PRICING["output"]))
+        pricing[model] = {
+            "input": input_price,
+            "output": output_price,
+            "thinking": float(values.get("thinking", output_price)),
+        }
+    return pricing
 
 
 def _model_short_name(full_name: str) -> str:
@@ -123,10 +145,11 @@ class TokenTracker:
         total_out = 0
         total_think = 0
         total_dur = 0.0
+        pricing_table = _load_pricing_table()
 
         for step, data in self._steps.items():
             model = data["model"] or "unknown"
-            pricing = _PRICING.get(model, _DEFAULT_PRICING)
+            pricing = pricing_table.get(model, _DEFAULT_PRICING)
             in_cost = data["input_tokens"] * pricing["input"] / 1_000_000
             out_cost = data["output_tokens"] * pricing["output"] / 1_000_000
             think_cost = data["thinking_tokens"] * pricing["thinking"] / 1_000_000
@@ -166,10 +189,11 @@ class TokenTracker:
         total_think = 0
         total_dur = 0.0
         rows: list[tuple[str, dict, float]] = []
+        pricing_table = _load_pricing_table()
 
         for step, data in self._steps.items():
             model = data["model"] or "unknown"
-            pricing = _PRICING.get(model, _DEFAULT_PRICING)
+            pricing = pricing_table.get(model, _DEFAULT_PRICING)
             step_cost = (
                 data["input_tokens"] * pricing["input"]
                 + data["output_tokens"] * pricing["output"]
@@ -450,7 +474,64 @@ def _setup_file_logging(output_dir: Path) -> logging.FileHandler:
 # ---------------------------------------------------------------------------
 
 
-def _handle_questions(questions: str, run_dir: Path) -> None:
+def _format_validation_questions(questions: list[ValidationQuestion]) -> str:
+    """Format validation questions for CLI display."""
+    lines: list[str] = []
+    for i, question in enumerate(questions, 1):
+        lines.append(f"{i}. {question.question}")
+        for j, option in enumerate(question.options):
+            lines.append(f"   {chr(ord('a') + j)}) {option}")
+        lines.append("")
+    return "\n".join(lines).strip()
+
+
+def _parse_validation_answers(
+    questions: list[ValidationQuestion],
+    answers: str,
+) -> list[Clarification]:
+    """Parse a compact CLI answer string into per-question clarifications."""
+    import re
+
+    answer_map: dict[int, str] = {}
+    for index_text, answer_text in re.findall(
+        r"(?:^|,)\s*(\d+)\s*[.):-]?\s*([^,]+)", answers
+    ):
+        answer_map[int(index_text)] = answer_text.strip()
+
+    if not answer_map and len(questions) == 1 and answers.strip():
+        answer_map[1] = answers.strip()
+
+    clarifications: list[Clarification] = []
+    for index, question in enumerate(questions, 1):
+        raw_answer = answer_map.get(index)
+        if not raw_answer:
+            continue
+
+        selected_label = None
+        selected_option = None
+        resolved_answer = raw_answer
+
+        label = raw_answer[:1].lower()
+        option_index = ord(label) - ord("a")
+        if len(raw_answer) == 1 and 0 <= option_index < len(question.options):
+            selected_label = label
+            selected_option = question.options[option_index]
+            resolved_answer = selected_option
+
+        clarifications.append(
+            Clarification(
+                question=question.question,
+                options=question.options,
+                answer=resolved_answer,
+                selected_label=selected_label,
+                selected_option=selected_option,
+            )
+        )
+
+    return clarifications
+
+
+def _handle_questions(questions: list[ValidationQuestion], run_dir: Path) -> None:
     """Print validator questions, collect answers via stdin, append to brief."""
     print(
         "\n"
@@ -459,7 +540,7 @@ def _handle_questions(questions: str, run_dir: Path) -> None:
         + "\n  Please answer the following:\n",
         file=sys.stderr,
     )
-    print(questions, file=sys.stderr)
+    print(_format_validation_questions(questions), file=sys.stderr)
     print(
         "\n  Enter answers (e.g. '1. a, 2. c') or press Enter to skip:",
         file=sys.stderr,
@@ -467,13 +548,13 @@ def _handle_questions(questions: str, run_dir: Path) -> None:
     answers = input("> ").strip()
     if not answers:
         return
-    from src.schemas import AssignmentBrief, Clarification
+    from src.schemas import AssignmentBrief
 
     brief_path = run_dir / "brief" / "assignment.json"
     brief = AssignmentBrief.model_validate_json(brief_path.read_text(encoding="utf-8"))
     if brief.clarifications is None:
         brief.clarifications = []
-    brief.clarifications.append(Clarification(question=questions, answer=answers))
+    brief.clarifications.extend(_parse_validation_answers(questions, answers))
     brief_path.write_text(
         brief.model_dump_json(indent=2, ensure_ascii=False), encoding="utf-8"
     )

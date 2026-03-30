@@ -35,17 +35,17 @@ This file tracks the proposal backlog, what has been completed, and what remains
    - Keep host-specific limits.
    - Add bounded query-level concurrency.
 
-7. [ ] Make validation answers structured instead of a single free-form blob
+7. [x] Make validation answers structured instead of a single free-form blob
    - Store per-question answers.
    - Preserve human-readable CLI interaction.
 
-8. [ ] Eliminate configuration drift by wiring or removing unused settings
+8. [x] Eliminate configuration drift by wiring or removing unused settings
    - Review `word_count_tolerance`, `max_sources_per_direction`, `prefer_greek_sources`, and `search_language`.
 
-9. [ ] Stop duplicating model pricing in code and config
+9. [x] Stop duplicating model pricing in code and config
    - Load pricing from `config/gemini_pricing.json`.
 
-10. [ ] Expand tests around pipeline invariants
+10. [x] Expand tests around pipeline invariants
    - Add orchestration-focused tests for source selection, long-essay context assembly, validation persistence, and research ranking.
 
 ## Current Session
@@ -68,3 +68,15 @@ This file tracks the proposal backlog, what has been completed, and what remains
 - [x] Proposal #6 implemented.
 - [x] Proposal #6 tests passing: `uv run python -m pytest tests/test_refactoring.py -v`.
 - [x] Proposal #6 tracker updated to completed.
+- [x] Proposal #7 implemented.
+- [x] Proposal #7 tests passing: `uv run python -m pytest tests/test_refactoring.py -v`.
+- [x] Proposal #7 tracker updated to completed.
+- [x] Proposal #8 implemented.
+- [x] Proposal #8 tests passing: `uv run python -m pytest tests/test_refactoring.py -v`.
+- [x] Proposal #8 tracker updated to completed.
+- [x] Proposal #9 implemented.
+- [x] Proposal #9 tests passing: `uv run python -m pytest tests/test_refactoring.py -v`.
+- [x] Proposal #9 tracker updated to completed.
+- [x] Proposal #10 implemented.
+- [x] Proposal #10 tests passing: `uv run python -m pytest tests/test_refactoring.py -v`.
+- [x] Proposal #10 tracker updated to completed.

@@ -33,6 +33,7 @@ from src.schemas import (
     AssignmentBrief,
     EssayPlan,
     SourceNote,
+    ValidationQuestion,
     ValidationResult,
 )
 from src.tools.research_sources import run_research
@@ -406,12 +407,16 @@ def _do_validate(ctx: PipelineContext) -> None:
     _write_json(ctx.run_dir / "brief" / "validation.json", result)
 
 
-def _read_validation(run_dir: Path) -> str | None:
-    """Read validation.json and return formatted questions if any."""
+def _read_validation(run_dir: Path) -> ValidationResult | None:
+    """Read validation.json and return the structured validation result."""
     path = run_dir / "brief" / "validation.json"
     if not path.exists():
         return None
-    result = ValidationResult.model_validate_json(path.read_text(encoding="utf-8"))
+    return ValidationResult.model_validate_json(path.read_text(encoding="utf-8"))
+
+
+def _format_validation_questions(result: ValidationResult) -> str | None:
+    """Format validation questions for interactive CLI display."""
     if result.is_pass or not result.questions:
         return None
     lines: list[str] = []
@@ -441,6 +446,9 @@ def _do_research(ctx: PipelineContext, fetch_sources: int) -> None:
         queries=plan.research_queries,
         max_sources=fetch_sources,
         sources_dir=str(ctx.run_dir / "sources"),
+        max_sources_per_direction=ctx.config.search.max_sources_per_direction,
+        prefer_greek_sources=ctx.config.search.prefer_greek_sources,
+        search_languages=ctx.config.search.search_language,
     )
 
 
@@ -619,6 +627,10 @@ def _make_write_full(target_words: int) -> Callable[[PipelineContext], None]:
             plan_json=plan_json,
             source_notes=source_notes,
             target_words=target_words,
+            tolerance_percent=round(ctx.config.writing.word_count_tolerance * 100),
+            min_words=round(
+                target_words * (1 - ctx.config.writing.word_count_tolerance)
+            ),
         )
 
         essay = _text_call(
@@ -646,6 +658,8 @@ def _make_review_full(target_words: int) -> Callable[[PipelineContext], None]:
             draft_text=draft,
             target_words=target_words,
             draft_words=draft_words,
+            tolerance_ratio=ctx.config.writing.word_count_tolerance,
+            tolerance_percent=round(ctx.config.writing.word_count_tolerance * 100),
         )
 
         reviewed = _text_call(
@@ -697,6 +711,10 @@ def _make_write_sections(
                 source_notes=source_notes,
                 section=section,
                 prior_sections=prior_context,
+                tolerance_percent=round(ctx.config.writing.word_count_tolerance * 100),
+                min_words=round(
+                    section.word_target * (1 - ctx.config.writing.word_count_tolerance)
+                ),
             )
 
             tracker_step = f"write:{section.number}"
@@ -778,6 +796,8 @@ def _make_review_sections(
                 section=section,
                 full_essay=full_essay,
                 section_words=section_words,
+                tolerance_ratio=ctx.config.writing.word_count_tolerance,
+                tolerance_percent=round(ctx.config.writing.word_count_tolerance * 100),
             )
 
             tracker_step = f"review:{section.number}"
@@ -915,7 +935,7 @@ def run_pipeline(
     extra_prompt: str | None = None,
     callbacks: list | None = None,
     token_tracker=None,
-    on_questions: Callable[[str, Path], None] | None = None,
+    on_questions: Callable[[list[ValidationQuestion], Path], None] | None = None,
 ) -> None:
     """Execute the essay writing pipeline.
 
@@ -942,9 +962,9 @@ def run_pipeline(
     _execute([PipelineStep("validate", _do_validate)], ctx)
 
     # Check validation result
-    questions = _read_validation(run_dir)
-    if questions and on_questions:
-        on_questions(questions, run_dir)
+    validation = _read_validation(run_dir)
+    if validation and validation.questions and not validation.is_pass and on_questions:
+        on_questions(validation.questions, run_dir)
 
     # Phase 1b: plan
     _execute([PipelineStep("plan", _do_plan)], ctx)
