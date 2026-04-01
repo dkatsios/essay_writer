@@ -157,6 +157,9 @@ _HEADING_RE = re.compile(r"^(#{1,4})\s+(.+)$")
 _BULLET_RE = re.compile(r"^[\*\-]\s+(.+)$")
 _NUMBERED_RE = re.compile(r"^\d+\.\s+(.+)$")
 _INLINE_RE = re.compile(r"(\*\*\*(.+?)\*\*\*|\*\*(.+?)\*\*|\*(.+?)\*|\^\^(\d+)\^\^)")
+_TABLE_ROW_RE = re.compile(r"^\|(.+)\|\s*$")
+_TABLE_SEP_RE = re.compile(r"^\|[\s:]*-{3,}[\s:]*")
+_MD_BOLD_RE = re.compile(r"\*{1,3}(.+?)\*{1,3}")
 
 # Citation markers: [[source_id]] or [[source_id|σ. 15]]
 # Normalize [[a], [b], [c]] → [[a]] [[b]] [[c]] (common LLM mistake)
@@ -206,9 +209,19 @@ def _add_formatted_runs(paragraph, text: str) -> None:
 # ---------------------------------------------------------------------------
 
 
+def _has_valid_authors(source: dict) -> bool:
+    """Return True if the source has at least one non-blank author."""
+    return any(a.strip() for a in source.get("authors", []))
+
+
+def _clean_authors(source: dict) -> list[str]:
+    """Return author list with blank entries removed."""
+    return [a for a in source.get("authors", []) if a.strip()]
+
+
 def _format_apa_inline(source: dict, page_info: str | None) -> str:
     """Format an APA7 in-text citation string."""
-    authors = source.get("authors", [])
+    authors = _clean_authors(source)
     year = source.get("year", "n.d.")
     if not authors:
         name = source.get("title", "Unknown")[:30]
@@ -228,7 +241,7 @@ def _format_apa_inline(source: dict, page_info: str | None) -> str:
 
 def _format_bib_entry(source: dict) -> str:
     """Format a full APA7 bibliography entry."""
-    authors = source.get("authors", [])
+    authors = _clean_authors(source)
     year = source.get("year", "n.d.")
     title = source.get("title", "")
     journal = source.get("source", "")
@@ -317,6 +330,45 @@ def _process_citations(essay_text: str, sources: dict, style: str) -> str:
     return processed
 
 
+def _parse_table_rows(lines: list[str]) -> list[list[str]]:
+    """Parse pipe-delimited markdown table rows into a list of cell lists."""
+    rows: list[list[str]] = []
+    for line in lines:
+        cells = [c.strip() for c in line.strip().strip("|").split("|")]
+        rows.append(cells)
+    return rows
+
+
+def _add_table(
+    doc: Document, header_cells: list[str], data_rows: list[list[str]]
+) -> None:
+    """Add a formatted table to the document."""
+    num_cols = len(header_cells)
+    table = doc.add_table(rows=1, cols=num_cols, style="Table Grid")
+
+    # Header row
+    for i, cell_text in enumerate(header_cells):
+        cell = table.rows[0].cells[i]
+        cell.text = ""
+        p = cell.paragraphs[0]
+        p.paragraph_format.first_line_indent = None
+        run = p.add_run(cell_text)
+        run.bold = True
+
+    # Data rows
+    for row_cells in data_rows:
+        row = table.add_row()
+        for i, cell_text in enumerate(row_cells[:num_cols]):
+            cell = row.cells[i]
+            cell.text = ""
+            p = cell.paragraphs[0]
+            p.paragraph_format.first_line_indent = None
+            _add_formatted_runs(p, cell_text)
+
+    # Add a blank paragraph after the table for spacing
+    doc.add_paragraph()
+
+
 def _parse_and_add_content(doc: Document, essay_text: str) -> None:
     """Parse markdown-like essay text and add to document with proper styles."""
     lines = essay_text.split("\n")
@@ -329,13 +381,32 @@ def _parse_and_add_content(doc: Document, essay_text: str) -> None:
             _add_formatted_runs(p, text)
             current_paragraph_lines.clear()
 
-    for line in lines:
-        stripped = line.strip()
+    i = 0
+    while i < len(lines):
+        stripped = lines[i].strip()
+
+        # Detect markdown table: header row, separator row, data rows
+        if (
+            _TABLE_ROW_RE.match(stripped)
+            and i + 1 < len(lines)
+            and _TABLE_SEP_RE.match(lines[i + 1].strip())
+        ):
+            flush_paragraph()
+            header_cells = [c.strip() for c in stripped.strip("|").split("|")]
+            i += 2  # skip header and separator
+            data_lines: list[str] = []
+            while i < len(lines) and _TABLE_ROW_RE.match(lines[i].strip()):
+                data_lines.append(lines[i])
+                i += 1
+            data_rows = _parse_table_rows(data_lines)
+            _add_table(doc, header_cells, data_rows)
+            continue
+
         heading_match = _HEADING_RE.match(stripped)
         if heading_match:
             flush_paragraph()
             level = len(heading_match.group(1))
-            text = heading_match.group(2).strip()
+            text = _MD_BOLD_RE.sub(r"\1", heading_match.group(2)).strip()
             doc.add_heading(text, level=min(level, 4))
         elif stripped == "":
             flush_paragraph()
@@ -351,6 +422,8 @@ def _parse_and_add_content(doc: Document, essay_text: str) -> None:
             _add_formatted_runs(p, content)
         else:
             current_paragraph_lines.append(stripped)
+
+        i += 1
 
     flush_paragraph()
 

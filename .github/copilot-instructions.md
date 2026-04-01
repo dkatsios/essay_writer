@@ -114,7 +114,7 @@ No `default.yaml` exists; field defaults in `schemas.py` are canonical.
 - **Direct model calls** — no agent framework. `_structured_call()` uses `model.with_structured_output(Schema)` for JSON steps with auto-retry on validation failure. `_text_call()` uses `model.invoke()` for text steps.
 - **Jinja2 templates** (`src/templates/*.j2`) render prompts. 8 templates, one per pipeline task.
 - **Plain function tools** — `run_research()`, `fetch_url_content()`, `read_pdf_text()`, `read_docx_text()` are plain Python functions called by the pipeline. No `@tool` decorators.
-- **Retry logic** — `invoke_with_retry()` in `src/agent.py` handles transient 429/503 API errors with exponential backoff. `_structured_call()` retries on Pydantic `ValidationError`.
+- **Retry logic** — `invoke_with_retry()` in `src/agent.py` handles transient 429/503 API errors and timeouts with exponential backoff. All models are created with a 300-second request timeout (`_REQUEST_TIMEOUT`) to prevent hung connections. `_structured_call()` retries on Pydantic `ValidationError`.
 - **Input flow** — `scan()` extracts content and `build_extracted_text()` writes `input/extracted.md` directly into the run directory. The pipeline reads that file and passes it to the intake template.
 - **`run_research()`** — runs queries with bounded query-level concurrency, fans each query out across Semantic Scholar, OpenAlex, and Crossref, deduplicates by DOI/title, and writes registry JSON. Zero LLM tokens consumed.
 - **Config-backed search controls** — `search.max_sources_per_direction` caps per-API fetch size, and `search.prefer_greek_sources` plus `search.search_language` influence result ranking.
@@ -127,6 +127,7 @@ No `default.yaml` exists; field defaults in `schemas.py` are canonical.
 - **Config-backed word tolerance** — `writing.word_count_tolerance` controls the tolerance used in the writing and review prompts.
 - **Custom AI endpoint** — when `AI_BASE_URL` is set in `.env`, all models route through an OpenAI-compatible endpoint using `AI_API_KEY` and `AI_MODEL`.
 - **Deterministic export** — step 8 calls `build_document()` directly from Python. No LLM involved. Prefers `reviewed.md`, falls back to `draft.md`.
+- **Markdown table support** — `_parse_and_add_content()` detects standard markdown tables (pipe-delimited with `|---|` separator) and renders them as native Word tables via `doc.add_table()`. Writing templates instruct the LLM to use tables sparingly when they improve clarity.
 - **Validate step** — after intake, the worker evaluates the brief for significant gaps. If found, prints numbered questions with options and collects answers via `input()`. Answers are stored as structured `clarifications` in `assignment.json`, one entry per answered question. The `on_questions` callback in `run_pipeline` makes this interactive behavior pluggable.
 - **Structured outputs** — brief, validation, plan, and source notes are JSON files validated by Pydantic models in `src/schemas.py`. Essays remain markdown.
 

@@ -30,9 +30,11 @@ Write section {{ section.number }}: "{{ section.title }}"
 
 ## Writing Rules
 - ALL content in Modern Greek (Δημοτική), formal academic register.
+- Headings must be plain text with `#` markers only — do NOT wrap headings in `**bold**` or `*italic*`.
 - Use `[[source_id]]` citation markers.
 - Do NOT write a References/Βιβλιογραφία section.
 - Do NOT write literal `(Author, Year)` citations.
+- When data is best presented in tabular form, use standard markdown tables (`| col | col |` with a separator row). Use sparingly — only when tables genuinely improve clarity.
 {% if prior_sections %}
 
 ## Previously Written Sections (for context, in reading order)

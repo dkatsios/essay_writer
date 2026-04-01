@@ -536,7 +536,16 @@ def _select_best_sources(
         except Exception:
             inaccessible.append(sid)
 
-    accessible.sort(key=lambda x: x[1], reverse=True)
+    # Sort by content size, but deprioritize sources without valid authors
+    accessible.sort(
+        key=lambda x: (
+            1
+            if any(a.strip() for a in registry.get(x[0], {}).get("authors", []))
+            else 0,
+            x[1],
+        ),
+        reverse=True,
+    )
     selected_ids = [sid for sid, _ in accessible[:target_sources]]
 
     remaining = target_sources - len(selected_ids)

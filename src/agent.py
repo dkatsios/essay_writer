@@ -24,16 +24,22 @@ logger = logging.getLogger(__name__)
 _RETRY_MAX = 5
 _RETRY_INITIAL_DELAY = 10.0
 _RETRY_MAX_DELAY = 120.0
+_REQUEST_TIMEOUT = 300  # seconds per API request
 
 
 def _is_retryable(exc: Exception) -> bool:
-    """Return True for transient API errors (503, 429, RESOURCE_EXHAUSTED)."""
+    """Return True for transient API errors (503, 429, RESOURCE_EXHAUSTED, timeouts)."""
+    # Timeouts are retryable (hung connections, slow responses)
+    if isinstance(exc, (TimeoutError, ConnectionError)):
+        return True
     s = str(exc)
     if type(exc).__name__ == "ServerError":
         return True
     if "RESOURCE_EXHAUSTED" in s or "429" in s:
         return True
     if "UNAVAILABLE" in s or "503" in s:
+        return True
+    if "timeout" in s.lower() or "timed out" in s.lower():
         return True
     code = getattr(exc, "status_code", None)
     return bool(code and (code == 429 or 500 <= code < 600))
@@ -84,6 +90,7 @@ def create_model(model_spec: str) -> BaseChatModel:
             f"openai:{model_name}",
             base_url=base_url,
             api_key=os.environ.get("AI_API_KEY", ""),
+            timeout=_REQUEST_TIMEOUT,
         )
 
-    return init_chat_model(model_spec)
+    return init_chat_model(model_spec, timeout=_REQUEST_TIMEOUT)
