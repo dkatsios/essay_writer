@@ -352,6 +352,7 @@ def _add_table(
         cell.text = ""
         p = cell.paragraphs[0]
         p.paragraph_format.first_line_indent = None
+        p.alignment = WD_ALIGN_PARAGRAPH.LEFT
         run = p.add_run(cell_text)
         run.bold = True
 
@@ -363,6 +364,7 @@ def _add_table(
             cell.text = ""
             p = cell.paragraphs[0]
             p.paragraph_format.first_line_indent = None
+            p.alignment = WD_ALIGN_PARAGRAPH.LEFT
             _add_formatted_runs(p, cell_text)
 
     # Add a blank paragraph after the table for spacing
@@ -373,6 +375,7 @@ def _parse_and_add_content(doc: Document, essay_text: str) -> None:
     """Parse markdown-like essay text and add to document with proper styles."""
     lines = essay_text.split("\n")
     current_paragraph_lines: list[str] = []
+    skipped_first_h1 = False
 
     def flush_paragraph() -> None:
         if current_paragraph_lines:
@@ -404,9 +407,14 @@ def _parse_and_add_content(doc: Document, essay_text: str) -> None:
 
         heading_match = _HEADING_RE.match(stripped)
         if heading_match:
-            flush_paragraph()
             level = len(heading_match.group(1))
             text = _MD_BOLD_RE.sub(r"\1", heading_match.group(2)).strip()
+            # Skip the first H1 — it's the essay title already on the cover page
+            if level == 1 and not skipped_first_h1:
+                skipped_first_h1 = True
+                i += 1
+                continue
+            flush_paragraph()
             doc.add_heading(text, level=min(level, 4))
         elif stripped == "":
             flush_paragraph()

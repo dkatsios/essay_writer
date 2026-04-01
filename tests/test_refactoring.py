@@ -770,3 +770,45 @@ class TestEmptyAuthorCitations:
         result = _format_bib_entry(source)
         assert result.startswith("Unknown (2020)")
         assert ", ," not in result
+
+
+class TestH1TitleSkipping:
+    """First H1 should be skipped since it duplicates the cover page title."""
+
+    def test_first_h1_skipped(self):
+        from src.tools.docx_builder import build_document
+
+        md = "# Essay Title\n\n## Section One\n\nSome text."
+        doc = build_document(md, {"title": "Essay Title"})
+        headings = [
+            p.text for p in doc.paragraphs if p.style.name.startswith("Heading")
+        ]
+        assert "Essay Title" not in headings
+        assert "Section One" in headings
+
+    def test_second_h1_kept(self):
+        from src.tools.docx_builder import build_document
+
+        md = "# First Title\n\n## Section\n\nText.\n\n# Second H1\n\nMore text."
+        doc = build_document(md, {"title": "Test"})
+        headings = [
+            p.text for p in doc.paragraphs if p.style.name.startswith("Heading")
+        ]
+        assert "First Title" not in headings
+        assert "Second H1" in headings
+
+
+class TestTableCellAlignment:
+    """Table cells should be left-aligned, not justified."""
+
+    def test_cells_left_aligned(self):
+        from docx.enum.text import WD_ALIGN_PARAGRAPH
+
+        from src.tools.docx_builder import build_document
+
+        md = "| A | B |\n|---|---|\n| 1 | 2 |\n"
+        doc = build_document(md, {"title": "Test"})
+        table = doc.tables[0]
+        for row in table.rows:
+            for cell in row.cells:
+                assert cell.paragraphs[0].alignment == WD_ALIGN_PARAGRAPH.LEFT

@@ -888,6 +888,18 @@ def _do_export(ctx: PipelineContext) -> None:
             brief_path.read_text(encoding="utf-8")
         )
         doc_config.setdefault("title", brief.topic)
+        if brief.student:
+            doc_config.setdefault("author", brief.student)
+        if brief.institution:
+            doc_config.setdefault("institution", brief.institution)
+        if brief.course:
+            doc_config.setdefault("course", brief.course)
+        if brief.professor:
+            doc_config.setdefault("professor", brief.professor)
+        # Default date to current month/year if not provided
+        from datetime import date as _date
+
+        doc_config.setdefault("date", _date.today().strftime("%B %Y"))
 
     doc = build_document(essay_text, doc_config, sources)
 
