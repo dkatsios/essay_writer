@@ -446,9 +446,7 @@ def _do_research(ctx: PipelineContext, fetch_sources: int) -> None:
         queries=plan.research_queries,
         max_sources=fetch_sources,
         sources_dir=str(ctx.run_dir / "sources"),
-        max_sources_per_direction=ctx.config.search.max_sources_per_direction,
-        prefer_greek_sources=ctx.config.search.prefer_greek_sources,
-        search_languages=ctx.config.search.search_language,
+        fetch_per_api=ctx.config.search.fetch_per_api,
     )
 
 
@@ -560,13 +558,11 @@ def _source_read_candidates(
     target_sources: int,
 ) -> list[tuple[str, dict]]:
     """Return the ranked source subset worth reading in detail."""
-    candidates = [
+    return [
         (sid, meta)
         for sid, meta in registry.items()
         if meta.get("url") or meta.get("pdf_url")
     ]
-    read_limit = max(target_sources, math.ceil(target_sources * 1.5))
-    return candidates[:read_limit]
 
 
 def _make_read_sources(target_sources: int) -> Callable[[PipelineContext], None]:

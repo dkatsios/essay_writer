@@ -26,6 +26,7 @@ def search_openalex(query: str, max_results: int = 5) -> tuple[list[dict], dict]
         "search": query,
         "per_page": max_results,
         "mailto": mailto,
+        "sort": "relevance_score:desc",
     }
 
     try:
@@ -77,6 +78,7 @@ def search_openalex(query: str, max_results: int = 5) -> tuple[list[dict], dict]
                 "url": work.get("id", ""),
                 "pdf_url": pdf_url,
                 "source_type": source_type,
+                "citation_count": work.get("cited_by_count") or 0,
             }
         )
 

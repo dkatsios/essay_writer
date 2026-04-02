@@ -41,10 +41,8 @@ class FormattingConfig(BaseModel):
 class SearchConfig(BaseModel):
     """Academic search settings."""
 
-    max_sources_per_direction: int = 5
-    prefer_greek_sources: bool = True
-    search_language: list[str] = ["el", "en"]
-    sources_per_1k_words: int = 3
+    fetch_per_api: int = 20
+    sources_per_1k_words: int = 2
     min_sources: int = 8
     max_sources: int = 25
     overfetch_multiplier: float = 2.5

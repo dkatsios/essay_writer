@@ -50,7 +50,7 @@ def search_semantic_scholar(
     params = {
         "query": query,
         "limit": max_results,
-        "fields": "title,authors,year,abstract,externalIds,url,openAccessPdf,publicationTypes",
+        "fields": "title,authors,year,abstract,externalIds,url,openAccessPdf,publicationTypes,citationCount",
     }
 
     headers = _get_headers()
@@ -112,6 +112,7 @@ def search_semantic_scholar(
                 "url": paper.get("url", ""),
                 "pdf_url": oa_pdf.get("url", ""),
                 "source_type": pub_types[0].lower() if pub_types else "",
+                "citation_count": paper.get("citationCount") or 0,
             }
         )
 

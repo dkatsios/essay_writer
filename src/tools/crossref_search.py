@@ -28,7 +28,7 @@ def search_crossref(query: str, max_results: int = 5) -> tuple[list[dict], dict]
         "query": query,
         "rows": max_results,
         "mailto": mailto,
-        "select": "title,author,published,abstract,DOI,URL,type",
+        "select": "title,author,published,abstract,DOI,URL,type,is-referenced-by-count",
     }
 
     try:
@@ -76,6 +76,7 @@ def search_crossref(query: str, max_results: int = 5) -> tuple[list[dict], dict]
                 "url": item.get("URL", ""),
                 "pdf_url": "",
                 "source_type": (item.get("type") or "").lower(),
+                "citation_count": item.get("is-referenced-by-count") or 0,
             }
         )
 

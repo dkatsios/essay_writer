@@ -226,46 +226,73 @@ class TestResearchConcurrency:
 
 
 class TestConfigBackedBehavior:
-    def test_compute_max_per_api_respects_direction_cap(self):
-        from src.tools.research_sources import _compute_max_per_api
-
-        assert _compute_max_per_api(30, 2, 5) == 5
-        assert _compute_max_per_api(6, 4, 5) == 3
-
-    def test_build_registry_prefers_greek_sources_when_enabled(self):
+    def test_citation_rank_sorts_higher_citations_first(self):
         from src.tools.research_sources import _build_registry
 
         raw_results = [
             {
-                "title": "English title",
-                "authors": ["Alice Smith"],
+                "title": "Low citations",
+                "authors": ["A Smith"],
                 "year": 2024,
-                "abstract": "English abstract",
-                "doi": "10.1/a",
-                "url": "https://example.com/en",
-                "pdf_url": "",
-                "source_type": "journal-article",
+                "abstract": "",
+                "doi": "10.1/low",
+                "url": "https://example.com/low",
+                "pdf_url": "https://example.com/low.pdf",
+                "source_type": "",
+                "citation_count": 5,
             },
             {
-                "title": "Ελληνικός τίτλος",
-                "authors": ["Nikos Papadopoulos"],
+                "title": "High citations",
+                "authors": ["B Jones"],
                 "year": 2024,
-                "abstract": "Ελληνική περίληψη",
-                "doi": "10.1/b",
-                "url": "https://example.com/el",
+                "abstract": "",
+                "doi": "10.1/high",
+                "url": "https://example.com/high",
+                "pdf_url": "https://example.com/high.pdf",
+                "source_type": "",
+                "citation_count": 500,
+            },
+        ]
+        registry = _build_registry(raw_results, 10)
+        ids = list(registry.keys())
+        assert len(ids) == 2
+        # Higher citations should come first (both have same accessibility)
+        assert registry[ids[0]]["title"] == "High citations"
+        assert registry[ids[1]]["title"] == "Low citations"
+
+    def test_build_registry_ranks_accessible_over_doi_only(self):
+        from src.tools.research_sources import _build_registry
+
+        raw_results = [
+            {
+                "title": "DOI only paper",
+                "authors": ["Alice Smith"],
+                "year": 2024,
+                "abstract": "Some abstract",
+                "doi": "10.1/a",
+                "url": "",
                 "pdf_url": "",
                 "source_type": "journal-article",
+                "citation_count": 100,
+            },
+            {
+                "title": "OA PDF paper",
+                "authors": ["Bob Jones"],
+                "year": 2024,
+                "abstract": "Another abstract",
+                "doi": "10.1/b",
+                "url": "https://example.com/b",
+                "pdf_url": "https://example.com/b.pdf",
+                "source_type": "journal-article",
+                "citation_count": 10,
             },
         ]
 
-        registry = _build_registry(
-            raw_results,
-            max_sources=2,
-            prefer_greek_sources=True,
-            search_languages=["el", "en"],
-        )
-
-        assert list(registry.values())[0]["title"] == "Ελληνικός τίτλος"
+        registry = _build_registry(raw_results, 10)
+        ids = list(registry.keys())
+        assert len(ids) == 2
+        # OA PDF should rank higher than DOI-only despite fewer citations
+        assert registry[ids[0]]["title"] == "OA PDF paper"
 
     def test_rendered_review_prompt_uses_configured_tolerance(self):
         from src.rendering import render_prompt
@@ -555,20 +582,20 @@ class TestSelectedSourceNotes:
         assert [note.source_id for note in notes] == ["alpha2024", "beta2024"]
         assert "Selected sources had no accessible notes" in caplog.text
 
-    def test_source_read_candidates_limits_detail_reads(self):
+    def test_source_read_candidates_returns_all_with_urls(self):
         from src.pipeline import _source_read_candidates
 
         registry = {
             f"s{i}": {"title": f"Source {i}", "url": f"https://example.com/{i}"}
             for i in range(1, 21)
         }
+        # Add one without URL — should be excluded
+        registry["s_no_url"] = {"title": "No URL source"}
 
         candidates = _source_read_candidates(registry, target_sources=8)
 
-        assert len(candidates) == 12
-        assert [source_id for source_id, _ in candidates] == [
-            f"s{i}" for i in range(1, 13)
-        ]
+        assert len(candidates) == 20
+        assert all(sid != "s_no_url" for sid, _ in candidates)
 
 
 class TestLongEssayContextHelpers:
