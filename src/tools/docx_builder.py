@@ -387,12 +387,17 @@ def _parse_and_add_content(doc: Document, essay_text: str) -> None:
     lines = essay_text.split("\n")
     current_paragraph_lines: list[str] = []
     skipped_first_h1 = False
+    in_bibliography = False
 
     def flush_paragraph() -> None:
         if current_paragraph_lines:
             text = " ".join(current_paragraph_lines)
             p = doc.add_paragraph()
             _add_formatted_runs(p, text)
+            if in_bibliography:
+                p.alignment = WD_ALIGN_PARAGRAPH.LEFT
+                p.paragraph_format.first_line_indent = Cm(0)
+                p.paragraph_format.space_after = Pt(6)
             current_paragraph_lines.clear()
 
     i = 0
@@ -426,6 +431,15 @@ def _parse_and_add_content(doc: Document, essay_text: str) -> None:
                 i += 1
                 continue
             flush_paragraph()
+            # Detect bibliography/references section for left-aligned formatting
+            lower_text = text.lower()
+            if lower_text in (
+                "βιβλιογραφία",
+                "σημειώσεις",
+                "references",
+                "bibliography",
+            ):
+                in_bibliography = True
             doc.add_heading(text, level=min(level, 4))
         elif stripped == "":
             flush_paragraph()
