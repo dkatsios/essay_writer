@@ -583,7 +583,7 @@ class TestSelectedSourceNotes:
         assert [note.source_id for note in notes] == ["alpha2024", "beta2024"]
         assert "Selected sources had no accessible notes" in caplog.text
 
-    def test_source_read_candidates_returns_all_with_urls(self):
+    def test_source_read_candidates_caps_at_2x_target(self):
         from src.pipeline import _source_read_candidates
 
         registry = {
@@ -595,7 +595,8 @@ class TestSelectedSourceNotes:
 
         candidates = _source_read_candidates(registry, target_sources=8)
 
-        assert len(candidates) == 20
+        # 2 × 8 = 16, and s_no_url excluded, so 16 from the 20 with URLs
+        assert len(candidates) == 16
         assert all(sid != "s_no_url" for sid, _ in candidates)
 
 

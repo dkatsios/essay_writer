@@ -570,12 +570,18 @@ def _source_read_candidates(
     registry: dict[str, dict],
     target_sources: int,
 ) -> list[tuple[str, dict]]:
-    """Return the ranked source subset worth reading in detail."""
-    return [
+    """Return the ranked source subset worth reading in detail.
+
+    Reads up to 2× target_sources — enough headroom for good selection
+    without burning LLM calls on sources that won't be used.
+    """
+    candidates = [
         (sid, meta)
         for sid, meta in registry.items()
         if meta.get("url") or meta.get("pdf_url")
     ]
+    read_limit = target_sources * 2
+    return candidates[:read_limit]
 
 
 def _make_read_sources(target_sources: int) -> Callable[[PipelineContext], None]:
