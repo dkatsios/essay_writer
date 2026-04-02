@@ -896,10 +896,27 @@ def _do_export(ctx: PipelineContext) -> None:
             doc_config.setdefault("course", brief.course)
         if brief.professor:
             doc_config.setdefault("professor", brief.professor)
-        # Default date to current month/year if not provided
-        from datetime import date as _date
+        # Default date to current month/year in Greek
+        if "date" not in doc_config:
+            from datetime import date as _date
 
-        doc_config.setdefault("date", _date.today().strftime("%B %Y"))
+            _GREEK_MONTHS = [
+                "",
+                "Ιανουάριος",
+                "Φεβρουάριος",
+                "Μάρτιος",
+                "Απρίλιος",
+                "Μάιος",
+                "Ιούνιος",
+                "Ιούλιος",
+                "Αύγουστος",
+                "Σεπτέμβριος",
+                "Οκτώβριος",
+                "Νοέμβριος",
+                "Δεκέμβριος",
+            ]
+            today = _date.today()
+            doc_config["date"] = f"{_GREEK_MONTHS[today.month]} {today.year}"
 
     doc = build_document(essay_text, doc_config, sources)
 

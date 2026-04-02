@@ -83,11 +83,22 @@ def _add_cover_page(doc: Document, config: dict) -> None:
     doc.add_page_break()
 
 
+def _normalize_toc_styles(doc: Document, font_name: str, font_size: Pt) -> None:
+    """Ensure TOC heading styles use the document font instead of template defaults."""
+    for level in range(1, 5):
+        style_name = f"TOC {level}"
+        if style_name in doc.styles:
+            style = doc.styles[style_name]
+            style.font.name = font_name
+            style.font.size = font_size
+            style.paragraph_format.space_after = Pt(4)
+
+
 def _add_native_toc(doc: Document) -> None:
     """Insert a native Word TOC field that auto-updates when opened."""
     p = doc.add_paragraph()
     p.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    p.paragraph_format.first_line_indent = None
+    p.paragraph_format.first_line_indent = Cm(0)
     run = p.add_run("ΠΙΝΑΚΑΣ ΠΕΡΙΕΧΟΜΕΝΩΝ")
     run.bold = True
     run.font.size = Pt(14)
@@ -96,7 +107,7 @@ def _add_native_toc(doc: Document) -> None:
 
     # Insert TOC field code
     p = doc.add_paragraph()
-    p.paragraph_format.first_line_indent = None
+    p.paragraph_format.first_line_indent = Cm(0)
 
     run1 = p.add_run()
     fld_begin = OxmlElement("w:fldChar")
@@ -351,7 +362,7 @@ def _add_table(
         cell = table.rows[0].cells[i]
         cell.text = ""
         p = cell.paragraphs[0]
-        p.paragraph_format.first_line_indent = None
+        p.paragraph_format.first_line_indent = Cm(0)
         p.alignment = WD_ALIGN_PARAGRAPH.LEFT
         run = p.add_run(cell_text)
         run.bold = True
@@ -363,7 +374,7 @@ def _add_table(
             cell = row.cells[i]
             cell.text = ""
             p = cell.paragraphs[0]
-            p.paragraph_format.first_line_indent = None
+            p.paragraph_format.first_line_indent = Cm(0)
             p.alignment = WD_ALIGN_PARAGRAPH.LEFT
             _add_formatted_runs(p, cell_text)
 
@@ -442,6 +453,9 @@ def build_document(
     """Build a complete .docx document from essay text and config."""
     doc = Document()
     _set_document_defaults(doc, config)
+    font_name = config.get("font", "Times New Roman")
+    font_size = Pt(config.get("font_size", 12))
+    _normalize_toc_styles(doc, font_name, font_size)
     _add_cover_page(doc, config)
     _add_native_toc(doc)
 
