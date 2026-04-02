@@ -9,6 +9,7 @@ There is no orchestration framework or virtual filesystem layer in the runtime.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 import time
@@ -63,6 +64,29 @@ def invoke_with_retry(
                     delay,
                 )
                 time.sleep(delay)
+                delay = min(delay * 2, _RETRY_MAX_DELAY)
+                continue
+            raise
+
+
+async def ainvoke_with_retry(
+    model: BaseChatModel, messages: list, *, config: dict | None = None
+):
+    """Async version of invoke_with_retry using ainvoke + asyncio.sleep."""
+    delay = _RETRY_INITIAL_DELAY
+    for attempt in range(_RETRY_MAX + 1):
+        try:
+            return await model.ainvoke(messages, config=config)
+        except Exception as exc:
+            if attempt < _RETRY_MAX and _is_retryable(exc):
+                logger.warning(
+                    "Transient API error (attempt %d/%d): %s — retrying in %.0fs",
+                    attempt + 1,
+                    _RETRY_MAX,
+                    exc,
+                    delay,
+                )
+                await asyncio.sleep(delay)
                 delay = min(delay * 2, _RETRY_MAX_DELAY)
                 continue
             raise

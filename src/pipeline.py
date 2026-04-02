@@ -17,7 +17,6 @@ import json
 import logging
 import math
 import sys
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from pathlib import Path
 from time import monotonic
@@ -171,6 +170,47 @@ def _structured_call(
 
     # Unreachable, but satisfies type checker
     raise RuntimeError("Structured call exhausted retries")
+
+
+async def _async_structured_call(
+    model: BaseChatModel,
+    prompt: str,
+    schema: type[BaseModel],
+    callbacks: list | None = None,
+    retries: int = _STRUCTURED_RETRIES,
+) -> BaseModel:
+    """Async version of _structured_call."""
+    from src.agent import ainvoke_with_retry
+
+    structured = model.with_structured_output(schema, method="json_schema")
+    messages = [HumanMessage(content=prompt)]
+    run_config = {"callbacks": callbacks} if callbacks else None
+
+    for attempt in range(retries + 1):
+        try:
+            result = await ainvoke_with_retry(structured, messages, config=run_config)
+            if isinstance(result, BaseModel):
+                return result
+            return schema.model_validate(result)
+        except (ValidationError, Exception) as exc:
+            if attempt < retries and isinstance(exc, ValidationError):
+                logger.warning(
+                    "Structured output validation failed (attempt %d/%d): %s",
+                    attempt + 1,
+                    retries + 1,
+                    exc,
+                )
+                messages = [
+                    HumanMessage(content=prompt),
+                    HumanMessage(
+                        content=f"Your previous output had validation errors:\n{exc}\n"
+                        "Please fix these errors and try again."
+                    ),
+                ]
+                continue
+            raise
+
+    raise RuntimeError("Async structured call exhausted retries")
 
 
 def _text_call(
@@ -525,6 +565,69 @@ def _read_one_source(
     )
 
 
+async def _async_read_one_source(
+    source_id: str,
+    meta: dict,
+    worker: BaseChatModel,
+    sources_dir: str,
+    callbacks: list | None,
+) -> SourceNote:
+    """Async: fetch content in a thread, then extract notes via ainvoke."""
+    import asyncio
+
+    url = meta.get("pdf_url") or meta.get("url", "")
+    content = ""
+
+    if url:
+        try:
+            content = await asyncio.to_thread(
+                fetch_url_content, url, sources_dir=sources_dir
+            )
+            if len(content) > 50_000:
+                content = content[:50_000] + "\n\n[... truncated ...]"
+        except (httpx.HTTPStatusError, httpx.RequestError, Exception) as exc:
+            logger.warning("Failed to fetch %s: %s", url, exc)
+
+    abstract = meta.get("abstract", "")
+    if content or abstract:
+        prompt = render_prompt(
+            "source_reading.j2",
+            source_id=source_id,
+            title=meta.get("title", ""),
+            authors=", ".join(meta.get("authors", [])),
+            year=meta.get("year", ""),
+            doi=meta.get("doi", ""),
+            abstract=abstract,
+            content=content,
+        )
+        try:
+            return await _async_structured_call(worker, prompt, SourceNote, callbacks)
+        except Exception:
+            logger.warning("LLM extraction failed for %s, using metadata", source_id)
+
+    if abstract:
+        return SourceNote(
+            source_id=source_id,
+            is_accessible=True,
+            title=meta.get("title", ""),
+            authors=meta.get("authors", []),
+            year=meta.get("year"),
+            source_type=meta.get("source_type"),
+            summary=abstract,
+            url=url,
+        )
+
+    return SourceNote(
+        source_id=source_id,
+        is_accessible=False,
+        title=meta.get("title", ""),
+        authors=meta.get("authors", []),
+        year=meta.get("year"),
+        inaccessible_reason="No content or abstract available",
+        url=url,
+    )
+
+
 def _select_best_sources(
     run_dir: Path, registry: dict, target_sources: int
 ) -> dict[str, dict]:
@@ -584,8 +687,13 @@ def _source_read_candidates(
     return candidates[:read_limit]
 
 
+_SOURCE_READ_CONCURRENCY = 6
+
+
 def _make_read_sources(target_sources: int) -> Callable[[PipelineContext], None]:
     def _do_read_sources(ctx: PipelineContext) -> None:
+        import asyncio
+
         registry_path = ctx.run_dir / "sources" / "registry.json"
         if not registry_path.exists():
             logger.warning("No registry.json found -- skipping source reading.")
@@ -602,24 +710,28 @@ def _make_read_sources(target_sources: int) -> Callable[[PipelineContext], None]
         notes_dir = ctx.run_dir / "sources" / "notes"
         notes_dir.mkdir(parents=True, exist_ok=True)
 
-        def read_one(args: tuple[str, dict]) -> tuple[str, SourceNote]:
-            sid, meta = args
-            note = _read_one_source(sid, meta, ctx.worker, sources_dir, ctx.callbacks)
-            _write_json(notes_dir / f"{sid}.json", note)
-            return sid, note
+        semaphore = asyncio.Semaphore(_SOURCE_READ_CONCURRENCY)
 
-        accessible_count = 0
-        with ThreadPoolExecutor(max_workers=6) as pool:
-            futures = {pool.submit(read_one, t): t[0] for t in tasks}
-            for future in as_completed(futures):
-                sid = futures[future]
+        async def read_one(sid: str, meta: dict) -> tuple[str, SourceNote | None]:
+            async with semaphore:
                 try:
-                    _, note = future.result()
-                    if note.is_accessible:
-                        accessible_count += 1
+                    note = await _async_read_one_source(
+                        sid, meta, ctx.worker, sources_dir, ctx.callbacks
+                    )
+                    _write_json(notes_dir / f"{sid}.json", note)
+                    return sid, note
                 except Exception:
                     logger.exception("Failed to read source %s", sid)
+                    return sid, None
 
+        async def read_all() -> list[tuple[str, SourceNote | None]]:
+            return await asyncio.gather(*(read_one(sid, meta) for sid, meta in tasks))
+
+        results = asyncio.run(read_all())
+
+        accessible_count = sum(
+            1 for _, note in results if note is not None and note.is_accessible
+        )
         inaccessible_count = len(tasks) - accessible_count
 
         # Select best N sources
