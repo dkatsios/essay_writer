@@ -609,7 +609,7 @@ def _make_read_sources(target_sources: int) -> Callable[[PipelineContext], None]
             return sid, note
 
         accessible_count = 0
-        with ThreadPoolExecutor(max_workers=3) as pool:
+        with ThreadPoolExecutor(max_workers=6) as pool:
             futures = {pool.submit(read_one, t): t[0] for t in tasks}
             for future in as_completed(futures):
                 sid = futures[future]
