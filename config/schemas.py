@@ -42,10 +42,10 @@ class SearchConfig(BaseModel):
     """Academic search settings."""
 
     fetch_per_api: int = 20
-    sources_per_1k_words: int = 2
+    sources_per_1k_words: int = 3
     min_sources: int = 8
     max_sources: int = 25
-    overfetch_multiplier: float = 2.5
+    overfetch_multiplier: float = 3.0
 
 
 class PathsConfig(BaseModel):

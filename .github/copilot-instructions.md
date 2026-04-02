@@ -28,7 +28,7 @@ uv run python -c "from src.agent import create_model, invoke_with_retry"
 
 ## Architecture
 
-Deterministic Python pipeline for academic essay writing using direct LangChain model calls rather than a deepagents/LangGraph orchestration layer. Produces academic essays in Greek as formatted `.docx` files. A Python pipeline (`src/pipeline.py`) controls the 8-step workflow; three LLM model roles — **worker**, **writer**, and **reviewer** — perform the language tasks.
+Deterministic Python pipeline for academic essay writing using direct LangChain model calls rather than a deepagents/LangGraph orchestration layer. Produces academic essays as formatted `.docx` files in the language specified by the assignment brief (defaults to Greek). A Python pipeline (`src/pipeline.py`) controls the 8-step workflow; three LLM model roles — **worker**, **writer**, and **reviewer** — perform the language tasks.
 
 ### Flow
 

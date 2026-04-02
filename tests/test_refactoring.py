@@ -305,6 +305,7 @@ class TestConfigBackedBehavior:
             section_words=96,
             tolerance_ratio=0.05,
             tolerance_percent=5,
+            language="English",
         )
 
         assert "within ±5%" in prompt

@@ -222,6 +222,17 @@ def _read_text(path: Path) -> str:
     return path.read_text(encoding="utf-8")
 
 
+def _get_brief_language(run_dir: Path) -> str:
+    """Read the essay language from the assignment brief."""
+    brief_path = run_dir / "brief" / "assignment.json"
+    if brief_path.exists():
+        brief = AssignmentBrief.model_validate_json(
+            brief_path.read_text(encoding="utf-8")
+        )
+        return brief.language
+    return "Greek (Δημοτική)"
+
+
 # ---------------------------------------------------------------------------
 # Plan parsing
 # ---------------------------------------------------------------------------
@@ -401,7 +412,8 @@ def _do_intake(ctx: PipelineContext) -> None:
 
 def _do_validate(ctx: PipelineContext) -> None:
     brief_json = _read_text(ctx.run_dir / "brief" / "assignment.json")
-    prompt = render_prompt("validate.j2", brief_json=brief_json)
+    language = _get_brief_language(ctx.run_dir)
+    prompt = render_prompt("validate.j2", brief_json=brief_json, language=language)
 
     result = _structured_call(ctx.worker, prompt, ValidationResult, ctx.callbacks)
     _write_json(ctx.run_dir / "brief" / "validation.json", result)
@@ -431,7 +443,8 @@ def _format_validation_questions(result: ValidationResult) -> str | None:
 
 def _do_plan(ctx: PipelineContext) -> None:
     brief_json = _read_text(ctx.run_dir / "brief" / "assignment.json")
-    prompt = render_prompt("plan.j2", brief_json=brief_json)
+    language = _get_brief_language(ctx.run_dir)
+    prompt = render_prompt("plan.j2", brief_json=brief_json, language=language)
 
     plan = _structured_call(ctx.worker, prompt, EssayPlan, ctx.callbacks)
     _write_json(ctx.run_dir / "plan" / "plan.json", plan)
@@ -635,6 +648,7 @@ def _make_write_full(target_words: int) -> Callable[[PipelineContext], None]:
         brief_json = _read_text(ctx.run_dir / "brief" / "assignment.json")
         plan_json = _read_text(ctx.run_dir / "plan" / "plan.json")
         source_notes = _load_selected_source_notes(ctx.run_dir)
+        language = _get_brief_language(ctx.run_dir)
 
         prompt = render_prompt(
             "essay_writing.j2",
@@ -646,11 +660,12 @@ def _make_write_full(target_words: int) -> Callable[[PipelineContext], None]:
             min_words=round(
                 target_words * (1 - ctx.config.writing.word_count_tolerance)
             ),
+            language=language,
         )
 
         essay = _text_call(
             ctx.writer,
-            "You are an expert academic writer producing essays in Modern Greek (Δημοτική).",
+            f"You are an expert academic writer producing essays in {language}.",
             prompt,
             ctx.callbacks,
         )
@@ -665,6 +680,7 @@ def _make_review_full(target_words: int) -> Callable[[PipelineContext], None]:
         plan_json = _read_text(ctx.run_dir / "plan" / "plan.json")
         draft = _read_text(ctx.run_dir / "essay" / "draft.md")
         draft_words = len(draft.split())
+        language = _get_brief_language(ctx.run_dir)
 
         prompt = render_prompt(
             "essay_review.j2",
@@ -675,11 +691,12 @@ def _make_review_full(target_words: int) -> Callable[[PipelineContext], None]:
             draft_words=draft_words,
             tolerance_ratio=ctx.config.writing.word_count_tolerance,
             tolerance_percent=round(ctx.config.writing.word_count_tolerance * 100),
+            language=language,
         )
 
         reviewed = _text_call(
             ctx.reviewer,
-            "You are an expert academic editor polishing essays in Modern Greek (Δημοτική).",
+            f"You are an expert academic editor polishing essays in {language}.",
             prompt,
             ctx.callbacks,
         )
@@ -713,6 +730,7 @@ def _make_write_sections(
 
         plan_json = _read_text(ctx.run_dir / "plan" / "plan.json")
         source_notes = _load_selected_source_notes(ctx.run_dir)
+        language = _get_brief_language(ctx.run_dir)
         order = _writing_order(sections)
         written_sections: list[tuple[Section, str]] = []
 
@@ -730,6 +748,7 @@ def _make_write_sections(
                 min_words=round(
                     section.word_target * (1 - ctx.config.writing.word_count_tolerance)
                 ),
+                language=language,
             )
 
             tracker_step = f"write:{section.number}"
@@ -739,7 +758,7 @@ def _make_write_sections(
             t0 = monotonic()
             text = _text_call(
                 ctx.writer,
-                "You are an expert academic writer producing essays in Modern Greek (Δημοτική).",
+                f"You are an expert academic writer producing essays in {language}.",
                 prompt,
                 ctx.callbacks,
             )
@@ -781,6 +800,7 @@ def _make_review_sections(
         reviewed_dir = ctx.run_dir / "essay" / "reviewed"
         reviewed_dir.mkdir(parents=True, exist_ok=True)
         plan_order = sorted(sections, key=lambda s: s.number)
+        language = _get_brief_language(ctx.run_dir)
 
         def _best_path(s: Section) -> Path:
             rp = reviewed_dir / _section_filename(s)
@@ -813,6 +833,7 @@ def _make_review_sections(
                 section_words=section_words,
                 tolerance_ratio=ctx.config.writing.word_count_tolerance,
                 tolerance_percent=round(ctx.config.writing.word_count_tolerance * 100),
+                language=language,
             )
 
             tracker_step = f"review:{section.number}"
@@ -822,7 +843,7 @@ def _make_review_sections(
             t0 = monotonic()
             reviewed = _text_call(
                 ctx.reviewer,
-                "You are an expert academic editor polishing essays in Modern Greek (Δημοτική).",
+                f"You are an expert academic editor polishing essays in {language}.",
                 prompt,
                 ctx.callbacks,
             )
@@ -892,27 +913,46 @@ def _do_export(ctx: PipelineContext) -> None:
             doc_config.setdefault("course", brief.course)
         if brief.professor:
             doc_config.setdefault("professor", brief.professor)
-        # Default date to current month/year in Greek
+        # Default date in the essay's language
         if "date" not in doc_config:
             from datetime import date as _date
 
-            _GREEK_MONTHS = [
-                "",
-                "Ιανουάριος",
-                "Φεβρουάριος",
-                "Μάρτιος",
-                "Απρίλιος",
-                "Μάιος",
-                "Ιούνιος",
-                "Ιούλιος",
-                "Αύγουστος",
-                "Σεπτέμβριος",
-                "Οκτώβριος",
-                "Νοέμβριος",
-                "Δεκέμβριος",
-            ]
+            _MONTHS = {
+                "Greek (Δημοτική)": [
+                    "",
+                    "Ιανουάριος",
+                    "Φεβρουάριος",
+                    "Μάρτιος",
+                    "Απρίλιος",
+                    "Μάιος",
+                    "Ιούνιος",
+                    "Ιούλιος",
+                    "Αύγουστος",
+                    "Σεπτέμβριος",
+                    "Οκτώβριος",
+                    "Νοέμβριος",
+                    "Δεκέμβριος",
+                ],
+                "English": [
+                    "",
+                    "January",
+                    "February",
+                    "March",
+                    "April",
+                    "May",
+                    "June",
+                    "July",
+                    "August",
+                    "September",
+                    "October",
+                    "November",
+                    "December",
+                ],
+            }
             today = _date.today()
-            doc_config["date"] = f"{_GREEK_MONTHS[today.month]} {today.year}"
+            lang = brief.language if brief_path.exists() else "English"
+            months = _MONTHS.get(lang, _MONTHS["English"])
+            doc_config["date"] = f"{months[today.month]} {today.year}"
 
     doc = build_document(essay_text, doc_config, sources)
 
