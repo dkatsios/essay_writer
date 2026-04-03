@@ -16,12 +16,15 @@ from __future__ import annotations
 import json
 import logging
 import math
+import re
 import sys
+import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from pathlib import Path
 from time import monotonic
 from typing import TYPE_CHECKING
+from urllib.parse import urlparse
 
 import httpx
 from langchain_core.language_models import BaseChatModel
@@ -48,6 +51,42 @@ logger = logging.getLogger(__name__)
 
 _MAX_PRIOR_SECTION_CONTEXT = 2
 _REVIEW_SECTION_NEIGHBORS = 1
+
+# Words that signal an abstract is not useful content
+_JUNK_ABSTRACT_PATTERNS = re.compile(
+    r"\b(funding|acknowledgment|grant|supported by|no abstract)\b", re.IGNORECASE
+)
+_MIN_ABSTRACT_WORDS = 20
+
+
+def _is_useful_abstract(text: str) -> bool:
+    """Return True if the abstract has enough substance for LLM extraction."""
+    words = text.split()
+    if len(words) < _MIN_ABSTRACT_WORDS:
+        return False
+    # If majority of content is junk keywords, skip
+    if _JUNK_ABSTRACT_PATTERNS.search(text) and len(words) < 40:
+        return False
+    return True
+
+
+class _DomainFailureTracker:
+    """Track domains that return 429 and skip after threshold."""
+
+    def __init__(self, max_failures: int = 2) -> None:
+        self._counts: dict[str, int] = {}
+        self._lock = threading.Lock()
+        self._max = max_failures
+
+    def record_failure(self, url: str) -> None:
+        domain = urlparse(url).netloc
+        with self._lock:
+            self._counts[domain] = self._counts.get(domain, 0) + 1
+
+    def should_skip(self, url: str) -> bool:
+        domain = urlparse(url).netloc
+        with self._lock:
+            return self._counts.get(domain, 0) >= self._max
 
 
 # ---------------------------------------------------------------------------
@@ -510,23 +549,31 @@ def _read_one_source(
     worker: BaseChatModel,
     sources_dir: str,
     callbacks: list | None,
+    domain_tracker: _DomainFailureTracker | None = None,
 ) -> SourceNote:
     """Fetch and extract notes for a single source."""
     url = meta.get("pdf_url") or meta.get("url", "")
     content = ""
 
     if url:
-        try:
-            content = fetch_url_content(url, sources_dir=sources_dir)
-            # Truncate very long content to avoid token limits
-            if len(content) > 50_000:
-                content = content[:50_000] + "\n\n[... truncated ...]"
-        except (httpx.HTTPStatusError, httpx.RequestError, Exception) as exc:
-            logger.warning("Failed to fetch %s: %s", url, exc)
+        if domain_tracker and domain_tracker.should_skip(url):
+            logger.info("Skipping %s — domain throttled", url)
+        else:
+            try:
+                content = fetch_url_content(url, sources_dir=sources_dir)
+                # Truncate very long content to avoid token limits
+                if len(content) > 50_000:
+                    content = content[:50_000] + "\n\n[... truncated ...]"
+            except httpx.HTTPStatusError as exc:
+                logger.warning("Failed to fetch %s: %s", url, exc)
+                if exc.response.status_code == 429 and domain_tracker:
+                    domain_tracker.record_failure(url)
+            except (httpx.RequestError, Exception) as exc:
+                logger.warning("Failed to fetch %s: %s", url, exc)
 
-    # If we have content or at least an abstract, use LLM to extract notes
+    # If we have content or at least a useful abstract, use LLM to extract notes
     abstract = meta.get("abstract", "")
-    if content or abstract:
+    if content or _is_useful_abstract(abstract):
         prompt = render_prompt(
             "source_reading.j2",
             source_id=source_id,
@@ -543,7 +590,7 @@ def _read_one_source(
             logger.warning("LLM extraction failed for %s, using metadata", source_id)
 
     # Fallback: construct note from metadata alone
-    if abstract:
+    if _is_useful_abstract(abstract):
         return SourceNote(
             source_id=source_id,
             is_accessible=True,
@@ -555,13 +602,19 @@ def _read_one_source(
             url=url,
         )
 
+    reason = (
+        "Abstract too short or not useful"
+        if abstract
+        else "No content or abstract available"
+    )
+    logger.info("Skipping LLM read for %s: %s", source_id, reason)
     return SourceNote(
         source_id=source_id,
         is_accessible=False,
         title=meta.get("title", ""),
         authors=meta.get("authors", []),
         year=meta.get("year"),
-        inaccessible_reason="No content or abstract available",
+        inaccessible_reason=reason,
         url=url,
     )
 
@@ -572,6 +625,7 @@ async def _async_read_one_source(
     worker: BaseChatModel,
     sources_dir: str,
     callbacks: list | None,
+    domain_tracker: _DomainFailureTracker | None = None,
 ) -> SourceNote:
     """Async: fetch content in a thread, then extract notes via ainvoke."""
     import asyncio
@@ -580,17 +634,24 @@ async def _async_read_one_source(
     content = ""
 
     if url:
-        try:
-            content = await asyncio.to_thread(
-                fetch_url_content, url, sources_dir=sources_dir
-            )
-            if len(content) > 50_000:
-                content = content[:50_000] + "\n\n[... truncated ...]"
-        except (httpx.HTTPStatusError, httpx.RequestError, Exception) as exc:
-            logger.warning("Failed to fetch %s: %s", url, exc)
+        if domain_tracker and domain_tracker.should_skip(url):
+            logger.info("Skipping %s — domain throttled", url)
+        else:
+            try:
+                content = await asyncio.to_thread(
+                    fetch_url_content, url, sources_dir=sources_dir
+                )
+                if len(content) > 50_000:
+                    content = content[:50_000] + "\n\n[... truncated ...]"
+            except httpx.HTTPStatusError as exc:
+                logger.warning("Failed to fetch %s: %s", url, exc)
+                if exc.response.status_code == 429 and domain_tracker:
+                    domain_tracker.record_failure(url)
+            except (httpx.RequestError, Exception) as exc:
+                logger.warning("Failed to fetch %s: %s", url, exc)
 
     abstract = meta.get("abstract", "")
-    if content or abstract:
+    if content or _is_useful_abstract(abstract):
         prompt = render_prompt(
             "source_reading.j2",
             source_id=source_id,
@@ -606,7 +667,7 @@ async def _async_read_one_source(
         except Exception:
             logger.warning("LLM extraction failed for %s, using metadata", source_id)
 
-    if abstract:
+    if _is_useful_abstract(abstract):
         return SourceNote(
             source_id=source_id,
             is_accessible=True,
@@ -618,13 +679,19 @@ async def _async_read_one_source(
             url=url,
         )
 
+    reason = (
+        "Abstract too short or not useful"
+        if abstract
+        else "No content or abstract available"
+    )
+    logger.info("Skipping LLM read for %s: %s", source_id, reason)
     return SourceNote(
         source_id=source_id,
         is_accessible=False,
         title=meta.get("title", ""),
         authors=meta.get("authors", []),
         year=meta.get("year"),
-        inaccessible_reason="No content or abstract available",
+        inaccessible_reason=reason,
         url=url,
     )
 
@@ -711,13 +778,19 @@ def _make_read_sources(target_sources: int) -> Callable[[PipelineContext], None]
         notes_dir = ctx.run_dir / "sources" / "notes"
         notes_dir.mkdir(parents=True, exist_ok=True)
 
+        domain_tracker = _DomainFailureTracker()
         semaphore = asyncio.Semaphore(_SOURCE_READ_CONCURRENCY)
 
         async def read_one(sid: str, meta: dict) -> tuple[str, SourceNote | None]:
             async with semaphore:
                 try:
                     note = await _async_read_one_source(
-                        sid, meta, ctx.worker, sources_dir, ctx.callbacks
+                        sid,
+                        meta,
+                        ctx.worker,
+                        sources_dir,
+                        ctx.callbacks,
+                        domain_tracker=domain_tracker,
                     )
                     _write_json(notes_dir / f"{sid}.json", note)
                     return sid, note
