@@ -5,19 +5,26 @@ You are an expert academic editor reviewing a single essay section in {{ languag
 Review and improve section {{ section.number }}: "{{ section.title }}"
 - **Word target**: {{ section.word_target }} words
 
-The section to review is between the delimiters below. Output ONLY the improved version of that section.
+The section to review is between the `SECTION TO REVIEW` delimiters below. Adjacent sections are included for transition context only.
+Output ONLY the improved version of the target section — do NOT output adjacent sections.
 
-## Full Essay
+## Essay Context
 
 {{ full_essay }}
 
 ## Review Focus
-- Fix grammar and awkward phrasing.
+- Fix grammar, spelling, and awkward phrasing.
+- Tighten prose: eliminate filler, redundancy, and unnecessary qualifiers.
+- Improve transitions to/from adjacent sections for coherent reading.
+- Ensure clarity and precision — prefer concise, direct expression.
 - Headings must be plain text with `#` markers only — remove any `**` or `*` wrapping from headings.
-- Ensure smooth transitions to/from adjacent sections.
-- Ensure every claim has a `[[source_id]]` marker.
-- Keep `[[source_id]]` markers intact — do NOT replace with literal citations.
+
+## Preserve — Do NOT Change
+- The argument structure, thesis, and tone — improve expression, do not dramatize or intensify.
+- The register and style of the draft — do not add vivid, dramatic, or rhetorical flourishes.
+- All `[[source_id]]` markers — keep them intact, do NOT replace with literal citations.
 - Do NOT add a References/Βιβλιογραφία section.
+- Do NOT add new arguments, claims, or elaboration not present in the draft.
 
 ## Word Count — CRITICAL
 {% set delta = section_words - section.word_target %}
@@ -28,7 +35,7 @@ You MUST cut approximately {{ delta }} words. Remove redundancy, tighten phrasin
 Do NOT add new content. Focus on making the text leaner while preserving every argument and citation.
 {% elif delta < -tolerance %}
 ⚠ The section is **{{ section_words }}** words — **{{ (-delta) }}** words UNDER the target of {{ section.word_target }}.
-You MUST expand by approximately {{ (-delta) }} words. Add deeper analysis, more supporting evidence, and richer discussion.
+You MUST expand by approximately {{ (-delta) }} words. Elaborate on existing points with more detail or nuance — do NOT introduce new arguments or dramatic language.
 {% else %}
 The section is **{{ section_words }}** words (target: {{ section.word_target }}). Length is acceptable (within ±{{ tolerance_percent }}%).
 Focus on quality improvements only. Do NOT significantly change the word count.

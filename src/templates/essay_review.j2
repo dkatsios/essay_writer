@@ -17,12 +17,14 @@ You are an expert academic editor reviewing and polishing an essay in {{ languag
 Review and improve the draft following the criteria below. Output the complete polished essay.
 
 ## Review Focus
-- Fix grammar and awkward phrasing.
+- Fix grammar, spelling, and awkward phrasing.
+- Tighten prose: eliminate filler, redundancy, and unnecessary qualifiers.
 - Headings must be plain text with `#` markers only — remove any `**` or `*` wrapping from headings.
 - Ensure every claim has a `[[source_id]]` marker.
 - Keep `[[source_id]]` markers intact — do NOT replace with literal citations.
 - Do NOT add a References/Βιβλιογραφία section.
-- Preserve the argument structure — improve, don't rewrite from scratch.
+- Preserve the argument structure, tone, and register — improve expression, do not dramatize or intensify.
+- Do NOT add vivid, dramatic, or rhetorical flourishes not present in the draft.
 
 ## Word Count — CRITICAL
 {% set delta = draft_words - target_words %}
@@ -33,7 +35,7 @@ You MUST cut approximately {{ delta }} words. Remove redundancy, tighten phrasin
 Do NOT add new content. Focus on making the text leaner while preserving every argument and citation.
 {% elif delta < -tolerance %}
 ⚠ The draft is **{{ draft_words }}** words — **{{ (-delta) }}** words UNDER the target of {{ target_words }}.
-You MUST expand by approximately {{ (-delta) }} words. Add deeper analysis, more supporting evidence, and richer discussion.
+You MUST expand by approximately {{ (-delta) }} words. Elaborate on existing points with more detail or nuance — do NOT introduce new arguments or dramatic language.
 {% else %}
 The draft is **{{ draft_words }}** words (target: {{ target_words }}). Length is acceptable (within ±{{ tolerance_percent }}%).
 Focus on quality improvements only. Do NOT significantly change the total word count.

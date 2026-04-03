@@ -99,6 +99,9 @@ class TokenTracker:
         self.current_step: str = "unknown"
         # step -> {input_tokens, output_tokens, thinking_tokens, model, calls}
         self._steps: dict[str, dict] = {}
+        self._lock = __import__("threading").Lock()
+        # run_id -> step name snapshot (for thread-safe tracking)
+        self._run_steps: dict[str, str] = {}
 
     def _ensure_step(self, step: str) -> dict:
         if step not in self._steps:
@@ -116,19 +119,32 @@ class TokenTracker:
         data = self._ensure_step(step)
         data["duration"] = duration
 
+    def snapshot_step(self, run_id: str) -> None:
+        """Capture current_step for a run_id (call from on_chat_model_start)."""
+        with self._lock:
+            self._run_steps[run_id] = self.current_step
+
+    def pop_step(self, run_id: str) -> str:
+        """Retrieve and remove the step snapshot for a run_id."""
+        with self._lock:
+            return self._run_steps.pop(run_id, self.current_step)
+
     def record(
         self,
         model: str,
         input_tokens: int,
         output_tokens: int,
         thinking_tokens: int = 0,
+        step: str | None = None,
     ) -> None:
-        data = self._ensure_step(self.current_step)
-        data["input_tokens"] += input_tokens
-        data["output_tokens"] += output_tokens
-        data["thinking_tokens"] += thinking_tokens
-        data["model"] = _model_short_name(model) if model else data["model"]
-        data["calls"] += 1
+        with self._lock:
+            target = step or self.current_step
+            data = self._ensure_step(target)
+            data["input_tokens"] += input_tokens
+            data["output_tokens"] += output_tokens
+            data["thinking_tokens"] += thinking_tokens
+            data["model"] = _model_short_name(model) if model else data["model"]
+            data["calls"] += 1
 
     def cost_summary(self) -> str:
         if not self._steps:
@@ -382,6 +398,7 @@ def _make_callbacks(timer: _StepTimer, tracker: TokenTracker) -> list:
                 ids = serialized.get("id", [])
                 model = ids[-1] if ids else ""
             self._models[str(run_id)] = model
+            tracker.snapshot_step(str(run_id))
 
         def on_llm_end(self, response, *, run_id, **kw):
             model = self._models.pop(str(run_id), "")
@@ -442,7 +459,8 @@ def _make_callbacks(timer: _StepTimer, tracker: TokenTracker) -> list:
             # output_tokens from API includes thinking; separate them for billing
             out_tok = max(raw_out - think_tok, 0)
             if in_tok or out_tok or think_tok:
-                tracker.record(model, in_tok, out_tok, think_tok)
+                step = tracker.pop_step(str(run_id))
+                tracker.record(model, in_tok, out_tok, think_tok, step=step)
 
         def on_tool_start(self, serialized, input_str, *, run_id, **kw):
             timer.on_tool_start(serialized.get("name", "unknown"), str(run_id))

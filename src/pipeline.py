@@ -17,6 +17,7 @@ import json
 import logging
 import math
 import sys
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from pathlib import Path
 from time import monotonic
@@ -909,6 +910,9 @@ def _make_write_sections(
     return _do_write_sections
 
 
+_REVIEW_CONCURRENCY = 4
+
+
 def _make_review_sections(
     sections: list[Section],
     target_words: int,
@@ -920,29 +924,27 @@ def _make_review_sections(
         plan_order = sorted(sections, key=lambda s: s.number)
         language = _get_brief_language(ctx.run_dir)
 
-        def _best_path(s: Section) -> Path:
-            rp = reviewed_dir / _section_filename(s)
-            sp = sections_dir / _section_filename(s)
-            return rp if rp.exists() else sp
+        # Read all draft texts upfront (immutable context for all reviews)
+        draft_texts: dict[int, str] = {}
+        for s in plan_order:
+            fp = sections_dir / _section_filename(s)
+            if fp.exists():
+                draft_texts[s.number] = fp.read_text(encoding="utf-8")
 
-        for section in plan_order:
-            section_path = _best_path(section)
-            if not section_path.exists():
+        def _review_one(section: Section) -> tuple[Section, str, float]:
+            if section.number not in draft_texts:
                 logger.warning("Section %d missing, skipping review", section.number)
-                continue
+                return section, "", 0.0
 
-            section_texts: dict[int, str] = {}
-            for current in _section_window(plan_order, section.number):
-                current_path = _best_path(current)
-                if current_path.exists():
-                    section_texts[current.number] = current_path.read_text(
-                        encoding="utf-8"
-                    )
-
-            full_essay = _build_review_context(section, plan_order, section_texts)
-
-            section_text = section_path.read_text(encoding="utf-8")
+            section_text = draft_texts[section.number]
             section_words = len(section_text.split())
+
+            neighbor_texts = {
+                s.number: draft_texts[s.number]
+                for s in _section_window(plan_order, section.number)
+                if s.number in draft_texts
+            }
+            full_essay = _build_review_context(section, plan_order, neighbor_texts)
 
             prompt = render_prompt(
                 "section_review.j2",
@@ -972,17 +974,27 @@ def _make_review_sections(
             if ctx.tracker is not None:
                 ctx.tracker.record_duration(tracker_step, dur)
 
-            print(
-                f"    section {section.number} ({section.title}) -- {dur:.1f}s",
-                file=sys.stderr,
-            )
+            return section, reviewed, dur
 
-        # Concatenate reviewed sections
+        # Run reviews in parallel — sections use draft context only
+        with ThreadPoolExecutor(max_workers=_REVIEW_CONCURRENCY) as pool:
+            futures = {pool.submit(_review_one, s): s for s in plan_order}
+            for future in as_completed(futures):
+                section, _, dur = future.result()
+                if dur > 0:
+                    print(
+                        f"    section {section.number} ({section.title}) -- {dur:.1f}s",
+                        file=sys.stderr,
+                    )
+
+        # Concatenate reviewed sections in plan order
         reviewed_parts = []
         for s in plan_order:
-            fp = _best_path(s)
+            fp = reviewed_dir / _section_filename(s)
             if fp.exists():
                 reviewed_parts.append(fp.read_text(encoding="utf-8"))
+            elif s.number in draft_texts:
+                reviewed_parts.append(draft_texts[s.number])
 
         _write_text(ctx.run_dir / "essay" / "reviewed.md", "\n\n".join(reviewed_parts))
         logger.info(
