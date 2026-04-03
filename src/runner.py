@@ -16,6 +16,9 @@ Usage (via uv):
 
     # Custom config
     uv run python -m src.runner /path/to/files/ --config my_config.yaml
+
+    # Save run outputs to .output/run_<timestamp>/
+    uv run python -m src.runner /path/to/files/ --dump-run
 """
 
 from __future__ import annotations
