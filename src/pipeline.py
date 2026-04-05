@@ -1103,6 +1103,14 @@ def _do_export(ctx: PipelineContext) -> None:
 
     doc_config = ctx.config.formatting.model_dump()
     brief_path = ctx.run_dir / "brief" / "assignment.json"
+    plan_path = ctx.run_dir / "plan" / "plan.json"
+
+    # Prefer plan title (specific) over brief topic (may be generic)
+    if plan_path.exists():
+        plan = EssayPlan.model_validate_json(plan_path.read_text(encoding="utf-8"))
+        if plan.title:
+            doc_config.setdefault("title", plan.title)
+
     if brief_path.exists():
         brief = AssignmentBrief.model_validate_json(
             brief_path.read_text(encoding="utf-8")

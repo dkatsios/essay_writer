@@ -72,6 +72,7 @@ class PlanSection(BaseModel):
 class EssayPlan(BaseModel):
     """Structured essay plan — /plan/plan.json."""
 
+    title: str
     thesis: str
     sections: list[PlanSection]
     research_queries: list[str]
