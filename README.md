@@ -42,6 +42,23 @@ uv run python -m src.runner -p "Write a 3000-word essay on climate change"
 
 Output is written to the `output/` directory as a `.docx` file.
 
+## Web UI
+
+A browser-based interface is available as an alternative to the CLI.
+
+```bash
+uv run uvicorn src.web:app --reload
+```
+
+Open http://localhost:8000. Upload files, enter a prompt, optionally set a target word count, and download the result as a ZIP.
+
+**Docker:**
+
+```bash
+docker build -t essay-writer .
+docker run -p 8000:8000 --env-file .env essay-writer
+```
+
 ## Configuration
 
 Default settings are defined in `config/schemas.py`. Override with `--config path/to/custom.yaml` or environment variables (prefix `ESSAY_WRITER_`).

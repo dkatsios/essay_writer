@@ -1,0 +1,10 @@
+.output/
+.git/
+__pycache__/
+*.pyc
+.env
+output/
+examples/
+docs/
+.venv/
+.ruff_cache/

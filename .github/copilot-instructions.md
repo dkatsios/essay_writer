@@ -19,6 +19,13 @@ uv run python -m src.runner -p "Write a 3000-word essay on climate change"
 # Custom config
 uv run python -m src.runner /path/to/files/ --config my_config.yaml
 
+# Run the web UI
+uv run uvicorn src.web:app --reload
+
+# Docker
+docker build -t essay-writer .
+docker run -p 8000:8000 --env-file .env essay-writer
+
 # Run tests
 uv run python -m pytest tests/ -v
 
@@ -135,3 +142,7 @@ No `default.yaml` exists; field defaults in `schemas.py` are canonical.
 ### Test Fixtures
 
 Place test assignment directories under `examples/`. Each subdirectory is a self-contained test case with assignment files (PDFs, images, text).
+
+### Web UI
+
+`src/web.py` is a FastAPI app that wraps the same pipeline used by the CLI. A single HTML page (`src/templates/web/index.html`) provides a form (prompt, file upload, target word count). Jobs run in background threads; validation questions pause the pipeline thread via `threading.Event` and are served to the browser via polling. Results are returned as a ZIP containing the docx, markdown, and sources metadata.
