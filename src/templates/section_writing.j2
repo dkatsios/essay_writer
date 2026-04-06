@@ -28,6 +28,8 @@ Write section {{ section.number }}: "{{ section.title }}"
 - Your output MUST be within ±{{ tolerance_percent }}% of {{ section.word_target }} words. Under {{ min_words }} words = FAILURE.
 - Write LONG, detailed paragraphs. Develop every argument fully.
 
+{% include 'style_common.j2' %}
+
 ## Writing Rules
 - ALL content in {{ language }}, formal academic register.
 - Headings must be plain text with `#` markers only — do NOT wrap headings in `**bold**` or `*italic*`.
