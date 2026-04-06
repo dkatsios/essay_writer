@@ -34,7 +34,7 @@ class FormattingConfig(BaseModel):
     margins_cm: float = 2.5
     citation_style: str = "apa7"
     page_numbers: str = "bottom_center"
-    paragraph_indent: bool = True
+    paragraph_indent: bool = False
     text_alignment: str = "justified"
 
 
