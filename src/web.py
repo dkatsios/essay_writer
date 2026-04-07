@@ -74,6 +74,7 @@ class Job:
     answers: str = ""
     error: str = ""
     academic_level: str = ""
+    tracker: TokenTracker | None = None
 
 
 _jobs: dict[str, Job] = {}
@@ -111,6 +112,7 @@ def _run_pipeline_thread(job: Job, upload_dir: Path | None, prompt: str | None) 
 
         timer = _StepTimer()
         tracker = TokenTracker()
+        job.tracker = tracker
         callbacks = _make_callbacks(timer, tracker)
 
         def _on_questions(questions: list[ValidationQuestion], rd: Path) -> None:
@@ -208,32 +210,14 @@ def _run_pipeline_thread(job: Job, upload_dir: Path | None, prompt: str | None) 
 
 
 def _build_zip(run_dir: Path) -> BytesIO:
-    """Create a zip with essay.docx, reviewed.md / draft.md, and selected.json."""
+    """Zip the full run directory tree (same layout as ``.output/run_*`` from the CLI)."""
     buf = BytesIO()
+    root = run_dir.resolve()
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
-        # docx
-        for candidate in (run_dir / "essay.docx", run_dir / "essay" / "essay.docx"):
-            if candidate.exists():
-                zf.write(candidate, "essay.docx")
-                break
-
-        # markdown
-        for md_name in ("reviewed.md", "draft.md"):
-            md_path = run_dir / "essay" / md_name
-            if md_path.exists():
-                zf.write(md_path, md_name)
-                break
-
-        # sources metadata
-        selected = run_dir / "sources" / "selected.json"
-        if selected.exists():
-            zf.write(selected, "sources.json")
-
-        # cost report
-        report = run_dir / "report.md"
-        if report.exists():
-            zf.write(report, "report.md")
-
+        for path in sorted(root.rglob("*")):
+            if path.is_file():
+                arcname = path.relative_to(root).as_posix()
+                zf.write(path, arcname)
     buf.seek(0)
     return buf
 
@@ -302,6 +286,8 @@ async def status(job_id: str):
         return JSONResponse({"error": "Job not found"}, status_code=404)
 
     resp: dict = {"status": job.status}
+    if job.status == "running" and job.tracker is not None:
+        resp["stage"] = job.tracker.get_current_step()
     if job.status == "questions" and job.questions:
         resp["questions"] = job.questions
     if job.status == "error":

@@ -141,7 +141,7 @@ def _execute(steps: list[PipelineStep], ctx: PipelineContext) -> None:
         print(f"\n{'=' * 50}", file=sys.stderr)
         print(f"  Step: {step.name}", file=sys.stderr)
         if ctx.tracker is not None:
-            ctx.tracker.current_step = step.name
+            ctx.tracker.set_current_step(step.name)
         t0 = monotonic()
         try:
             step.fn(ctx)
@@ -945,7 +945,7 @@ def _make_write_sections(
 
             tracker_step = f"write:{section.number}"
             if ctx.tracker is not None:
-                ctx.tracker.current_step = tracker_step
+                ctx.tracker.set_current_step(tracker_step)
 
             t0 = monotonic()
             text = _text_call(
@@ -1031,7 +1031,7 @@ def _make_review_sections(
 
             tracker_step = f"review:{section.number}"
             if ctx.tracker is not None:
-                ctx.tracker.current_step = tracker_step
+                ctx.tracker.set_current_step(tracker_step)
 
             t0 = monotonic()
             reviewed = _text_call(

@@ -122,6 +122,16 @@ class TokenTracker:
         data = self._ensure_step(step)
         data["duration"] = duration
 
+    def set_current_step(self, step: str) -> None:
+        """Set the active pipeline step (thread-safe for UI polling)."""
+        with self._lock:
+            self.current_step = step
+
+    def get_current_step(self) -> str:
+        """Current pipeline step name for progress display."""
+        with self._lock:
+            return self.current_step
+
     def snapshot_step(self, run_id: str) -> None:
         """Capture current_step for a run_id (call from on_chat_model_start)."""
         with self._lock:

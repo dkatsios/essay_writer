@@ -96,8 +96,9 @@
         const data = await res.json();
         if (data.error) { showError(data.error); return; }
         jobId = data.job_id;
-        statusArea.innerHTML = '<span class="spinner"></span> Pipeline running…';
+        statusArea.innerHTML = '<span class="spinner"></span> Starting…';
         pollTimer = setInterval(pollStatus, 3000);
+        void pollStatus();
       } catch (err) {
         showError('Failed to submit: ' + err.message);
       }
@@ -111,10 +112,11 @@
 
         if (data.status === 'running') {
           const pipelineEl = statusArea.querySelector('.pipeline-status');
+          const line = runningStatusHtml(data.stage);
           if (pipelineEl) {
-            pipelineEl.innerHTML = '<span class="spinner"></span> Pipeline running…';
+            pipelineEl.innerHTML = line;
           } else if (!clarificationsHistoryHtml) {
-            statusArea.innerHTML = '<span class="spinner"></span> Pipeline running…';
+            statusArea.innerHTML = line;
           }
         } else if (data.status === 'questions') {
           clearInterval(pollTimer);
@@ -216,8 +218,9 @@
       await fetch(`/answer/${jobId}`, { method: 'POST', body: fd });
       statusArea.innerHTML =
         clarificationsHistoryHtml +
-        '<div class="pipeline-status"><span class="spinner"></span> Pipeline running…</div>';
+        '<div class="pipeline-status"><span class="spinner"></span> Starting…</div>';
       pollTimer = setInterval(pollStatus, 3000);
+      void pollStatus();
     }
 
     function showError(msg) {
@@ -231,6 +234,31 @@
       const d = document.createElement('div');
       d.textContent = s;
       return d.innerHTML;
+    }
+
+    /** Map server pipeline step id to a short UI label. */
+    function formatStage(raw) {
+      if (!raw || raw === 'unknown') return 'Working';
+      const w = /^write:(\d+)$/.exec(raw);
+      if (w) return 'Writing (section ' + w[1] + ')';
+      const r = /^review:(\d+)$/.exec(raw);
+      if (r) return 'Reviewing (section ' + r[1] + ')';
+      const labels = {
+        intake: 'Intake',
+        validate: 'Validation',
+        plan: 'Planning',
+        research: 'Research',
+        read_sources: 'Reading sources',
+        write: 'Writing',
+        review: 'Reviewing',
+        export: 'Exporting',
+      };
+      if (labels[raw]) return labels[raw];
+      return raw.replace(/_/g, ' ');
+    }
+
+    function runningStatusHtml(stage) {
+      return '<span class="spinner"></span> ' + esc(formatStage(stage)) + '…';
     }
   </script>
 </body>
