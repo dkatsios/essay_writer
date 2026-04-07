@@ -90,6 +90,7 @@ def _run_pipeline_thread(
     upload_dir: Path | None,
     prompt: str | None,
     min_sources: int | None = None,
+    user_sources_dir: Path | None = None,
 ) -> None:
     """Execute the essay pipeline in a background thread."""
     try:
@@ -192,6 +193,7 @@ def _run_pipeline_thread(
             token_tracker=tracker,
             on_questions=_on_questions,
             min_sources=min_sources,
+            user_sources_dir=user_sources_dir,
         )
 
         # Copy docx into run_dir if needed
@@ -252,6 +254,7 @@ async def submit(
     min_sources: int | None = Form(None),
     academic_level: str = Form(""),
     files: list[UploadFile] = [],  # noqa: B006
+    sources: list[UploadFile] = [],  # noqa: B006
 ):
     """Accept form data, start the pipeline in a background thread."""
     job_id = uuid.uuid4().hex[:12]
@@ -271,6 +274,17 @@ async def submit(
                 content = await f.read()
                 dest.write_bytes(content)
 
+    # Save user-provided source files
+    user_sources_dir: Path | None = None
+    if sources and sources[0].filename:
+        user_sources_dir = run_dir / "user_sources"
+        user_sources_dir.mkdir(parents=True, exist_ok=True)
+        for i, f in enumerate(sources):
+            if f.filename:
+                dest = user_sources_dir / f"{i:03d}_{Path(f.filename).name}"
+                content = await f.read()
+                dest.write_bytes(content)
+
     # Build extra_prompt with optional word target and academic level
     extra_prompt = prompt.strip() or None
     if target_words and target_words > 0:
@@ -282,7 +296,7 @@ async def submit(
 
     thread = threading.Thread(
         target=_run_pipeline_thread,
-        args=(job, upload_dir, extra_prompt, min_sources),
+        args=(job, upload_dir, extra_prompt, min_sources, user_sources_dir),
         daemon=True,
     )
     thread.start()

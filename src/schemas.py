@@ -88,6 +88,7 @@ class SourceNote(BaseModel):
     title: str = ""
     authors: list[str] = []
     year: str | None = None
+    doi: str | None = None
     source_type: str | None = None
     summary: str = ""
     relevant_extracts: list[str] = []

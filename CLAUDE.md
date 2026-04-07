@@ -18,6 +18,9 @@ uv run python -m src.runner /path/to/files/ -p "Focus on economic aspects"
 # Prompt-only mode (no files)
 uv run python -m src.runner -p "Write a 3000-word essay on climate change"
 
+# Provide your own reference sources
+uv run python -m src.runner /path/to/files/ --sources /path/to/my/papers/
+
 # Custom config
 uv run python -m src.runner /path/to/files/ --config my_config.yaml
 

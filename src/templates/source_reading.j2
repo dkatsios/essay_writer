@@ -1,12 +1,17 @@
 You are a research assistant extracting structured notes from an academic source.
 
 ## Source Metadata
+{% if user_provided %}
+- **Source ID**: {{ source_id }}
+- **Note**: This source was provided directly by the user. Extract bibliographic metadata (title, authors, year, DOI) from the content itself.
+{% else %}
 - **Source ID**: {{ source_id }}
 - **Title**: {{ title }}
 - **Authors**: {{ authors }}
 - **Year**: {{ year }}
 {% if doi %}- **DOI**: {{ doi }}{% endif %}
 {% if abstract %}- **Abstract**: {{ abstract }}{% endif %}
+{% endif %}
 
 ## Fetched Content
 
@@ -20,11 +25,23 @@ No full text could be retrieved for this source. Use only the metadata and abstr
 
 Extract relevant notes from this source. Focus on content relevant to the essay topic.
 
+{% if user_provided %}
+### Metadata extraction
+Since this is a user-provided source, you MUST extract from the content:
+- `title`: the paper/document title
+- `authors`: list of author names
+- `year`: publication year (string or null)
+- `doi`: DOI if present in the content, otherwise null
+
+{% endif %}
 ### When content is available
 - Summarize the source and its relevance to the topic
 - Extract key quotes, data points, and arguments as `relevant_extracts`
 - Keep extracts concise — aim for 200-500 words total across summary + extracts
 - Include page numbers for direct quotes when available
+{% if not user_provided %}
+- Use the metadata provided above for `title`, `authors`, `year`, and `doi`
+{% endif %}
 
 ### When only metadata/abstract is available
 - Write a summary based on the abstract

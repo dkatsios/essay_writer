@@ -58,6 +58,8 @@ _JUNK_ABSTRACT_PATTERNS = re.compile(
 )
 _MIN_ABSTRACT_WORDS = 20
 
+_USER_SOURCE_PREFIX = "user_"
+
 
 def _is_useful_abstract(text: str) -> bool:
     """Return True if the abstract has enough substance for LLM extraction."""
@@ -106,6 +108,7 @@ class PipelineContext:
     extra_prompt: str | None = None
     callbacks: list | None = None
     tracker: object | None = None  # TokenTracker (optional)
+    user_sources_dir: Path | None = None
 
 
 @dataclass
@@ -533,6 +536,70 @@ def _do_plan(ctx: PipelineContext) -> None:
     _write_json(ctx.run_dir / "plan" / "plan.json", plan)
 
 
+def _inject_user_sources(user_sources_dir: Path, run_dir: Path) -> None:
+    """Add user-provided source files to the registry with placeholder metadata."""
+    from src.intake import scan
+
+    files = scan(str(user_sources_dir))
+    if not files:
+        return
+
+    registry_path = run_dir / "sources" / "registry.json"
+    registry: dict[str, dict] = {}
+    if registry_path.exists():
+        registry = json.loads(registry_path.read_text(encoding="utf-8"))
+
+    user_dir = run_dir / "sources" / "user"
+    user_dir.mkdir(parents=True, exist_ok=True)
+
+    import shutil
+
+    added = 0
+    for f in files:
+        if f.warning:
+            logger.warning("Skipping unsupported user source: %s", f.path.name)
+            continue
+
+        content = (f.text or "").strip()
+        if not content:
+            logger.warning(
+                "Skipping user source with no extractable text (e.g. scanned PDF or image-only file): %s",
+                f.path.name,
+            )
+            continue
+
+        source_id = f"{_USER_SOURCE_PREFIX}{added:03d}"
+
+        # Copy file into run directory for reproducibility (unique name per id
+        # so duplicate basenames from different paths do not collide).
+        dest = user_dir / f"{source_id}_{f.path.name}"
+        shutil.copy2(str(f.path), str(dest))
+
+        content_path = user_dir / f"{source_id}.txt"
+        content_path.write_text(content, encoding="utf-8")
+
+        registry[source_id] = {
+            "authors": [],
+            "year": "",
+            "title": f.path.stem,
+            "abstract": "",
+            "doi": "",
+            "url": "",
+            "pdf_url": "",
+            "source_type": "user_provided",
+            "user_provided": True,
+            "content_path": str(content_path),
+        }
+        added += 1
+
+    if added:
+        registry_path.parent.mkdir(parents=True, exist_ok=True)
+        registry_path.write_text(
+            json.dumps(registry, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
+        logger.info("Injected %d user-provided sources into registry", added)
+
+
 def _do_research(ctx: PipelineContext, fetch_sources: int) -> None:
     """Run research — pure Python, no LLM."""
     plan_path = ctx.run_dir / "plan" / "plan.json"
@@ -545,6 +612,10 @@ def _do_research(ctx: PipelineContext, fetch_sources: int) -> None:
         fetch_per_api=ctx.config.search.fetch_per_api,
     )
 
+    # Inject user-provided sources into the registry
+    if ctx.user_sources_dir and ctx.user_sources_dir.exists():
+        _inject_user_sources(ctx.user_sources_dir, ctx.run_dir)
+
 
 def _read_one_source(
     source_id: str,
@@ -555,10 +626,18 @@ def _read_one_source(
     domain_tracker: _DomainFailureTracker | None = None,
 ) -> SourceNote:
     """Fetch and extract notes for a single source."""
+    is_user_provided = meta.get("user_provided", False)
     url = meta.get("pdf_url") or meta.get("url", "")
     content = ""
 
-    if url:
+    # User-provided sources: read from local file
+    if is_user_provided:
+        content_path = meta.get("content_path", "")
+        if content_path and Path(content_path).exists():
+            content = Path(content_path).read_text(encoding="utf-8")
+            if len(content) > 50_000:
+                content = content[:50_000] + "\n\n[... truncated ...]"
+    elif url:
         if domain_tracker and domain_tracker.should_skip(url):
             logger.info("Skipping %s — domain throttled", url)
         else:
@@ -586,6 +665,7 @@ def _read_one_source(
             doi=meta.get("doi", ""),
             abstract=abstract,
             content=content,
+            user_provided=is_user_provided,
         )
         try:
             return _structured_call(worker, prompt, SourceNote, callbacks)
@@ -633,10 +713,20 @@ async def _async_read_one_source(
     """Async: fetch content in a thread, then extract notes via ainvoke."""
     import asyncio
 
+    is_user_provided = meta.get("user_provided", False)
     url = meta.get("pdf_url") or meta.get("url", "")
     content = ""
 
-    if url:
+    # User-provided sources: read from local file
+    if is_user_provided:
+        content_path = meta.get("content_path", "")
+        if content_path and Path(content_path).exists():
+            content = await asyncio.to_thread(
+                Path(content_path).read_text, encoding="utf-8"
+            )
+            if len(content) > 50_000:
+                content = content[:50_000] + "\n\n[... truncated ...]"
+    elif url:
         if domain_tracker and domain_tracker.should_skip(url):
             logger.info("Skipping %s — domain throttled", url)
         else:
@@ -664,6 +754,7 @@ async def _async_read_one_source(
             doi=meta.get("doi", ""),
             abstract=abstract,
             content=content,
+            user_provided=is_user_provided,
         )
         try:
             return await _async_structured_call(worker, prompt, SourceNote, callbacks)
@@ -721,9 +812,11 @@ def _select_best_sources(
         except Exception:
             inaccessible.append(sid)
 
-    # Sort by content size, but deprioritize sources without valid authors
+    # Sort by content size, but prioritize user-provided sources and
+    # deprioritize sources without valid authors
     accessible.sort(
         key=lambda x: (
+            1 if registry.get(x[0], {}).get("user_provided") else 0,
             1
             if any(a.strip() for a in registry.get(x[0], {}).get("authors", []))
             else 0,
@@ -746,16 +839,23 @@ def _source_read_candidates(
 ) -> list[tuple[str, dict]]:
     """Return the ranked source subset worth reading in detail.
 
-    Reads up to 2× target_sources — enough headroom for good selection
+    User-provided sources are always included first. API sources are
+    limited to 2× target_sources — enough headroom for good selection
     without burning LLM calls on sources that won't be used.
     """
-    candidates = [
+    user_sources = [
         (sid, meta)
         for sid, meta in registry.items()
-        if meta.get("url") or meta.get("pdf_url")
+        if meta.get("user_provided")
+    ]
+    api_sources = [
+        (sid, meta)
+        for sid, meta in registry.items()
+        if not meta.get("user_provided")
+        and (meta.get("url") or meta.get("pdf_url"))
     ]
     read_limit = target_sources * 2
-    return candidates[:read_limit]
+    return user_sources + api_sources[:read_limit]
 
 
 _SOURCE_READ_CONCURRENCY = 6
@@ -773,7 +873,7 @@ def _make_read_sources(target_sources: int) -> Callable[[PipelineContext], None]
         registry = json.loads(registry_path.read_text(encoding="utf-8"))
         tasks = _source_read_candidates(registry, target_sources)
         if not tasks:
-            logger.info("No sources with URLs to read.")
+            logger.info("No sources to read (no URLs and no user-provided files).")
             return
 
         logger.info("Reading %d ranked source candidates in parallel...", len(tasks))
@@ -805,6 +905,27 @@ def _make_read_sources(target_sources: int) -> Callable[[PipelineContext], None]
             return await asyncio.gather(*(read_one(sid, meta) for sid, meta in tasks))
 
         results = asyncio.run(read_all())
+
+        # Backfill registry metadata for user-provided sources from LLM notes
+        registry_updated = False
+        for sid, note in results:
+            if note and registry.get(sid, {}).get("user_provided") and note.is_accessible:
+                entry = registry[sid]
+                if note.title:
+                    entry["title"] = note.title
+                if note.authors:
+                    entry["authors"] = note.authors
+                if note.year:
+                    entry["year"] = note.year
+                if note.doi:
+                    entry["doi"] = note.doi
+                registry_updated = True
+
+        if registry_updated:
+            registry_path.write_text(
+                json.dumps(registry, ensure_ascii=False, indent=2), encoding="utf-8"
+            )
+            logger.info("Backfilled registry metadata for user-provided sources")
 
         accessible_count = sum(
             1 for _, note in results if note is not None and note.is_accessible
@@ -1253,6 +1374,7 @@ def run_pipeline(
     token_tracker=None,
     on_questions: Callable[[list[ValidationQuestion], Path], None] | None = None,
     min_sources: int | None = None,
+    user_sources_dir: Path | None = None,
 ) -> None:
     """Execute the essay writing pipeline.
 
@@ -1268,6 +1390,7 @@ def run_pipeline(
         extra_prompt=extra_prompt,
         callbacks=callbacks,
         tracker=token_tracker,
+        user_sources_dir=user_sources_dir,
     )
 
     # Ensure output subdirectories exist

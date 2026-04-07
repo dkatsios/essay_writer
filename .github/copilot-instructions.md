@@ -16,6 +16,9 @@ uv run python -m src.runner /path/to/files/ -p "Focus on economic aspects"
 # Prompt-only mode (no files)
 uv run python -m src.runner -p "Write a 3000-word essay on climate change"
 
+# Provide your own reference sources
+uv run python -m src.runner /path/to/files/ --sources /path/to/my/papers/
+
 # Custom config
 uv run python -m src.runner /path/to/files/ --config my_config.yaml
 
@@ -89,6 +92,7 @@ Each run uses a directory with these subdirectories:
 - `sources/registry.json` — source metadata (from `run_research()`)
 - `sources/notes/{source_id}.json` — reader notes, one file per source (Pydantic `SourceNote`)
 - `sources/selected.json` — best N sources selected for the essay
+- `sources/user/` — user-provided source files and their extracted text
 - `essay/draft.md` — initial essay draft
 - `essay/reviewed.md` — reviewed/polished essay (used for export)
 - `input/extracted.md` — pre-extracted document text
@@ -130,6 +134,7 @@ No `default.yaml` exists; field defaults in `schemas.py` are canonical.
 - **Pricing source of truth** — cost reporting in `src/runner.py` loads model pricing from `config/gemini_pricing.json`.
 - **Parallel source reading** — `asyncio.gather()` with `Semaphore(6)` reads up to `2 × target_sources` registry sources concurrently. URL fetching runs in `asyncio.to_thread()`, LLM calls use `ainvoke_with_retry()`. `_select_best_sources` then picks the best `target_sources` for the essay.
 - **Selected sources drive writing** — after source reading, `sources/selected.json` is the preferred source set for essay generation. If the selected set has no accessible notes, the pipeline falls back to all accessible notes.
+- **User-provided sources** — users can supply their own reference PDFs/documents via `--sources` (CLI) or the "Your Sources" upload (web UI). These are saved to `sources/user/`, injected into `registry.json` with `user_provided: true` and placeholder metadata. The source-reading step extracts both notes and bibliographic metadata (title, authors, year, DOI) from the content via the LLM, then backfills the registry. User sources are always read (not subject to the 2× candidate limit) and are prioritized in `_select_best_sources`.
 - **Short vs long path** — essays ≤ `long_essay_threshold` (default 4000 words) use full-essay write/review. Longer essays use section-by-section write/review.
 - **Bounded long-essay context** — section writing includes only the most recent prior sections, and section review includes only adjacent sections with the current section delimited. This keeps prompt growth roughly linear instead of resending the full essay on every section review.
 - **Config-backed word tolerance** — `writing.word_count_tolerance` controls the tolerance used in the writing and review prompts.

@@ -595,6 +595,7 @@ def run(
     prompt: str | None = None,
     config_path: str | None = None,
     output_dir: Path | None = None,
+    user_sources_dir: Path | None = None,
 ) -> None:
     """Run the essay pipeline with files (and optional prompt)."""
     config = load_config(config_path)
@@ -641,6 +642,7 @@ def run(
             on_questions=_handle_questions
             if config.writing.interactive_validation
             else None,
+            user_sources_dir=user_sources_dir,
         )
     finally:
         if log_handler:
@@ -666,6 +668,7 @@ def run_prompt(
     *,
     config_path: str | None = None,
     output_dir: Path | None = None,
+    user_sources_dir: Path | None = None,
 ) -> None:
     """Run the essay pipeline with a plain text prompt (no files)."""
     config = load_config(config_path)
@@ -702,6 +705,7 @@ def run_prompt(
             on_questions=_handle_questions
             if config.writing.interactive_validation
             else None,
+            user_sources_dir=user_sources_dir,
         )
     finally:
         if log_handler:
@@ -741,6 +745,12 @@ def main() -> None:
         "--config", default=None, help="Path to a custom YAML config file."
     )
     parser.add_argument(
+        "--sources",
+        "-s",
+        default=None,
+        help="Path to a file or directory containing user-provided reference sources.",
+    )
+    parser.add_argument(
         "--dump-run",
         "--dump-vfs",
         dest="dump_run",
@@ -764,6 +774,8 @@ def main() -> None:
     logging.getLogger("httpcore").setLevel(logging.WARNING)
     logging.getLogger("langchain").setLevel(logging.WARNING)
 
+    sources_dir = Path(args.sources) if args.sources else None
+
     if args.input_path is None and args.prompt is None:
         if sys.stdin.isatty():
             parser.print_help()
@@ -772,15 +784,26 @@ def main() -> None:
         if not prompt_text:
             print("Error: No input provided.", file=sys.stderr)
             sys.exit(1)
-        run_prompt(prompt_text, config_path=args.config, output_dir=output_dir)
+        run_prompt(
+            prompt_text,
+            config_path=args.config,
+            output_dir=output_dir,
+            user_sources_dir=sources_dir,
+        )
     elif args.input_path is None:
-        run_prompt(args.prompt, config_path=args.config, output_dir=output_dir)
+        run_prompt(
+            args.prompt,
+            config_path=args.config,
+            output_dir=output_dir,
+            user_sources_dir=sources_dir,
+        )
     else:
         run(
             args.input_path,
             prompt=args.prompt,
             config_path=args.config,
             output_dir=output_dir,
+            user_sources_dir=sources_dir,
         )
 
 

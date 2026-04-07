@@ -42,6 +42,10 @@
     <input type="file" id="files" name="files" multiple>
     <div class="hint">PDF, DOCX, images, or text files with assignment materials.</div>
 
+    <label for="sources">Your Sources <span style="font-weight:400">(optional)</span></label>
+    <input type="file" id="sources" name="sources" multiple>
+    <div class="hint">PDF, DOCX, or text files of reference papers you want cited in the essay.</div>
+
     <label>Academic Level <span style="font-weight:400">(optional)</span></label>
     <div style="display:flex;gap:1rem;flex-wrap:wrap;margin-bottom:.5rem">
       <label style="font-weight:400;cursor:pointer"><input type="radio" name="academic_level" value=""> Not defined</label>
@@ -95,6 +99,8 @@
       if (al && al.value) fd.append('academic_level', al.value);
       const filesInput = document.getElementById('files');
       for (const f of filesInput.files) fd.append('files', f);
+      const sourcesInput = document.getElementById('sources');
+      for (const f of sourcesInput.files) fd.append('sources', f);
 
       try {
         const res = await fetch('/submit', { method: 'POST', body: fd });

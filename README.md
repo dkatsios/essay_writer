@@ -20,6 +20,7 @@ AI-powered academic essay generator for Greek university students. Uses a determ
 - Cost reporting loads model pricing from `config/gemini_pricing.json`
 - Formatted `.docx` output with cover page, table of contents, and page numbers
 - Supports multiple input formats: PDF, DOCX, PPTX, images, text files
+- User-provided reference sources (separate from assignment files) are prioritized and cited in the essay
 - Source PDFs saved alongside run artifacts for inspection
 - Configurable via YAML, environment variables, or both
 - Custom AI endpoint support via `AI_BASE_URL` / `AI_API_KEY` / `AI_MODEL`
@@ -38,6 +39,9 @@ uv run python -m src.runner /path/to/brief.pdf
 
 # Run with a text prompt
 uv run python -m src.runner -p "Write a 3000-word essay on climate change"
+
+# Provide your own reference sources
+uv run python -m src.runner /path/to/assignment/ --sources /path/to/my/papers/
 ```
 
 Output is written to the `output/` directory as a `.docx` file.
@@ -50,7 +54,7 @@ A browser-based interface is available as an alternative to the CLI.
 uv run uvicorn src.web:app --reload
 ```
 
-Open http://localhost:8000. Upload files, enter a prompt, optionally set a target word count, and download the result as a ZIP.
+Open http://localhost:8000. Upload assignment files, optionally upload your own reference sources, enter a prompt, set a target word count, and download the result as a ZIP.
 
 **Docker:**
 
