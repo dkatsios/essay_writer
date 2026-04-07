@@ -20,6 +20,10 @@
     @keyframes spin { to { transform: rotate(360deg); } }
     .question-block { background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 6px; padding: 1rem; margin-bottom: .75rem; }
     .question-block p { margin: 0 0 .5rem; font-weight: 600; }
+    .question-block.answered .user-answer { margin: .5rem 0 0; font-weight: 500; color: #166534; }
+    .clarifications-round { margin-bottom: 1rem; }
+    .clarifications-round > h3 { font-size: 1.05rem; margin: 0 0 .75rem; color: #334155; }
+    .pipeline-status { margin-top: .75rem; padding-top: .75rem; border-top: 1px solid #e2e8f0; }
     .question-block label { font-weight: 400; margin-top: .2rem; cursor: pointer; }
     .error { color: #dc2626; font-weight: 600; }
     .download-link { display: inline-block; margin-top: .5rem; padding: .5rem 1.2rem; background: #16a34a; color: #fff; text-decoration: none; border-radius: 6px; }
@@ -30,7 +34,7 @@
 <body>
   <h1>📝 Essay Writer</h1>
 
-  <form id="form">
+  <form id="form" autocomplete="off">
     <label for="prompt">Prompt / Instructions</label>
     <textarea id="prompt" name="prompt" placeholder="Describe the essay topic or paste assignment instructions…"></textarea>
 
@@ -59,10 +63,23 @@
     const submitBtn = document.getElementById('submit-btn');
     let jobId = null;
     let pollTimer = null;
+    /** Read-only HTML for submitted Q&A rounds; kept visible while the pipeline runs. */
+    let clarificationsHistoryHtml = '';
+
+    function resetFormToCleanState() {
+      form.reset();
+      const filesInput = document.getElementById('files');
+      if (filesInput) filesInput.value = '';
+    }
+
+    window.addEventListener('load', () => {
+      queueMicrotask(resetFormToCleanState);
+    });
 
     form.addEventListener('submit', async (e) => {
       e.preventDefault();
       submitBtn.disabled = true;
+      clarificationsHistoryHtml = '';
       statusArea.innerHTML = '<span class="spinner"></span> Submitting…';
 
       const fd = new FormData();
@@ -93,13 +110,20 @@
         const data = await res.json();
 
         if (data.status === 'running') {
-          statusArea.innerHTML = '<span class="spinner"></span> Pipeline running…';
+          const pipelineEl = statusArea.querySelector('.pipeline-status');
+          if (pipelineEl) {
+            pipelineEl.innerHTML = '<span class="spinner"></span> Pipeline running…';
+          } else if (!clarificationsHistoryHtml) {
+            statusArea.innerHTML = '<span class="spinner"></span> Pipeline running…';
+          }
         } else if (data.status === 'questions') {
           clearInterval(pollTimer);
           showQuestions(data.questions);
         } else if (data.status === 'done') {
           clearInterval(pollTimer);
-          statusArea.innerHTML = `<p>✅ Essay generated!</p><a class="download-link" href="/download/${jobId}">Download ZIP</a>`;
+          statusArea.innerHTML =
+            clarificationsHistoryHtml +
+            `<p>✅ Essay generated!</p><a class="download-link" href="/download/${jobId}">Download ZIP</a>`;
           submitBtn.disabled = false;
         } else if (data.status === 'error') {
           clearInterval(pollTimer);
@@ -111,7 +135,9 @@
     }
 
     function showQuestions(questions) {
-      let html = '<h3>Assignment has gaps — please clarify:</h3>';
+      let html = clarificationsHistoryHtml;
+      html += '<h3>Assignment has gaps — please clarify:</h3>';
+      html += '<div class="clarification-pending">';
       questions.forEach((q, i) => {
         html += `<div class="question-block"><p>${i + 1}. ${esc(q.question)}</p>`;
         q.options.forEach((opt, j) => {
@@ -124,6 +150,7 @@
       });
       html += '<button id="answer-btn" onclick="submitAnswers()">Submit Answers</button>';
       html += ' <button onclick="skipQuestions()" style="background:#64748b">Skip</button>';
+      html += '</div>';
       statusArea.innerHTML = html;
 
       // Auto-select "other" radio when typing in the text field
@@ -137,7 +164,7 @@
 
     async function submitAnswers() {
       const parts = [];
-      document.querySelectorAll('.question-block').forEach((block, i) => {
+      document.querySelectorAll('.clarification-pending .question-block').forEach((block, i) => {
         const checked = block.querySelector('input[type=radio]:checked');
         if (checked) {
           if (checked.value === 'other') {
@@ -157,17 +184,46 @@
       await sendAnswers('');
     }
 
+    function appendClarificationsSnapshot() {
+      const blocks = document.querySelectorAll('#status-area .clarification-pending .question-block');
+      if (!blocks.length) return;
+      let html = '<section class="clarifications-round"><h3>Your clarifications</h3>';
+      blocks.forEach((block) => {
+        const qText = block.querySelector('p')?.textContent || '';
+        const checked = block.querySelector('input[type=radio]:checked');
+        let ans = '—';
+        if (checked) {
+          if (checked.value === 'other') {
+            const textInput = block.querySelector('.other-text');
+            const t = textInput?.value.trim();
+            ans = t || '(Other — empty)';
+          } else {
+            const lab = checked.closest('label');
+            let t = lab ? lab.textContent.trim() : '';
+            ans = t.replace(/^[a-z]\)\s*/i, '').trim() || checked.value;
+          }
+        }
+        html += `<div class="question-block answered"><p>${esc(qText)}</p><p class="user-answer">${esc(ans)}</p></div>`;
+      });
+      html += '</section>';
+      clarificationsHistoryHtml += html;
+    }
+
     async function sendAnswers(answers) {
+      appendClarificationsSnapshot();
       const fd = new FormData();
       fd.append('answers', answers);
       await fetch(`/answer/${jobId}`, { method: 'POST', body: fd });
-      statusArea.innerHTML = '<span class="spinner"></span> Pipeline running…';
+      statusArea.innerHTML =
+        clarificationsHistoryHtml +
+        '<div class="pipeline-status"><span class="spinner"></span> Pipeline running…</div>';
       pollTimer = setInterval(pollStatus, 3000);
     }
 
     function showError(msg) {
       clearInterval(pollTimer);
-      statusArea.innerHTML = `<p class="error">❌ ${esc(msg)}</p>`;
+      statusArea.innerHTML =
+        clarificationsHistoryHtml + `<p class="error">❌ ${esc(msg)}</p>`;
       submitBtn.disabled = false;
     }
 
