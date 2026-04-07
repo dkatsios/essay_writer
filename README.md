@@ -59,6 +59,18 @@ docker build -t essay-writer .
 docker run -p 8000:8000 --env-file .env essay-writer
 ```
 
+## Deployment
+
+### Render
+
+The repo includes a `render.yaml` Blueprint for one-click deployment to [Render](https://render.com):
+
+1. Connect this repo in the Render dashboard.
+2. Apply the Blueprint (or create a Web Service pointing at the Dockerfile).
+3. Set the required environment variables (`GOOGLE_API_KEY`, and optionally `SEMANTIC_SCHOLAR_API_KEY`, `LANGSMITH_API_KEY`).
+
+The service exposes the web UI on the port assigned by Render.
+
 ## Configuration
 
 Default settings are defined in `config/schemas.py`. Override with `--config path/to/custom.yaml` or environment variables (prefix `ESSAY_WRITER_`).
