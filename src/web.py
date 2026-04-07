@@ -227,6 +227,12 @@ def _build_zip(run_dir: Path) -> BytesIO:
 # ---------------------------------------------------------------------------
 
 
+@app.get("/health")
+async def health():
+    """Liveness probe for platforms (e.g. Render) — no API keys required."""
+    return JSONResponse({"status": "ok"})
+
+
 @app.get("/", response_class=HTMLResponse)
 async def index():
     """Serve the single-page form."""

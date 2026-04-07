@@ -1,0 +1,14 @@
+# Render Blueprint: https://render.com/docs/infrastructure-as-code
+# After connecting this repo, use "Apply" from the Blueprint or create a Web Service
+# that uses this file.
+
+services:
+  - type: web
+    name: essay-writer
+    runtime: docker
+    plan: free
+    region: frankfurt
+    healthCheckPath: /health
+    envVars:
+      - key: GOOGLE_API_KEY
+        sync: false
