@@ -538,24 +538,17 @@ def _parse_validation_answers(
         if not raw_answer:
             continue
 
-        selected_label = None
-        selected_option = None
         resolved_answer = raw_answer
 
         label = raw_answer[:1].lower()
         option_index = ord(label) - ord("a")
         if len(raw_answer) == 1 and 0 <= option_index < len(question.options):
-            selected_label = label
-            selected_option = question.options[option_index]
-            resolved_answer = selected_option
+            resolved_answer = question.options[option_index]
 
         clarifications.append(
             Clarification(
                 question=question.question,
-                options=question.options,
                 answer=resolved_answer,
-                selected_label=selected_label,
-                selected_option=selected_option,
             )
         )
 

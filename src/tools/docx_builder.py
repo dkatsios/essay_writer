@@ -263,7 +263,12 @@ def _format_bib_entry(source: dict) -> str:
     url = source.get("url", "")
     publisher = source.get("publisher", "")
 
-    author_str = ", ".join(authors) if authors else "Unknown"
+    if not authors:
+        author_str = "Unknown"
+    elif len(authors) <= 20:
+        author_str = ", ".join(authors)
+    else:
+        author_str = ", ".join(authors[:19]) + ", … " + authors[-1]
     entry = f"{author_str} ({year}). {title}."
     if journal:
         entry += f" *{journal}*"

@@ -364,12 +364,15 @@ def _parse_sections(run_dir: Path) -> list[Section]:
 
 
 def _compute_max_sources(
-    target_words: int, config: EssayWriterConfig
+    target_words: int,
+    config: EssayWriterConfig,
+    user_min_sources: int | None = None,
 ) -> tuple[int, int]:
     """Compute (target_sources, fetch_sources) based on word count and config."""
     sc = config.search
     raw = math.ceil(target_words / 1000) * sc.sources_per_1k_words
-    target = max(sc.min_sources, min(raw, sc.max_sources))
+    floor = user_min_sources if user_min_sources else sc.min_sources
+    target = max(floor, min(raw, sc.max_sources))
     fetch = min(int(target * sc.overfetch_multiplier), sc.max_sources * 2)
     return target, fetch
 
@@ -835,7 +838,9 @@ def _make_read_sources(target_sources: int) -> Callable[[PipelineContext], None]
 # -- Short path: full-essay write & review --------------------------------
 
 
-def _make_write_full(target_words: int) -> Callable[[PipelineContext], None]:
+def _make_write_full(
+    target_words: int, min_sources: int | None = None
+) -> Callable[[PipelineContext], None]:
     def _do_write_full(ctx: PipelineContext) -> None:
         brief_json = _read_text(ctx.run_dir / "brief" / "assignment.json")
         plan_json = _read_text(ctx.run_dir / "plan" / "plan.json")
@@ -853,6 +858,7 @@ def _make_write_full(target_words: int) -> Callable[[PipelineContext], None]:
                 target_words * (1 - ctx.config.writing.word_count_tolerance)
             ),
             language=language,
+            min_sources=min_sources,
         )
 
         essay = _text_call(
@@ -866,7 +872,9 @@ def _make_write_full(target_words: int) -> Callable[[PipelineContext], None]:
     return _do_write_full
 
 
-def _make_review_full(target_words: int) -> Callable[[PipelineContext], None]:
+def _make_review_full(
+    target_words: int, min_sources: int | None = None
+) -> Callable[[PipelineContext], None]:
     def _do_review_full(ctx: PipelineContext) -> None:
         brief_json = _read_text(ctx.run_dir / "brief" / "assignment.json")
         plan_json = _read_text(ctx.run_dir / "plan" / "plan.json")
@@ -884,6 +892,7 @@ def _make_review_full(target_words: int) -> Callable[[PipelineContext], None]:
             tolerance_ratio=ctx.config.writing.word_count_tolerance,
             tolerance_percent=round(ctx.config.writing.word_count_tolerance * 100),
             language=language,
+            min_sources=min_sources,
         )
 
         reviewed = _text_call(
@@ -915,6 +924,7 @@ def _section_filename(section: Section) -> str:
 def _make_write_sections(
     sections: list[Section],
     target_words: int,
+    min_sources: int | None = None,
 ) -> Callable[[PipelineContext], None]:
     def _do_write_sections(ctx: PipelineContext) -> None:
         sections_dir = ctx.run_dir / "essay" / "sections"
@@ -941,6 +951,7 @@ def _make_write_sections(
                     section.word_target * (1 - ctx.config.writing.word_count_tolerance)
                 ),
                 language=language,
+                min_sources=min_sources,
             )
 
             tracker_step = f"write:{section.number}"
@@ -1190,6 +1201,7 @@ def _build_execution_steps(
     target_words: int,
     fetch_sources: int,
     target_sources: int,
+    min_sources: int | None = None,
 ) -> list[PipelineStep]:
     """Build the dynamic portion of the pipeline after plan is available."""
     threshold = ctx.config.writing.long_essay_threshold
@@ -1200,17 +1212,26 @@ def _build_execution_steps(
     ]
 
     if target_words <= threshold:
-        steps.append(PipelineStep("write", _make_write_full(target_words)))
-        steps.append(PipelineStep("review", _make_review_full(target_words)))
+        steps.append(PipelineStep("write", _make_write_full(target_words, min_sources)))
+        steps.append(
+            PipelineStep("review", _make_review_full(target_words, min_sources))
+        )
     else:
         sections = _parse_sections(ctx.run_dir)
         if not sections:
             logger.warning("Could not parse sections -- falling back to short path")
-            steps.append(PipelineStep("write", _make_write_full(target_words)))
-            steps.append(PipelineStep("review", _make_review_full(target_words)))
+            steps.append(
+                PipelineStep("write", _make_write_full(target_words, min_sources))
+            )
+            steps.append(
+                PipelineStep("review", _make_review_full(target_words, min_sources))
+            )
         else:
             steps.append(
-                PipelineStep("write", _make_write_sections(sections, target_words))
+                PipelineStep(
+                    "write",
+                    _make_write_sections(sections, target_words, min_sources),
+                )
             )
             steps.append(
                 PipelineStep("review", _make_review_sections(sections, target_words))
@@ -1231,6 +1252,7 @@ def run_pipeline(
     callbacks: list | None = None,
     token_tracker=None,
     on_questions: Callable[[list[ValidationQuestion], Path], None] | None = None,
+    min_sources: int | None = None,
 ) -> None:
     """Execute the essay writing pipeline.
 
@@ -1254,6 +1276,19 @@ def run_pipeline(
 
     # Phase 1a: intake + validate
     _execute([PipelineStep("intake", _do_intake)], ctx)
+
+    # Override brief.min_sources with the explicit form value if provided
+    if min_sources is not None:
+        brief_path = run_dir / "brief" / "assignment.json"
+        if brief_path.exists():
+            brief = AssignmentBrief.model_validate_json(
+                brief_path.read_text(encoding="utf-8")
+            )
+            brief.min_sources = min_sources
+            brief_path.write_text(
+                brief.model_dump_json(indent=2, ensure_ascii=False), encoding="utf-8"
+            )
+
     _execute([PipelineStep("validate", _do_validate)], ctx)
 
     # Check validation result
@@ -1275,6 +1310,19 @@ def run_pipeline(
     )
 
     # Phase 2: built from plan analysis
-    target_sources, fetch_sources = _compute_max_sources(target_words, config)
-    phase2 = _build_execution_steps(ctx, target_words, fetch_sources, target_sources)
+    # Use explicit min_sources if provided; fall back to brief extraction
+    user_min_sources = min_sources
+    if user_min_sources is None:
+        brief_path = run_dir / "brief" / "assignment.json"
+        if brief_path.exists():
+            brief = AssignmentBrief.model_validate_json(
+                brief_path.read_text(encoding="utf-8")
+            )
+            user_min_sources = brief.min_sources
+    target_sources, fetch_sources = _compute_max_sources(
+        target_words, config, user_min_sources
+    )
+    phase2 = _build_execution_steps(
+        ctx, target_words, fetch_sources, target_sources, user_min_sources
+    )
     _execute(phase2, ctx)

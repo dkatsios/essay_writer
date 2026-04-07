@@ -20,6 +20,11 @@ Review and improve the draft following the criteria below. Output the complete p
 
 {% include 'style_review.j2' %}
 
+{% if min_sources %}
+## Source Usage — CRITICAL
+- The essay MUST cite **at least {{ min_sources }}** different sources. If the draft uses fewer, add citations from the available source notes where relevant.
+{% endif %}
+
 ## Review Focus
 - Fix grammar, spelling, and awkward phrasing.
 - Tighten prose: eliminate filler, redundancy, and unnecessary qualifiers.

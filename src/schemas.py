@@ -16,10 +16,7 @@ class Clarification(BaseModel):
     """A Q&A pair appended after interactive validation."""
 
     question: str
-    options: list[str] | None = None
     answer: str
-    selected_label: str | None = None
-    selected_option: str | None = None
 
 
 class AssignmentBrief(BaseModel):
@@ -35,6 +32,7 @@ class AssignmentBrief(BaseModel):
     institution: str | None = None
     description: str
     special_instructions: str | None = None
+    min_sources: int | None = None
     clarifications: list[Clarification] | None = None
 
 

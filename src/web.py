@@ -85,7 +85,12 @@ _jobs: dict[str, Job] = {}
 # ---------------------------------------------------------------------------
 
 
-def _run_pipeline_thread(job: Job, upload_dir: Path | None, prompt: str | None) -> None:
+def _run_pipeline_thread(
+    job: Job,
+    upload_dir: Path | None,
+    prompt: str | None,
+    min_sources: int | None = None,
+) -> None:
     """Execute the essay pipeline in a background thread."""
     try:
         config = load_config()
@@ -126,7 +131,6 @@ def _run_pipeline_thread(job: Job, upload_dir: Path | None, prompt: str | None) 
                         auto_clarifications.append(
                             Clarification(
                                 question=q.question,
-                                options=q.options,
                                 answer=job.academic_level,
                             )
                         )
@@ -187,6 +191,7 @@ def _run_pipeline_thread(job: Job, upload_dir: Path | None, prompt: str | None) 
             callbacks=callbacks,
             token_tracker=tracker,
             on_questions=_on_questions,
+            min_sources=min_sources,
         )
 
         # Copy docx into run_dir if needed
@@ -244,6 +249,7 @@ async def index():
 async def submit(
     prompt: str = Form(""),
     target_words: int | None = Form(None),
+    min_sources: int | None = Form(None),
     academic_level: str = Form(""),
     files: list[UploadFile] = [],  # noqa: B006
 ):
@@ -276,7 +282,7 @@ async def submit(
 
     thread = threading.Thread(
         target=_run_pipeline_thread,
-        args=(job, upload_dir, extra_prompt),
+        args=(job, upload_dir, extra_prompt, min_sources),
         daemon=True,
     )
     thread.start()

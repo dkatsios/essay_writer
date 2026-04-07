@@ -331,8 +331,6 @@ class TestValidationClarifications:
 
         assert len(clarifications) == 2
         assert clarifications[0].answer == "Micro"
-        assert clarifications[0].selected_label == "b"
-        assert clarifications[0].selected_option == "Micro"
         assert clarifications[1].answer == "Yes"
 
     def test_parse_validation_answers_allows_single_question_freeform(self):
@@ -352,7 +350,6 @@ class TestValidationClarifications:
 
         assert len(clarifications) == 1
         assert clarifications[0].answer == "Focus on public policy implications"
-        assert clarifications[0].selected_option is None
 
     def test_handle_questions_persists_structured_clarifications(
         self, tmp_path, monkeypatch
@@ -386,8 +383,8 @@ class TestValidationClarifications:
         assert saved.clarifications is not None
         assert len(saved.clarifications) == 2
         assert saved.clarifications[0].question == "Choose scope"
-        assert saved.clarifications[0].selected_option == "Micro"
-        assert saved.clarifications[1].selected_option == "Yes"
+        assert saved.clarifications[0].answer == "Micro"
+        assert saved.clarifications[1].answer == "Yes"
 
 
 class TestPricingLoader:

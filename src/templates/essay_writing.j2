@@ -32,6 +32,12 @@ Write the COMPLETE essay following the plan structure above.
 
 {% include 'style_common.j2' %}
 
+{% if min_sources %}
+## Source Usage — CRITICAL
+- You MUST cite **at least {{ min_sources }}** different sources from the Source Notes above.
+- Spread citations across all sections — do NOT cluster them in one place.
+{% endif %}
+
 ## Writing Rules
 - Follow the section structure from the plan.
 - ALL content in {{ language }}, formal academic register.

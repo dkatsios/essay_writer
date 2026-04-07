@@ -52,6 +52,9 @@
     <label for="target_words">Target Word Count <span style="font-weight:400">(optional)</span></label>
     <input type="number" id="target_words" name="target_words" min="100" step="100" placeholder="e.g. 3000">
 
+    <label for="min_sources">Minimum Sources <span style="font-weight:400">(optional)</span></label>
+    <input type="number" id="min_sources" name="min_sources" min="1" max="50" step="1" placeholder="e.g. 10">
+
     <button type="submit" id="submit-btn">Generate Essay</button>
   </form>
 
@@ -86,6 +89,8 @@
       fd.append('prompt', document.getElementById('prompt').value);
       const tw = document.getElementById('target_words').value;
       if (tw) fd.append('target_words', tw);
+      const ms = document.getElementById('min_sources').value;
+      if (ms) fd.append('min_sources', ms);
       const al = document.querySelector('input[name="academic_level"]:checked');
       if (al && al.value) fd.append('academic_level', al.value);
       const filesInput = document.getElementById('files');
