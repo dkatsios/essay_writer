@@ -12,3 +12,5 @@ services:
     envVars:
       - key: GOOGLE_API_KEY
         sync: false
+      - key: SEMANTIC_SCHOLAR_API_KEY
+        sync: false
