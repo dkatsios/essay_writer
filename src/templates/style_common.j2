@@ -7,3 +7,19 @@
 - **Sentence flow**: Vary sentence length — mix shorter direct statements with longer elaborated ones to create a natural reading rhythm. Avoid sequences of same-length sentences.
 - **Cohesion**: Connect sentences and paragraphs with appropriate transitional words and phrases (ωστόσο, επιπλέον, συνεπώς, ειδικότερα, παράλληλα, κ.λπ.). Every sentence should relate clearly to the one before it.
 - **Clarity over style**: Prefer clear, direct expression. If a simpler word conveys the same meaning, use it.
+
+{% if language is defined and language and 'Greek' in language %}
+## Greek — titles and `#` headings (CRITICAL)
+
+Modern Greek does **not** use English-style “Title Case” (capital on every major word). For the essay title and every markdown heading (`#` …):
+
+- Capitalise **only**: the first word of the title/heading; proper nouns (names of people, places, organisations); and words that grammar requires (e.g. the polite plural «Σας» when appropriate).
+- Use **lowercase** for common nouns, adjectives, and field terms mid-title (e.g. «ψυχοθεραπεία», «θεραπευτική σχέση», «τάξη», «εκπαίδευση»), unless they are proper names.
+- After a **colon** (`:`), continue with **lowercase** unless the next segment is a proper name or a full new sentence.
+- **Wrong (Title Case)**: `# Αρχές της Θεραπευτικής Σχέσης: Εμπιστοσύνη, Αποδοχή, Ενσυναίσθηση`
+- **Right (sentence-style)**: `# Αρχές της θεραπευτικής σχέσης: εμπιστοσύνη, αποδοχή, ενσυναίσθηση και η εφαρμογή τους στην τάξη`
+
+Apply this to the main title line and every section heading you output.
+
+**Body text (paragraphs)**: Capitalise only sentence starts and proper nouns. Do not capitalise common nouns or discipline terms mid-sentence (e.g. «κοινωνιολογία», not «Κοινωνιολογία»). If a word appears mid-sentence with an uppercase initial and is not a proper noun, lowercase it.
+{% endif %}

@@ -29,6 +29,9 @@ Output ONLY the improved version of the target section — do NOT output adjacen
 - All `[[source_id]]` markers — keep them intact, do NOT replace with literal citations.
 - Do NOT add a References/Βιβλιογραφία section.
 - Do NOT add new arguments, claims, or elaboration not present in the draft.
+{% if language and 'Greek' in language %}
+- **Exception**: You **may** rewrite `#` headings (and the section’s title line if present) **only** to fix Greek capitalisation — same meaning, sentence-style Greek. This is not “new content”.
+{% endif %}
 
 ## Word Count — CRITICAL
 {% set delta = section_words - section.word_target %}

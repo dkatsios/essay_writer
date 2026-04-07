@@ -32,6 +32,9 @@ Each section's `content_outline` should be detailed enough for independent writi
 ## Important
 - The `title` field must be a specific, descriptive essay title — not the assignment name or a generic placeholder.
 - All section titles and thesis in {{ language }}.
+{% if language and 'Greek' in language %}
+- **Greek capitalisation (titles and section fields)**: The essay `title`, each section `title`, and each `heading` must use **sentence-style** Greek (only the first word and proper nouns capitalised; common nouns and adjectives lowercase in the rest). Do **not** imitate English Title Case on every important word. After a colon, the following word is lowercase unless it is a proper name. This applies to JSON string values — the writer copies them verbatim into the essay.
+{% endif %}
 - Research queries should include terms in {{ language }} AND in English for broader coverage.
 - `total_word_target` must equal the sum of all section `word_target` values.
 - If the brief does not specify a word count, default to 3000 words.
