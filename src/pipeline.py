@@ -32,6 +32,7 @@ from langchain_core.messages import HumanMessage, SystemMessage
 from pydantic import BaseModel, ValidationError
 
 from src.rendering import render_prompt
+from src.tools.author_names import surname_from_author_string
 from src.schemas import (
     AssignmentBrief,
     EssayPlan,
@@ -915,6 +916,17 @@ def _make_read_sources(target_sources: int) -> Callable[[PipelineContext], None]
                     entry["title"] = note.title
                 if note.authors:
                     entry["authors"] = note.authors
+                    clean_authors = [
+                        a for a in note.authors if a and str(a).strip()
+                    ]
+                    if note.author_families and len(note.author_families) == len(
+                        clean_authors
+                    ):
+                        entry["author_families"] = list(note.author_families)
+                    else:
+                        entry["author_families"] = [
+                            surname_from_author_string(a) for a in clean_authors
+                        ]
                 if note.year:
                     entry["year"] = note.year
                 if note.doi:

@@ -15,6 +15,8 @@ from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
 from docx.shared import Cm, Pt
 
+from src.tools.author_names import inline_surnames_from_source
+
 
 def _safe_json_loads(s: str) -> dict:
     """Parse JSON, handling double-escaped strings from LLM output."""
@@ -234,15 +236,15 @@ def _format_apa_inline(source: dict, page_info: str | None) -> str:
     """Format an APA7 in-text citation string."""
     authors = _clean_authors(source)
     year = source.get("year", "n.d.")
-    if not authors:
+    surnames = inline_surnames_from_source(source) if authors else []
+    if not surnames:
         name = source.get("title", "Unknown")[:30]
-    elif len(authors) == 1:
-        name = authors[0].split(",")[0].strip()
-    elif len(authors) == 2:
-        parts = [a.split(",")[0].strip() for a in authors]
-        name = f"{parts[0]} & {parts[1]}"
+    elif len(surnames) == 1:
+        name = surnames[0]
+    elif len(surnames) == 2:
+        name = f"{surnames[0]} & {surnames[1]}"
     else:
-        name = f"{authors[0].split(',')[0].strip()} et al."
+        name = f"{surnames[0]} et al."
     citation = f"({name}, {year}"
     if page_info:
         citation += f", {page_info}"

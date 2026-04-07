@@ -15,6 +15,7 @@ import re
 import httpx
 
 from src.tools._http import DEFAULT_MAILTO, http_get
+from src.tools.author_names import surname_from_author_string
 
 logger = logging.getLogger(__name__)
 
@@ -47,10 +48,26 @@ def search_crossref(query: str, max_results: int = 5) -> tuple[list[dict], dict]
 
     results: list[dict] = []
     for item in data.get("message", {}).get("items", []):
-        authors = [
-            f"{a.get('given', '')} {a.get('family', '')}".strip()
-            for a in item.get("author", [])
-        ]
+        authors: list[str] = []
+        author_families: list[str] = []
+        for a in item.get("author", []):
+            if a.get("name"):
+                name = str(a.get("name", "")).strip()
+                authors.append(name)
+                author_families.append(
+                    surname_from_author_string(name) if name else ""
+                )
+                continue
+            given = (a.get("given") or "").strip()
+            family = (a.get("family") or "").strip()
+            display = f"{given} {family}".strip()
+            authors.append(display)
+            if family:
+                author_families.append(family)
+            elif display:
+                author_families.append(surname_from_author_string(display))
+            else:
+                author_families.append("")
 
         year = None
         published = item.get("published")
@@ -70,6 +87,7 @@ def search_crossref(query: str, max_results: int = 5) -> tuple[list[dict], dict]
             {
                 "title": title,
                 "authors": authors,
+                "author_families": author_families,
                 "year": year,
                 "abstract": abstract,
                 "doi": item.get("DOI", ""),

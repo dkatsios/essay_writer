@@ -14,6 +14,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 from src.tools.academic_search import search_semantic_scholar
+from src.tools.author_names import surname_from_author_string
 from src.tools.crossref_search import search_crossref
 from src.tools.openalex_search import search_openalex
 
@@ -41,14 +42,21 @@ def _normalise_title(title: str) -> str:
     return re.sub(r"[\W_]+", "", title.casefold(), flags=re.UNICODE)
 
 
-def _make_source_id(authors: list[str], year: int | None) -> str:
+def _make_source_id(
+    authors: list[str],
+    year: int | None,
+    author_families: list[str] | None = None,
+) -> str:
     """Generate a source_id like 'smith2020' from the first author + year."""
-    if authors:
-        # Take last word of first author's name (surname heuristic)
-        surname = authors[0].split()[-1] if authors[0] else "unknown"
-        surname = re.sub(r"[^a-z]", "", surname.lower()) or "unknown"
-    else:
-        surname = "unknown"
+    surname_raw = "unknown"
+    if author_families:
+        for fam in author_families:
+            if fam and str(fam).strip():
+                surname_raw = str(fam).strip()
+                break
+    elif authors and authors[0].strip():
+        surname_raw = surname_from_author_string(authors[0]) or "unknown"
+    surname = re.sub(r"[^a-z]", "", surname_raw.lower()) or "unknown"
     return f"{surname}{year or 'nd'}"
 
 
@@ -217,11 +225,14 @@ def _build_registry(
 
     for hit in candidates:
         authors = hit.get("authors", [])
-        source_id = _make_source_id(authors, hit.get("year"))
+        author_families = hit.get("author_families")
+        source_id = _make_source_id(
+            authors, hit.get("year"), author_families=author_families
+        )
         source_id = _dedup_source_id(source_id, used_ids)
         used_ids.add(source_id)
 
-        registry[source_id] = {
+        entry: dict = {
             "authors": authors,
             "year": str(hit.get("year", "") or ""),
             "title": hit.get("title", ""),
@@ -231,6 +242,9 @@ def _build_registry(
             "pdf_url": hit["_pdf_url"],
             "source_type": hit["_source_type"],
         }
+        if author_families:
+            entry["author_families"] = author_families
+        registry[source_id] = entry
 
         if len(registry) >= max_sources:
             break

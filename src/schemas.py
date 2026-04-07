@@ -87,6 +87,7 @@ class SourceNote(BaseModel):
     is_accessible: bool
     title: str = ""
     authors: list[str] = []
+    author_families: list[str] | None = None
     year: str | None = None
     doi: str | None = None
     source_type: str | None = None
