@@ -1,5 +1,9 @@
 You are a research assistant extracting structured notes from an academic source.
 
+## Essay Topic
+
+{{ essay_topic }}
+
 ## Source Metadata
 {% if user_provided %}
 - **Source ID**: {{ source_id }}
@@ -34,6 +38,14 @@ Since this is a user-provided source, you MUST extract from the content:
 - `doi`: DOI if present in the content, otherwise null
 
 {% endif %}
+### Relevance scoring
+Rate how relevant this source is to the essay topic above on a 1–5 scale and set `relevance_score`:
+- **5** = directly addresses the essay topic; core source
+- **4** = highly relevant; covers a major aspect of the topic
+- **3** = moderately relevant; useful background or partial overlap
+- **2** = tangentially related; minor connection to the topic
+- **1** = barely relevant or not useful for this essay
+
 ### When content is available
 - Summarize the source and its relevance to the topic
 - Extract key quotes, data points, and arguments as `relevant_extracts`

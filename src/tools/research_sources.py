@@ -212,11 +212,11 @@ def _build_registry(
         hit["_source_type"] = source_type
         candidates.append(hit)
 
-    # Sort: accessibility first, then citation count (higher first).
+    # Sort: citation count first (higher first), accessibility as tiebreaker.
     candidates.sort(
         key=lambda hit: (
-            _accessibility_tier(hit),
             _citation_rank(hit),
+            _accessibility_tier(hit),
         )
     )
 
@@ -241,6 +241,7 @@ def _build_registry(
             "url": hit["_url"],
             "pdf_url": hit["_pdf_url"],
             "source_type": hit["_source_type"],
+            "citation_count": hit.get("citation_count") or 0,
         }
         if author_families:
             entry["author_families"] = author_families

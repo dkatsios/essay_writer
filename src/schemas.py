@@ -93,6 +93,7 @@ class SourceNote(BaseModel):
     source_type: str | None = None
     summary: str = ""
     relevant_extracts: list[str] = []
+    relevance_score: int = 0
     inaccessible_reason: str | None = None
     url: str | None = None
 

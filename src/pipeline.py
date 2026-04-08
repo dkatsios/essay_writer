@@ -626,6 +626,7 @@ def _read_one_source(
     sources_dir: str,
     callbacks: list | None,
     domain_tracker: _DomainFailureTracker | None = None,
+    essay_topic: str = "",
 ) -> SourceNote:
     """Fetch and extract notes for a single source."""
     is_user_provided = meta.get("user_provided", False)
@@ -668,6 +669,7 @@ def _read_one_source(
             abstract=abstract,
             content=content,
             user_provided=is_user_provided,
+            essay_topic=essay_topic,
         )
         try:
             return _structured_call(worker, prompt, SourceNote, callbacks)
@@ -711,6 +713,7 @@ async def _async_read_one_source(
     sources_dir: str,
     callbacks: list | None,
     domain_tracker: _DomainFailureTracker | None = None,
+    essay_topic: str = "",
 ) -> SourceNote:
     """Async: fetch content in a thread, then extract notes via ainvoke."""
     import asyncio
@@ -757,6 +760,7 @@ async def _async_read_one_source(
             abstract=abstract,
             content=content,
             user_provided=is_user_provided,
+            essay_topic=essay_topic,
         )
         try:
             return await _async_structured_call(worker, prompt, SourceNote, callbacks)
@@ -797,7 +801,7 @@ def _select_best_sources(
 ) -> dict[str, dict]:
     """Select the best target_sources from read notes."""
     notes_dir = run_dir / "sources" / "notes"
-    accessible: list[tuple[str, int]] = []
+    accessible: list[tuple[str, int, int]] = []
     inaccessible: list[str] = []
 
     for sid in registry:
@@ -808,25 +812,27 @@ def _select_best_sources(
         try:
             note = SourceNote.model_validate_json(note_path.read_text(encoding="utf-8"))
             if note.is_accessible:
-                accessible.append((sid, note.content_word_count))
+                accessible.append((sid, note.relevance_score, note.content_word_count))
             else:
                 inaccessible.append(sid)
         except Exception:
             inaccessible.append(sid)
 
-    # Sort by content size, but prioritize user-provided sources and
-    # deprioritize sources without valid authors
+    # Sort: user-provided first, then relevance score, valid authors,
+    # citation count, and content word count as tiebreaker
     accessible.sort(
         key=lambda x: (
             1 if registry.get(x[0], {}).get("user_provided") else 0,
+            x[1],  # relevance_score
             1
             if any(a.strip() for a in registry.get(x[0], {}).get("authors", []))
             else 0,
-            x[1],
+            int(registry.get(x[0], {}).get("citation_count", 0) or 0),
+            x[2],  # content_word_count
         ),
         reverse=True,
     )
-    selected_ids = [sid for sid, _ in accessible[:target_sources]]
+    selected_ids = [sid for sid, _, _ in accessible[:target_sources]]
 
     remaining = target_sources - len(selected_ids)
     if remaining > 0:
@@ -880,6 +886,16 @@ def _make_read_sources(target_sources: int) -> Callable[[PipelineContext], None]
         notes_dir = ctx.run_dir / "sources" / "notes"
         notes_dir.mkdir(parents=True, exist_ok=True)
 
+        # Load essay topic from the brief for relevance scoring
+        brief_path = ctx.run_dir / "brief" / "assignment.json"
+        essay_topic = ""
+        if brief_path.exists():
+            try:
+                brief = json.loads(brief_path.read_text(encoding="utf-8"))
+                essay_topic = brief.get("topic", "")
+            except Exception:
+                pass
+
         domain_tracker = _DomainFailureTracker()
         semaphore = asyncio.Semaphore(_SOURCE_READ_CONCURRENCY)
 
@@ -893,6 +909,7 @@ def _make_read_sources(target_sources: int) -> Callable[[PipelineContext], None]
                         sources_dir,
                         ctx.callbacks,
                         domain_tracker=domain_tracker,
+                        essay_topic=essay_topic,
                     )
                     _write_json(notes_dir / f"{sid}.json", note)
                     return sid, note

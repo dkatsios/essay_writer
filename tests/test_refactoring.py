@@ -260,7 +260,7 @@ class TestConfigBackedBehavior:
         assert registry[ids[0]]["title"] == "High citations"
         assert registry[ids[1]]["title"] == "Low citations"
 
-    def test_build_registry_ranks_accessible_over_doi_only(self):
+    def test_build_registry_ranks_by_citations_then_accessibility(self):
         from src.tools.research_sources import _build_registry
 
         raw_results = [
@@ -291,8 +291,8 @@ class TestConfigBackedBehavior:
         registry = _build_registry(raw_results, 10)
         ids = list(registry.keys())
         assert len(ids) == 2
-        # OA PDF should rank higher than DOI-only despite fewer citations
-        assert registry[ids[0]]["title"] == "OA PDF paper"
+        # Higher citations should rank first; accessibility is tiebreaker
+        assert registry[ids[0]]["title"] == "DOI only paper"
 
     def test_rendered_review_prompt_uses_configured_tolerance(self):
         from src.rendering import render_prompt
