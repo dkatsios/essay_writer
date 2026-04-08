@@ -33,6 +33,7 @@ from pydantic import BaseModel, ValidationError
 
 from src.rendering import render_prompt
 from src.tools.author_names import surname_from_author_string
+from src.tools.essay_sanitize import strip_leading_submission_metadata
 from src.schemas import (
     AssignmentBrief,
     EssayPlan,
@@ -845,15 +846,12 @@ def _source_read_candidates(
     without burning LLM calls on sources that won't be used.
     """
     user_sources = [
-        (sid, meta)
-        for sid, meta in registry.items()
-        if meta.get("user_provided")
+        (sid, meta) for sid, meta in registry.items() if meta.get("user_provided")
     ]
     api_sources = [
         (sid, meta)
         for sid, meta in registry.items()
-        if not meta.get("user_provided")
-        and (meta.get("url") or meta.get("pdf_url"))
+        if not meta.get("user_provided") and (meta.get("url") or meta.get("pdf_url"))
     ]
     read_limit = target_sources * 2
     return user_sources + api_sources[:read_limit]
@@ -910,15 +908,17 @@ def _make_read_sources(target_sources: int) -> Callable[[PipelineContext], None]
         # Backfill registry metadata for user-provided sources from LLM notes
         registry_updated = False
         for sid, note in results:
-            if note and registry.get(sid, {}).get("user_provided") and note.is_accessible:
+            if (
+                note
+                and registry.get(sid, {}).get("user_provided")
+                and note.is_accessible
+            ):
                 entry = registry[sid]
                 if note.title:
                     entry["title"] = note.title
                 if note.authors:
                     entry["authors"] = note.authors
-                    clean_authors = [
-                        a for a in note.authors if a and str(a).strip()
-                    ]
+                    clean_authors = [a for a in note.authors if a and str(a).strip()]
                     if note.author_families and len(note.author_families) == len(
                         clean_authors
                     ):
@@ -1000,7 +1000,10 @@ def _make_write_full(
             prompt,
             ctx.callbacks,
         )
-        _write_text(ctx.run_dir / "essay" / "draft.md", essay)
+        _write_text(
+            ctx.run_dir / "essay" / "draft.md",
+            strip_leading_submission_metadata(essay),
+        )
 
     return _do_write_full
 
@@ -1034,7 +1037,10 @@ def _make_review_full(
             prompt,
             ctx.callbacks,
         )
-        _write_text(ctx.run_dir / "essay" / "reviewed.md", reviewed)
+        _write_text(
+            ctx.run_dir / "essay" / "reviewed.md",
+            strip_leading_submission_metadata(reviewed),
+        )
 
     return _do_review_full
 
@@ -1121,7 +1127,11 @@ def _make_write_sections(
             else:
                 logger.warning("Section %d file missing: %s", s.number, fp)
 
-        _write_text(ctx.run_dir / "essay" / "draft.md", "\n\n".join(draft_parts))
+        combined_draft = "\n\n".join(draft_parts)
+        _write_text(
+            ctx.run_dir / "essay" / "draft.md",
+            strip_leading_submission_metadata(combined_draft),
+        )
         logger.info("Combined %d sections into draft.md", len(draft_parts))
 
     return _do_write_sections
@@ -1213,7 +1223,11 @@ def _make_review_sections(
             elif s.number in draft_texts:
                 reviewed_parts.append(draft_texts[s.number])
 
-        _write_text(ctx.run_dir / "essay" / "reviewed.md", "\n\n".join(reviewed_parts))
+        combined_reviewed = "\n\n".join(reviewed_parts)
+        _write_text(
+            ctx.run_dir / "essay" / "reviewed.md",
+            strip_leading_submission_metadata(combined_reviewed),
+        )
         logger.info(
             "Combined %d reviewed sections into reviewed.md", len(reviewed_parts)
         )
@@ -1237,6 +1251,8 @@ def _do_export(ctx: PipelineContext) -> None:
     if not essay_text:
         logger.error("No essay found -- cannot export.")
         return
+
+    essay_text = strip_leading_submission_metadata(essay_text)
 
     sources: dict = {}
     for fname in ("selected.json", "registry.json"):

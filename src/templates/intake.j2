@@ -27,7 +27,7 @@ Identify: topic, scope, word count target, academic level, course details, profe
 - `academic_level`: One of "undergraduate", "postgraduate", or null.
 - `language`: The language the essay should be written in. Detect from the assignment documents. Default "Greek (Δημοτική)" if unclear.
 - `course`, `professor`, `student`, `institution`: Include if found, else null.
-- `description` (required): Comprehensive description of the assignment.
+- `description` (required): Comprehensive description of the assignment in prose. Do **not** open `description` with a verbatim copy of the submission cover sheet or title-page block (Ονοματεπώνυμο, Κωδικός μαθήματος, Τίτλος μαθήματος, Τίτλος εργασίας, etc.) — put those facts in `course`, `student`, `topic`, and related fields when known, and summarize the actual task in `description`.
 - `special_instructions`: Extra requirements, or null if none.
 - `min_sources`: Minimum number of academic sources to use, as an integer, or null if not specified.
 
