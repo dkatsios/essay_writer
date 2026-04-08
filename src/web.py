@@ -103,6 +103,7 @@ def _run_pipeline_thread(
         if upload_dir and any(upload_dir.iterdir()):
             input_files = scan(str(upload_dir))
             extracted_text = build_extracted_text(input_files, extra_prompt=prompt)
+            del input_files
         elif prompt:
             extracted_text = f"# Assignment\n\n{prompt}\n"
         else:
@@ -338,16 +339,33 @@ async def answer(job_id: str, answers: str = Form("")):
 
 @app.get("/download/{job_id}")
 async def download(job_id: str):
-    """Return the result zip."""
+    """Return the result zip, then remove the job's run directory and job record."""
     job = _jobs.get(job_id)
     if not job:
         return JSONResponse({"error": "Job not found"}, status_code=404)
     if job.status != "done":
         return JSONResponse({"error": "Job not ready"}, status_code=400)
 
-    buf = _build_zip(job.run_dir)
+    run_dir = job.run_dir
+    buf = _build_zip(run_dir)
+    chunk_size = 64 * 1024
+
+    def iter_zip():
+        try:
+            while True:
+                chunk = buf.read(chunk_size)
+                if not chunk:
+                    break
+                yield chunk
+        finally:
+            buf.close()
+            try:
+                shutil.rmtree(run_dir, ignore_errors=True)
+            finally:
+                _jobs.pop(job_id, None)
+
     return StreamingResponse(
-        buf,
+        iter_zip(),
         media_type="application/zip",
         headers={"Content-Disposition": f"attachment; filename=essay_{job_id}.zip"},
     )

@@ -90,10 +90,12 @@ _MIN_CHARS_PER_PAGE = 50
 
 
 def _extract_pdf(path: Path) -> tuple[str | None, list[dict] | None]:
-    """Extract content from a PDF, falling back to page images for scanned PDFs.
+    """Extract content from a PDF.
 
-    Returns (text, None) for text-native PDFs, or (None, image_blocks) for
-    scanned/image-based PDFs where text extraction yields too little content.
+    Returns (text, None) for text-native PDFs. For scanned/image-heavy PDFs
+    (little extractable text), returns a short placeholder string and no
+    image blocks — page rasterization was not consumed downstream and wasted
+    memory; use OCR or export text before upload if the content must be read.
     """
     doc = pymupdf.open(str(path))
     total = len(doc)
@@ -112,10 +114,12 @@ def _extract_pdf(path: Path) -> tuple[str | None, list[dict] | None]:
         doc.close()
         return "\n\n".join(parts), None
 
-    # Fallback: render pages as images for multimodal processing
-    image_blocks = _render_pdf_pages(doc)
     doc.close()
-    return None, image_blocks
+    placeholder = (
+        f"(PDF has little extractable text — likely scanned or image-heavy; "
+        f"{total} page(s). No page images are embedded in this pipeline.)"
+    )
+    return placeholder, None
 
 
 def _make_image_block(image_bytes: bytes, mime: str = "image/png") -> dict:
@@ -125,16 +129,6 @@ def _make_image_block(image_bytes: bytes, mime: str = "image/png") -> dict:
         "type": "image_url",
         "image_url": {"url": f"data:{mime};base64,{data}"},
     }
-
-
-def _render_pdf_pages(doc: pymupdf.Document) -> list[dict]:
-    """Render PDF pages as PNG images for multimodal LLM consumption."""
-    blocks: list[dict] = []
-    for page in doc:
-        # Render at 150 DPI — good balance between quality and size
-        pix = page.get_pixmap(dpi=150)
-        blocks.append(_make_image_block(pix.tobytes("png")))
-    return blocks
 
 
 def _extract_docx(path: Path) -> str:
