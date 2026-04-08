@@ -1,5 +1,6 @@
 """Smoke tests for the FastAPI web app."""
 
+import json
 import time
 from pathlib import Path
 
@@ -82,3 +83,36 @@ def test_job_ttl_zero_disables_sweep(tmp_path, monkeypatch):
 def test_status_404_when_job_missing():
     r = client.get("/status/nonexistentjob")
     assert r.status_code == 404
+
+
+def test_optional_pdf_upload_updates_registry(tmp_path):
+    run_dir = Path(tmp_path) / "run"
+    sources = run_dir / "sources"
+    sources.mkdir(parents=True)
+    reg = {"src_a": {"title": "Paper A", "doi": "10.1000/182", "user_provided": False}}
+    (sources / "registry.json").write_text(
+        json.dumps(reg, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+    jid = "optpdfjob001"
+    _jobs[jid] = Job(
+        job_id=jid,
+        run_dir=run_dir,
+        status="optional_pdfs",
+        optional_pdf_allowed_ids=frozenset({"src_a"}),
+    )
+    pdf_bytes = b"%PDF-1.4\n1 0 obj<<>>endobj\ntrailer<<>>\n%%EOF\n"
+    files = {"file": ("x.pdf", pdf_bytes, "application/pdf")}
+    data = {"source_id": "src_a"}
+    r = client.post(f"/optional-pdf/{jid}", data=data, files=files)
+    assert r.status_code == 200
+    assert r.json().get("status") == "ok"
+    updated = json.loads((sources / "registry.json").read_text(encoding="utf-8"))
+    assert "content_path" in updated["src_a"]
+    assert Path(updated["src_a"]["content_path"]).exists()
+
+
+def test_optional_pdf_done_requires_active_step():
+    jid = "optpdfjob002"
+    _jobs[jid] = Job(job_id=jid, run_dir=Path("."), status="running")
+    r = client.post(f"/optional-pdf/{jid}/done")
+    assert r.status_code == 400

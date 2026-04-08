@@ -31,6 +31,13 @@
     .download-link:disabled { opacity: .85; cursor: wait; }
     .hint { font-size: .85rem; color: #64748b; margin-top: .2rem; }
     .job-gone { color: #334155; font-weight: 600; margin-top: .5rem; }
+    .optional-pdf-row { border: 1px solid #e2e8f0; border-radius: 6px; padding: .75rem 1rem; margin-bottom: .65rem; background: #fafafa; }
+    .optional-pdf-row h4 { margin: 0 0 .35rem; font-size: .95rem; font-weight: 600; }
+    .optional-pdf-row .doi-line { font-size: .85rem; margin-bottom: .5rem; }
+    .optional-pdf-row .doi-line a { color: #2563eb; }
+    .optional-pdf-row .upload-row { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem; margin-top: .35rem; }
+    .optional-pdf-row .upload-status { font-size: .85rem; color: #166534; }
+    .optional-pdf-row .upload-status.err { color: #b91c1c; }
   </style>
 </head>
 <body>
@@ -75,6 +82,8 @@
     let downloadInProgress = false;
     /** Read-only HTML for submitted Q&A rounds; kept visible while the pipeline runs. */
     let clarificationsHistoryHtml = '';
+    let optionalPdfRoundItems = [];
+    let optionalPdfUploaded = {};
 
     function resetFormToCleanState() {
       form.reset();
@@ -142,6 +151,9 @@
         } else if (data.status === 'questions') {
           clearInterval(pollTimer);
           showQuestions(data.questions);
+        } else if (data.status === 'optional_pdfs') {
+          clearInterval(pollTimer);
+          showOptionalPdfPrompt(data.optional_pdf_items || []);
         } else if (data.status === 'done') {
           clearInterval(pollTimer);
           statusArea.innerHTML =
@@ -244,6 +256,102 @@
       statusArea.innerHTML =
         clarificationsHistoryHtml +
         '<div class="pipeline-status"><span class="spinner"></span> Starting…</div>';
+      pollTimer = setInterval(pollStatus, 3000);
+      void pollStatus();
+    }
+
+    function showOptionalPdfPrompt(items) {
+      optionalPdfRoundItems = items;
+      optionalPdfUploaded = {};
+      let html = clarificationsHistoryHtml;
+      html += '<h3>Optional: upload full-text PDFs</h3>';
+      html += '<p class="hint">These sources were used with metadata or abstract only (no substantive full text from the web). If you have the PDF (e.g. via your library), you can attach it below. This is optional.</p>';
+      html += '<div class="clarification-pending optional-pdf-pending">';
+      items.forEach((row, idx) => {
+        const title = esc(row.title || row.source_id);
+        const doiUrl = row.doi_url ? esc(row.doi_url) : '';
+        const doiLabel = row.doi ? esc(row.doi) : '';
+        html += `<div class="optional-pdf-row" data-idx="${idx}">`;
+        html += `<h4>${title}</h4>`;
+        if (doiUrl) {
+          html += `<div class="doi-line"><a href="${doiUrl}" target="_blank" rel="noopener noreferrer">DOI: ${doiLabel || doiUrl}</a></div>`;
+        }
+        html += `<div class="upload-row">`;
+        html += `<input type="file" accept=".pdf,application/pdf" class="opt-pdf-file" data-idx="${idx}" />`;
+        html += `<button type="button" class="opt-pdf-upload-btn" data-idx="${idx}">Upload PDF</button>`;
+        html += `<span class="upload-status opt-pdf-status" data-idx="${idx}"></span>`;
+        html += `</div></div>`;
+      });
+      html += '<button type="button" id="optional-pdf-continue">Continue</button>';
+      html += ' <button type="button" id="optional-pdf-continue-skip" style="background:#64748b">Skip (no uploads)</button>';
+      html += '</div>';
+      statusArea.innerHTML = html;
+
+      document.querySelectorAll('.opt-pdf-upload-btn').forEach((btn) => {
+        btn.addEventListener('click', () => {
+          const idx = parseInt(btn.getAttribute('data-idx'), 10);
+          const row = items[idx];
+          if (!row) return;
+          const sid = row.source_id;
+          const fileInput = document.querySelector(`.opt-pdf-file[data-idx="${idx}"]`);
+          const st = document.querySelector(`.opt-pdf-status[data-idx="${idx}"]`);
+          if (!fileInput || !fileInput.files || !fileInput.files[0]) {
+            if (st) { st.textContent = 'Choose a PDF first.'; st.classList.add('err'); }
+            return;
+          }
+          void uploadOptionalPdf(sid, fileInput.files[0], st, fileInput);
+        });
+      });
+      const cont = document.getElementById('optional-pdf-continue');
+      const skip = document.getElementById('optional-pdf-continue-skip');
+      if (cont) cont.addEventListener('click', () => { void finishOptionalPdfStep(); });
+      if (skip) skip.addEventListener('click', () => { void finishOptionalPdfStep(); });
+    }
+
+    async function uploadOptionalPdf(sourceId, file, statusEl, fileInput) {
+      if (!statusEl) return;
+      statusEl.classList.remove('err');
+      statusEl.textContent = 'Uploading…';
+      const fd = new FormData();
+      fd.append('source_id', sourceId);
+      fd.append('file', file);
+      try {
+        const res = await fetch(`/optional-pdf/${jobId}`, { method: 'POST', body: fd });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          statusEl.textContent = data.error || 'Upload failed';
+          statusEl.classList.add('err');
+          return;
+        }
+        optionalPdfUploaded[sourceId] = true;
+        statusEl.textContent = 'Saved — full text will be used.';
+        statusEl.classList.remove('err');
+        if (fileInput) fileInput.value = '';
+      } catch (e) {
+        statusEl.textContent = 'Network error';
+        statusEl.classList.add('err');
+      }
+    }
+
+    function appendOptionalPdfSnapshot() {
+      const pending = document.querySelector('.optional-pdf-pending');
+      if (!pending || !optionalPdfRoundItems.length) return;
+      let html = '<section class="clarifications-round"><h3>Optional PDFs</h3>';
+      optionalPdfRoundItems.forEach((row) => {
+        const sid = row.source_id;
+        const ok = optionalPdfUploaded[sid];
+        html += `<div class="question-block answered"><p>${esc(row.title || sid)}</p><p class="user-answer">${ok ? 'PDF uploaded' : '— skipped / none'}</p></div>`;
+      });
+      html += '</section>';
+      clarificationsHistoryHtml += html;
+    }
+
+    async function finishOptionalPdfStep() {
+      appendOptionalPdfSnapshot();
+      await fetch(`/optional-pdf/${jobId}/done`, { method: 'POST' });
+      statusArea.innerHTML =
+        clarificationsHistoryHtml +
+        '<div class="pipeline-status"><span class="spinner"></span> Reading sources…</div>';
       pollTimer = setInterval(pollStatus, 3000);
       void pollStatus();
     }

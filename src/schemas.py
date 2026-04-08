@@ -85,6 +85,8 @@ class SourceNote(BaseModel):
 
     source_id: str
     is_accessible: bool
+    # Usable notes may still be abstract-only; fetched_fulltext means we had substantive body text.
+    fetched_fulltext: bool = False
     title: str = ""
     authors: list[str] = []
     author_families: list[str] | None = None

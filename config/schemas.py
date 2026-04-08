@@ -46,6 +46,10 @@ class SearchConfig(BaseModel):
     min_sources: int = 8
     max_sources: int = 25
     overfetch_multiplier: float = 3.0
+    optional_pdf_prompt_top_n: int = 5
+    """Offer optional PDF upload for up to this many API sources without full text (0 = off)."""
+    optional_pdf_min_body_words: int = 50
+    """Minimum word count of fetched/local body text to count as full text (not abstract-only)."""
 
 
 class PathsConfig(BaseModel):

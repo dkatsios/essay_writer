@@ -1,0 +1,120 @@
+"""Tests for optional PDF prompt ranking and payload building."""
+
+from __future__ import annotations
+
+from src.pipeline import (
+    _build_optional_pdf_prompt_payload,
+    _lexical_relevance_score,
+    _optional_pdf_corpus_tokens,
+)
+from src.schemas import SourceNote
+
+
+def test_lexical_relevance_prefers_overlap() -> None:
+    corpus = {"climate", "policy", "carbon"}
+    a = _lexical_relevance_score(corpus, "Climate policy in the EU", "")
+    b = _lexical_relevance_score(corpus, "Unrelated sports news", "")
+    assert a > b
+
+
+def test_optional_pdf_payload_orders_by_lex_then_citations() -> None:
+    corpus = {"neural", "network", "learning"}
+    registry = {
+        "s_low": {
+            "title": "Sports and games",
+            "abstract": "We study football statistics over decades.",
+            "citation_count": 9999,
+            "doi": "10.1/lo",
+            "user_provided": False,
+        },
+        "s_high": {
+            "title": "Neural networks for deep learning",
+            "abstract": "We propose neural network architectures for representation learning.",
+            "citation_count": 10,
+            "doi": "10.1/hi",
+            "user_provided": False,
+        },
+    }
+    results: list[tuple[str, SourceNote | None]] = [
+        (
+            "s_low",
+            SourceNote(
+                source_id="s_low",
+                is_accessible=True,
+                fetched_fulltext=False,
+                relevance_score=4,
+            ),
+        ),
+        (
+            "s_high",
+            SourceNote(
+                source_id="s_high",
+                is_accessible=True,
+                fetched_fulltext=False,
+                relevance_score=2,
+            ),
+        ),
+    ]
+    items, sids = _build_optional_pdf_prompt_payload(
+        results, registry, {"s_low", "s_high"}, corpus, top_n=5
+    )
+    assert sids[0] == "s_high"
+    assert items[0]["source_id"] == "s_high"
+
+
+def test_optional_pdf_excludes_user_provided_and_fulltext() -> None:
+    corpus = set()
+    registry = {
+        "u1": {
+            "title": "User doc",
+            "abstract": "",
+            "user_provided": True,
+            "citation_count": 0,
+        },
+        "a1": {
+            "title": "API with PDF",
+            "abstract": "",
+            "user_provided": False,
+            "citation_count": 5,
+        },
+    }
+    results = [
+        (
+            "u1",
+            SourceNote(
+                source_id="u1",
+                is_accessible=True,
+                fetched_fulltext=False,
+            ),
+        ),
+        (
+            "a1",
+            SourceNote(
+                source_id="a1",
+                is_accessible=True,
+                fetched_fulltext=True,
+            ),
+        ),
+    ]
+    items, _ = _build_optional_pdf_prompt_payload(
+        results, registry, {"u1", "a1"}, corpus, top_n=5
+    )
+    assert items == []
+
+
+def test_optional_pdf_corpus_reads_brief_and_plan(tmp_path) -> None:
+    (tmp_path / "brief").mkdir()
+    (tmp_path / "plan").mkdir()
+    (tmp_path / "brief" / "assignment.json").write_text(
+        '{"topic": "quantum computing ethics"}', encoding="utf-8"
+    )
+    (tmp_path / "plan" / "plan.json").write_text(
+        '{"title": "Plan", "thesis": "Privacy matters", '
+        '"sections": [{"title": "Quantum threats"}], '
+        '"research_queries": ["post-quantum crypto"]}',
+        encoding="utf-8",
+    )
+    t = _optional_pdf_corpus_tokens(tmp_path)
+    assert "quantum" in t
+    assert "privacy" in t
+    assert "crypto" in t

@@ -28,6 +28,7 @@ from config.schemas import load_config  # noqa: E402
 from src.agent import create_model  # noqa: E402
 from src.intake import build_extracted_text, scan  # noqa: E402
 from src.pipeline import run_pipeline  # noqa: E402
+from src.tools.web_fetcher import extract_pdf_bytes_to_text  # noqa: E402
 from src.runner import TokenTracker, _StepTimer, _make_callbacks  # noqa: E402
 from src.runner import _parse_validation_answers  # noqa: E402
 from src.schemas import AssignmentBrief, Clarification, ValidationQuestion  # noqa: E402
@@ -72,11 +73,14 @@ class Job:
     """In-memory state for a single pipeline run."""
 
     job_id: str
-    status: str = "running"  # running | questions | done | error
+    status: str = "running"  # running | questions | optional_pdfs | done | error
     run_dir: Path = field(default_factory=lambda: Path("."))
     questions: list[dict] | None = None
     answers_event: threading.Event = field(default_factory=threading.Event)
     answers: str = ""
+    optional_pdf_items: list[dict] | None = None
+    optional_pdf_allowed_ids: frozenset[str] | None = None
+    optional_pdf_event: threading.Event = field(default_factory=threading.Event)
     error: str = ""
     academic_level: str = ""
     tracker: TokenTracker | None = None
@@ -275,6 +279,19 @@ def _run_pipeline_thread(
                 brief.model_dump_json(indent=2, ensure_ascii=False), encoding="utf-8"
             )
 
+        def _on_optional_pdfs(rd: Path, items: list[dict]) -> None:
+            if not items:
+                return
+            job.optional_pdf_items = items
+            job.optional_pdf_allowed_ids = frozenset(
+                str(row["source_id"]) for row in items
+            )
+            job.status = "optional_pdfs"
+            job.optional_pdf_event.clear()
+            job.optional_pdf_event.wait()
+            job.optional_pdf_items = None
+            job.optional_pdf_allowed_ids = None
+
         run_pipeline(
             worker,
             writer,
@@ -285,6 +302,7 @@ def _run_pipeline_thread(
             callbacks=callbacks,
             token_tracker=tracker,
             on_questions=_on_questions,
+            on_optional_source_pdfs=_on_optional_pdfs,
             min_sources=min_sources,
             user_sources_dir=user_sources_dir,
         )
@@ -411,6 +429,8 @@ async def status(job_id: str):
         resp["stage"] = job.tracker.get_current_step()
     if job.status == "questions" and job.questions:
         resp["questions"] = job.questions
+    if job.status == "optional_pdfs" and job.optional_pdf_items:
+        resp["optional_pdf_items"] = job.optional_pdf_items
     if job.status == "error":
         resp["error"] = job.error
     return JSONResponse(resp)
@@ -428,6 +448,77 @@ async def answer(job_id: str, answers: str = Form("")):
     job.answers = answers
     job.status = "running"
     job.answers_event.set()
+    return JSONResponse({"status": "ok"})
+
+
+_MAX_OPTIONAL_PDF_BYTES = 30 * 1024 * 1024
+
+
+@app.post("/optional-pdf/{job_id}")
+async def optional_pdf_upload(
+    job_id: str,
+    source_id: str = Form(""),
+    file: UploadFile | None = None,
+):
+    """Attach a user PDF to a registry source (optional full-text step)."""
+    job = _jobs.get(job_id)
+    if not job:
+        return JSONResponse({"error": "Job not found"}, status_code=404)
+    if job.status != "optional_pdfs":
+        return JSONResponse({"error": "No optional PDF step active"}, status_code=400)
+    sid = source_id.strip()
+    if not sid or job.optional_pdf_allowed_ids is None or sid not in job.optional_pdf_allowed_ids:
+        return JSONResponse({"error": "Invalid source_id"}, status_code=400)
+    if file is None or not file.filename:
+        return JSONResponse({"error": "Missing file"}, status_code=400)
+    if not file.filename.lower().endswith(".pdf"):
+        return JSONResponse({"error": "Only PDF files are accepted"}, status_code=400)
+
+    raw = await file.read()
+    if len(raw) > _MAX_OPTIONAL_PDF_BYTES:
+        return JSONResponse({"error": "File too large"}, status_code=400)
+    if not raw.startswith(b"%PDF"):
+        return JSONResponse({"error": "Not a valid PDF"}, status_code=400)
+
+    try:
+        text = extract_pdf_bytes_to_text(raw)
+    except Exception:
+        logger.exception("PDF extract failed for job %s source %s", job_id, sid)
+        return JSONResponse({"error": "Could not read PDF text"}, status_code=400)
+
+    if len(text) > 50_000:
+        text = text[:50_000] + "\n\n[... truncated ...]"
+
+    run_dir = job.run_dir
+    supplement = run_dir / "sources" / "supplement"
+    supplement.mkdir(parents=True, exist_ok=True)
+    safe = "".join(c if c.isalnum() or c in "-_" else "_" for c in sid)[:120]
+    txt_path = supplement / f"{safe}.txt"
+    txt_path.write_text(text, encoding="utf-8")
+
+    reg_path = run_dir / "sources" / "registry.json"
+    registry = json.loads(reg_path.read_text(encoding="utf-8"))
+    if sid not in registry:
+        return JSONResponse({"error": "Source not in registry"}, status_code=400)
+    registry[sid]["content_path"] = str(txt_path.resolve())
+    reg_path.write_text(
+        json.dumps(registry, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+
+    return JSONResponse({"status": "ok", "source_id": sid})
+
+
+@app.post("/optional-pdf/{job_id}/done")
+async def optional_pdf_done(job_id: str):
+    """Continue the pipeline after optional PDF uploads (or skip)."""
+    job = _jobs.get(job_id)
+    if not job:
+        return JSONResponse({"error": "Job not found"}, status_code=404)
+    if job.status != "optional_pdfs":
+        return JSONResponse({"error": "No optional PDF step active"}, status_code=400)
+
+    job.status = "running"
+    job.optional_pdf_event.set()
     return JSONResponse({"status": "ok"})
 
 

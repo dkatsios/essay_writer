@@ -71,6 +71,11 @@ def _extract_pdf_text(data: bytes) -> str:
     return "\n\n".join(parts)
 
 
+def extract_pdf_bytes_to_text(data: bytes) -> str:
+    """Extract plain text from a PDF given as raw bytes (e.g. user upload)."""
+    return _extract_pdf_text(data)
+
+
 def fetch_url_content(url: str, sources_dir: str | None = None) -> str:
     """Fetch content from a URL and return as plain text.
 

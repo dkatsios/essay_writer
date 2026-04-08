@@ -19,6 +19,7 @@ import math
 import re
 import sys
 import threading
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from pathlib import Path
@@ -45,8 +46,6 @@ from src.tools.research_sources import run_research
 from src.tools.web_fetcher import fetch_url_content
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
-
     from config.schemas import EssayWriterConfig
 
 logger = logging.getLogger(__name__)
@@ -61,6 +60,159 @@ _JUNK_ABSTRACT_PATTERNS = re.compile(
 _MIN_ABSTRACT_WORDS = 20
 
 _USER_SOURCE_PREFIX = "user_"
+
+# Lexical overlap for optional PDF prompt ranking (English + common academic Greek-ish noise)
+_OPTIONAL_PDF_STOPWORDS = frozenset(
+    "the a an and or for to of in on at by with from as is are was were be been being "
+    "this that these those it its they them their we our you your he she his her not no "
+    "but if than then so such also only both all any each more most other some very can "
+    "will may might must should could would about into through over after before under "
+    "between out up down new first one two how what when where which who whom why into"
+    .split()
+)
+
+
+def _body_word_count(content: str) -> int:
+    return len(content.split())
+
+
+def _has_substantive_body(content: str, min_words: int) -> bool:
+    return _body_word_count(content.strip()) >= min_words
+
+
+def _tokenize_for_overlap(text: str) -> set[str]:
+    if not text:
+        return set()
+    words = re.findall(r"[\w'-]{3,}", text.lower(), flags=re.UNICODE)
+    return {w for w in words if w not in _OPTIONAL_PDF_STOPWORDS}
+
+
+def _optional_pdf_corpus_tokens(run_dir: Path) -> set[str]:
+    """Cheap topic keywords from brief + plan for ranking optional PDF prompts."""
+    tokens: set[str] = set()
+    brief_path = run_dir / "brief" / "assignment.json"
+    if brief_path.exists():
+        try:
+            brief = json.loads(brief_path.read_text(encoding="utf-8"))
+            for key in ("topic", "title", "research_question", "course"):
+                val = brief.get(key)
+                if isinstance(val, str) and val:
+                    tokens |= _tokenize_for_overlap(val)
+        except Exception:
+            pass
+    plan_path = run_dir / "plan" / "plan.json"
+    if plan_path.exists():
+        try:
+            plan = json.loads(plan_path.read_text(encoding="utf-8"))
+            for key in ("title", "thesis"):
+                val = plan.get(key)
+                if isinstance(val, str) and val:
+                    tokens |= _tokenize_for_overlap(val)
+            for sec in plan.get("sections") or []:
+                if isinstance(sec, dict):
+                    t = sec.get("title")
+                    if isinstance(t, str) and t:
+                        tokens |= _tokenize_for_overlap(t)
+            for q in plan.get("research_queries") or []:
+                if isinstance(q, str) and q:
+                    tokens |= _tokenize_for_overlap(q)
+        except Exception:
+            pass
+    return tokens
+
+
+def _lexical_relevance_score(
+    corpus: set[str], title: str, abstract: str
+) -> int:
+    doc_tokens = _tokenize_for_overlap(title) | _tokenize_for_overlap(abstract)
+    return len(doc_tokens & corpus)
+
+
+def _doi_href(doi: str) -> str | None:
+    d = (doi or "").strip()
+    if not d:
+        return None
+    d = d.removeprefix("https://doi.org/").removeprefix("http://doi.org/")
+    return f"https://doi.org/{d}"
+
+
+def _source_note_with_fulltext_flag(
+    note: SourceNote, had_substantive_body: bool
+) -> SourceNote:
+    return note.model_copy(update={"fetched_fulltext": had_substantive_body})
+
+
+def _load_source_body_sync(
+    meta: dict,
+    sources_dir: str,
+    domain_tracker: _DomainFailureTracker | None,
+    min_body_words: int,
+) -> str:
+    """Load best available body text: local content_path first, then URL for API sources."""
+    is_user_provided = meta.get("user_provided", False)
+    url = meta.get("pdf_url") or meta.get("url", "")
+    content = ""
+    content_path = meta.get("content_path", "")
+    if content_path and Path(content_path).exists():
+        content = Path(content_path).read_text(encoding="utf-8")
+        if len(content) > 50_000:
+            content = content[:50_000] + "\n\n[... truncated ...]"
+    if not _has_substantive_body(content, min_body_words) and url and not is_user_provided:
+        if domain_tracker and domain_tracker.should_skip(url):
+            logger.info("Skipping %s — domain throttled", url)
+        else:
+            try:
+                fetched = fetch_url_content(url, sources_dir=sources_dir)
+                if len(fetched) > 50_000:
+                    fetched = fetched[:50_000] + "\n\n[... truncated ...]"
+                if _body_word_count(fetched) >= _body_word_count(content):
+                    content = fetched
+            except httpx.HTTPStatusError as exc:
+                logger.warning("Failed to fetch %s: %s", url, exc)
+                if exc.response.status_code == 429 and domain_tracker:
+                    domain_tracker.record_failure(url)
+            except (httpx.RequestError, Exception) as exc:
+                logger.warning("Failed to fetch %s: %s", url, exc)
+    return content
+
+
+async def _load_source_body_async(
+    meta: dict,
+    sources_dir: str,
+    domain_tracker: _DomainFailureTracker | None,
+    min_body_words: int,
+) -> str:
+    import asyncio
+
+    is_user_provided = meta.get("user_provided", False)
+    url = meta.get("pdf_url") or meta.get("url", "")
+    content = ""
+    content_path = meta.get("content_path", "")
+    if content_path and Path(content_path).exists():
+        content = await asyncio.to_thread(
+            Path(content_path).read_text, encoding="utf-8"
+        )
+        if len(content) > 50_000:
+            content = content[:50_000] + "\n\n[... truncated ...]"
+    if not _has_substantive_body(content, min_body_words) and url and not is_user_provided:
+        if domain_tracker and domain_tracker.should_skip(url):
+            logger.info("Skipping %s — domain throttled", url)
+        else:
+            try:
+                fetched = await asyncio.to_thread(
+                    fetch_url_content, url, sources_dir
+                )
+                if len(fetched) > 50_000:
+                    fetched = fetched[:50_000] + "\n\n[... truncated ...]"
+                if _body_word_count(fetched) >= _body_word_count(content):
+                    content = fetched
+            except httpx.HTTPStatusError as exc:
+                logger.warning("Failed to fetch %s: %s", url, exc)
+                if exc.response.status_code == 429 and domain_tracker:
+                    domain_tracker.record_failure(url)
+            except (httpx.RequestError, Exception) as exc:
+                logger.warning("Failed to fetch %s: %s", url, exc)
+    return content
 
 
 def _is_useful_abstract(text: str) -> bool:
@@ -111,6 +263,7 @@ class PipelineContext:
     callbacks: list | None = None
     tracker: object | None = None  # TokenTracker (optional)
     user_sources_dir: Path | None = None
+    on_optional_source_pdfs: Callable[[Path, list[dict]], None] | None = None
 
 
 @dataclass
@@ -627,36 +780,17 @@ def _read_one_source(
     callbacks: list | None,
     domain_tracker: _DomainFailureTracker | None = None,
     essay_topic: str = "",
+    *,
+    min_body_words: int = 50,
 ) -> SourceNote:
     """Fetch and extract notes for a single source."""
     is_user_provided = meta.get("user_provided", False)
     url = meta.get("pdf_url") or meta.get("url", "")
-    content = ""
+    content = _load_source_body_sync(
+        meta, sources_dir, domain_tracker, min_body_words
+    )
+    had_body = _has_substantive_body(content, min_body_words)
 
-    # User-provided sources: read from local file
-    if is_user_provided:
-        content_path = meta.get("content_path", "")
-        if content_path and Path(content_path).exists():
-            content = Path(content_path).read_text(encoding="utf-8")
-            if len(content) > 50_000:
-                content = content[:50_000] + "\n\n[... truncated ...]"
-    elif url:
-        if domain_tracker and domain_tracker.should_skip(url):
-            logger.info("Skipping %s — domain throttled", url)
-        else:
-            try:
-                content = fetch_url_content(url, sources_dir=sources_dir)
-                # Truncate very long content to avoid token limits
-                if len(content) > 50_000:
-                    content = content[:50_000] + "\n\n[... truncated ...]"
-            except httpx.HTTPStatusError as exc:
-                logger.warning("Failed to fetch %s: %s", url, exc)
-                if exc.response.status_code == 429 and domain_tracker:
-                    domain_tracker.record_failure(url)
-            except (httpx.RequestError, Exception) as exc:
-                logger.warning("Failed to fetch %s: %s", url, exc)
-
-    # If we have content or at least a useful abstract, use LLM to extract notes
     abstract = meta.get("abstract", "")
     if content or _is_useful_abstract(abstract):
         prompt = render_prompt(
@@ -672,15 +806,16 @@ def _read_one_source(
             essay_topic=essay_topic,
         )
         try:
-            return _structured_call(worker, prompt, SourceNote, callbacks)
+            note = _structured_call(worker, prompt, SourceNote, callbacks)
+            return _source_note_with_fulltext_flag(note, had_body)
         except Exception:
             logger.warning("LLM extraction failed for %s, using metadata", source_id)
 
-    # Fallback: construct note from metadata alone
     if _is_useful_abstract(abstract):
         return SourceNote(
             source_id=source_id,
             is_accessible=True,
+            fetched_fulltext=False,
             title=meta.get("title", ""),
             authors=meta.get("authors", []),
             year=meta.get("year"),
@@ -698,6 +833,7 @@ def _read_one_source(
     return SourceNote(
         source_id=source_id,
         is_accessible=False,
+        fetched_fulltext=False,
         title=meta.get("title", ""),
         authors=meta.get("authors", []),
         year=meta.get("year"),
@@ -714,39 +850,16 @@ async def _async_read_one_source(
     callbacks: list | None,
     domain_tracker: _DomainFailureTracker | None = None,
     essay_topic: str = "",
+    *,
+    min_body_words: int = 50,
 ) -> SourceNote:
     """Async: fetch content in a thread, then extract notes via ainvoke."""
-    import asyncio
-
     is_user_provided = meta.get("user_provided", False)
     url = meta.get("pdf_url") or meta.get("url", "")
-    content = ""
-
-    # User-provided sources: read from local file
-    if is_user_provided:
-        content_path = meta.get("content_path", "")
-        if content_path and Path(content_path).exists():
-            content = await asyncio.to_thread(
-                Path(content_path).read_text, encoding="utf-8"
-            )
-            if len(content) > 50_000:
-                content = content[:50_000] + "\n\n[... truncated ...]"
-    elif url:
-        if domain_tracker and domain_tracker.should_skip(url):
-            logger.info("Skipping %s — domain throttled", url)
-        else:
-            try:
-                content = await asyncio.to_thread(
-                    fetch_url_content, url, sources_dir=sources_dir
-                )
-                if len(content) > 50_000:
-                    content = content[:50_000] + "\n\n[... truncated ...]"
-            except httpx.HTTPStatusError as exc:
-                logger.warning("Failed to fetch %s: %s", url, exc)
-                if exc.response.status_code == 429 and domain_tracker:
-                    domain_tracker.record_failure(url)
-            except (httpx.RequestError, Exception) as exc:
-                logger.warning("Failed to fetch %s: %s", url, exc)
+    content = await _load_source_body_async(
+        meta, sources_dir, domain_tracker, min_body_words
+    )
+    had_body = _has_substantive_body(content, min_body_words)
 
     abstract = meta.get("abstract", "")
     if content or _is_useful_abstract(abstract):
@@ -763,7 +876,10 @@ async def _async_read_one_source(
             essay_topic=essay_topic,
         )
         try:
-            return await _async_structured_call(worker, prompt, SourceNote, callbacks)
+            note = await _async_structured_call(
+                worker, prompt, SourceNote, callbacks
+            )
+            return _source_note_with_fulltext_flag(note, had_body)
         except Exception:
             logger.warning("LLM extraction failed for %s, using metadata", source_id)
 
@@ -771,6 +887,7 @@ async def _async_read_one_source(
         return SourceNote(
             source_id=source_id,
             is_accessible=True,
+            fetched_fulltext=False,
             title=meta.get("title", ""),
             authors=meta.get("authors", []),
             year=meta.get("year"),
@@ -788,6 +905,7 @@ async def _async_read_one_source(
     return SourceNote(
         source_id=source_id,
         is_accessible=False,
+        fetched_fulltext=False,
         title=meta.get("title", ""),
         authors=meta.get("authors", []),
         year=meta.get("year"),
@@ -866,11 +984,70 @@ def _source_read_candidates(
 _SOURCE_READ_CONCURRENCY = 6
 
 
-def _make_read_sources(target_sources: int) -> Callable[[PipelineContext], None]:
-    def _do_read_sources(ctx: PipelineContext) -> None:
+def _build_optional_pdf_prompt_payload(
+    results: list[tuple[str, SourceNote | None]],
+    registry: dict[str, dict],
+    task_sids: set[str],
+    corpus: set[str],
+    top_n: int,
+) -> tuple[list[dict], list[str]]:
+    """Rank API sources without substantive fetched body; return UI payload and ids."""
+    eligible: list[tuple[str, dict, SourceNote, int, int]] = []
+    for sid, note in results:
+        if sid not in task_sids or note is None:
+            continue
+        meta = registry.get(sid) or {}
+        if meta.get("user_provided"):
+            continue
+        if note.fetched_fulltext:
+            continue
+        title = (meta.get("title") or note.title or "").strip()
+        abstract = (meta.get("abstract", "") or "").strip()
+        cit = int(meta.get("citation_count", 0) or 0)
+        lex = _lexical_relevance_score(corpus, title, abstract)
+        eligible.append((sid, meta, note, lex, cit))
+    eligible.sort(key=lambda x: (-x[3], -x[4], x[0]))
+    chosen = eligible[:top_n]
+    items: list[dict] = []
+    for sid, meta, note, _, _ in chosen:
+        raw_doi = (meta.get("doi", "") or note.doi or "").strip()
+        items.append(
+            {
+                "source_id": sid,
+                "title": (meta.get("title") or note.title or sid).strip(),
+                "doi": raw_doi,
+                "doi_url": _doi_href(raw_doi),
+            }
+        )
+    prompt_sids = [t[0] for t in chosen]
+    return items, prompt_sids
+
+
+def _cli_optional_pdf_hint(run_dir: Path, items: list[dict]) -> None:
+    print(
+        "\n"
+        + "=" * 50
+        + "\n  Some ranked sources have no full text (abstract-only or fetch failed).\n"
+        + "  The web UI can prompt for optional PDFs; on CLI, use --sources with your files\n"
+        + "  or add text under the run directory and re-run if you extend the tool.\n"
+        + f"  Run directory: {run_dir}\n",
+        file=sys.stderr,
+    )
+    for row in items:
+        line = f"  • {row.get('title', row['source_id'])}"
+        print(line[:200], file=sys.stderr)
+        if row.get("doi_url"):
+            print(f"    {row['doi_url']}", file=sys.stderr)
+        print(f"    id={row['source_id']}", file=sys.stderr)
+
+
+def _make_read_sources(
+    target_sources: int,
+) -> Callable[[PipelineContext], None]:
+    def _do_read_sources(c: PipelineContext) -> None:
         import asyncio
 
-        registry_path = ctx.run_dir / "sources" / "registry.json"
+        registry_path = c.run_dir / "sources" / "registry.json"
         if not registry_path.exists():
             logger.warning("No registry.json found -- skipping source reading.")
             return
@@ -881,13 +1058,15 @@ def _make_read_sources(target_sources: int) -> Callable[[PipelineContext], None]
             logger.info("No sources to read (no URLs and no user-provided files).")
             return
 
+        min_body = c.config.search.optional_pdf_min_body_words
+        top_n = c.config.search.optional_pdf_prompt_top_n
+
         logger.info("Reading %d ranked source candidates in parallel...", len(tasks))
-        sources_dir = str(ctx.run_dir / "sources")
-        notes_dir = ctx.run_dir / "sources" / "notes"
+        sources_dir = str(c.run_dir / "sources")
+        notes_dir = c.run_dir / "sources" / "notes"
         notes_dir.mkdir(parents=True, exist_ok=True)
 
-        # Load essay topic from the brief for relevance scoring
-        brief_path = ctx.run_dir / "brief" / "assignment.json"
+        brief_path = c.run_dir / "brief" / "assignment.json"
         essay_topic = ""
         if brief_path.exists():
             try:
@@ -899,17 +1078,22 @@ def _make_read_sources(target_sources: int) -> Callable[[PipelineContext], None]
         domain_tracker = _DomainFailureTracker()
         semaphore = asyncio.Semaphore(_SOURCE_READ_CONCURRENCY)
 
-        async def read_one(sid: str, meta: dict) -> tuple[str, SourceNote | None]:
+        async def read_one(
+            sid: str,
+            meta: dict,
+            dt: _DomainFailureTracker,
+        ) -> tuple[str, SourceNote | None]:
             async with semaphore:
                 try:
                     note = await _async_read_one_source(
                         sid,
                         meta,
-                        ctx.worker,
+                        c.worker,
                         sources_dir,
-                        ctx.callbacks,
-                        domain_tracker=domain_tracker,
+                        c.callbacks,
+                        domain_tracker=dt,
                         essay_topic=essay_topic,
+                        min_body_words=min_body,
                     )
                     _write_json(notes_dir / f"{sid}.json", note)
                     return sid, note
@@ -917,12 +1101,15 @@ def _make_read_sources(target_sources: int) -> Callable[[PipelineContext], None]
                     logger.exception("Failed to read source %s", sid)
                     return sid, None
 
-        async def read_all() -> list[tuple[str, SourceNote | None]]:
-            return await asyncio.gather(*(read_one(sid, meta) for sid, meta in tasks))
+        async def read_all(
+            pairs: list[tuple[str, dict]], dt: _DomainFailureTracker
+        ) -> list[tuple[str, SourceNote | None]]:
+            return await asyncio.gather(
+                *(read_one(sid, meta, dt) for sid, meta in pairs)
+            )
 
-        results = asyncio.run(read_all())
+        results = asyncio.run(read_all(tasks, domain_tracker))
 
-        # Backfill registry metadata for user-provided sources from LLM notes
         registry_updated = False
         for sid, note in results:
             if (
@@ -956,14 +1143,50 @@ def _make_read_sources(target_sources: int) -> Callable[[PipelineContext], None]
             )
             logger.info("Backfilled registry metadata for user-provided sources")
 
+        task_sids = {sid for sid, _ in tasks}
+        corpus = _optional_pdf_corpus_tokens(c.run_dir)
+        items, prompt_sids = _build_optional_pdf_prompt_payload(
+            results, registry, task_sids, corpus, top_n
+        )
+
+        if items and top_n > 0:
+            paths_before = {
+                sid: (registry.get(sid) or {}).get("content_path") for sid in prompt_sids
+            }
+            cb = c.on_optional_source_pdfs
+            if cb:
+                cb(c.run_dir, items)
+            else:
+                _cli_optional_pdf_hint(c.run_dir, items)
+            registry = json.loads(registry_path.read_text(encoding="utf-8"))
+            reread_ids = [
+                sid
+                for sid in prompt_sids
+                if (registry.get(sid) or {}).get("content_path")
+                != paths_before.get(sid)
+            ]
+            if reread_ids:
+                logger.info(
+                    "Re-reading %d source(s) after optional PDF upload…",
+                    len(reread_ids),
+                )
+                reread_pairs = [(sid, registry[sid]) for sid in reread_ids]
+                domain_tracker2 = _DomainFailureTracker()
+                reread_results = asyncio.run(
+                    read_all(reread_pairs, domain_tracker2)
+                )
+                by_sid = dict(results)
+                for sid, note in reread_results:
+                    by_sid[sid] = note
+                results = [(sid, by_sid[sid]) for sid, _ in tasks]
+
         accessible_count = sum(
             1 for _, note in results if note is not None and note.is_accessible
         )
         inaccessible_count = len(tasks) - accessible_count
 
-        # Select best N sources
-        selected = _select_best_sources(ctx.run_dir, registry, target_sources)
-        selected_path = ctx.run_dir / "sources" / "selected.json"
+        selected = _select_best_sources(c.run_dir, registry, target_sources)
+        selected_path = c.run_dir / "sources" / "selected.json"
         selected_path.write_text(
             json.dumps(selected, ensure_ascii=False, indent=2), encoding="utf-8"
         )
@@ -1418,6 +1641,7 @@ def run_pipeline(
     callbacks: list | None = None,
     token_tracker=None,
     on_questions: Callable[[list[ValidationQuestion], Path], None] | None = None,
+    on_optional_source_pdfs: Callable[[Path, list[dict]], None] | None = None,
     min_sources: int | None = None,
     user_sources_dir: Path | None = None,
 ) -> None:
@@ -1436,6 +1660,7 @@ def run_pipeline(
         callbacks=callbacks,
         tracker=token_tracker,
         user_sources_dir=user_sources_dir,
+        on_optional_source_pdfs=on_optional_source_pdfs,
     )
 
     # Ensure output subdirectories exist
