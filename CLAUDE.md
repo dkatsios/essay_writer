@@ -26,6 +26,7 @@ uv run python -m src.runner /path/to/files/ --config my_config.yaml
 
 # Run the web UI
 uv run uvicorn src.web:app --reload
+# Web: optional ESSAY_WEB_JOB_TTL_SECONDS (default 86400, 0=disable stale-job sweeps), ESSAY_WEB_JOB_SWEEP_INTERVAL_SECONDS
 
 # Docker
 docker build -t essay-writer .

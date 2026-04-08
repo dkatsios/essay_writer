@@ -4,12 +4,15 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import shutil
 import tempfile
 import threading
+import time
 import unicodedata
 import uuid
 import zipfile
+from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from io import BytesIO
 from pathlib import Path
@@ -31,7 +34,9 @@ from src.schemas import AssignmentBrief, Clarification, ValidationQuestion  # no
 
 logger = logging.getLogger(__name__)
 
-app = FastAPI(title="Essay Writer")
+# Remove completed/failed web jobs (and temp dirs) if never downloaded.
+_DEFAULT_JOB_TTL_SECONDS = 86_400
+_DEFAULT_SWEEP_INTERVAL_SECONDS = 300
 
 _jinja_env = Environment(
     loader=FileSystemLoader(Path(__file__).parent / "templates" / "web"),
@@ -75,9 +80,95 @@ class Job:
     error: str = ""
     academic_level: str = ""
     tracker: TokenTracker | None = None
-
+    created_at: float = field(default_factory=time.time)
+    """Wall time when the job was submitted."""
+    finished_at: float | None = None
+    """Wall time when status became ``done`` or ``error``."""
 
 _jobs: dict[str, Job] = {}
+
+
+def _job_ttl_seconds() -> int:
+    raw = os.environ.get(
+        "ESSAY_WEB_JOB_TTL_SECONDS", str(_DEFAULT_JOB_TTL_SECONDS)
+    ).strip()
+    try:
+        n = int(raw)
+    except ValueError:
+        return _DEFAULT_JOB_TTL_SECONDS
+    return max(0, n)
+
+
+def _job_sweep_interval_seconds() -> int:
+    raw = os.environ.get(
+        "ESSAY_WEB_JOB_SWEEP_INTERVAL_SECONDS", str(_DEFAULT_SWEEP_INTERVAL_SECONDS)
+    ).strip()
+    try:
+        n = int(raw)
+    except ValueError:
+        return _DEFAULT_SWEEP_INTERVAL_SECONDS
+    return max(60, n)
+
+
+def job_ttl_sweep_once(now: float | None = None) -> int:
+    """Remove ``done`` / ``error`` jobs whose ``finished_at`` is older than TTL.
+
+    Returns the number of jobs removed. No-op if ``ESSAY_WEB_JOB_TTL_SECONDS``
+    is ``0`` (disabled).
+    """
+    ttl = _job_ttl_seconds()
+    if ttl <= 0:
+        return 0
+    t = time.time() if now is None else now
+    removed = 0
+    for jid, job in list(_jobs.items()):
+        if job.status not in ("done", "error"):
+            continue
+        if job.finished_at is None:
+            continue
+        if t - job.finished_at <= ttl:
+            continue
+        _jobs.pop(jid, None)
+        shutil.rmtree(job.run_dir, ignore_errors=True)
+        removed += 1
+        logger.info(
+            "TTL cleanup removed job %s (status=%s, age=%.0fs)",
+            jid,
+            job.status,
+            t - job.finished_at,
+        )
+    return removed
+
+
+def _job_ttl_sweeper_loop() -> None:
+    interval = _job_sweep_interval_seconds()
+    while True:
+        time.sleep(interval)
+        try:
+            job_ttl_sweep_once()
+        except Exception:
+            logger.exception("Job TTL sweep failed")
+
+
+def _start_job_ttl_sweeper() -> None:
+    if _job_ttl_seconds() <= 0:
+        logger.info("ESSAY_WEB_JOB_TTL_SECONDS is 0; stale-job sweeper disabled")
+        return
+    t = threading.Thread(
+        target=_job_ttl_sweeper_loop,
+        name="essay-job-ttl-sweeper",
+        daemon=True,
+    )
+    t.start()
+
+
+@asynccontextmanager
+async def _lifespan(app: FastAPI):
+    _start_job_ttl_sweeper()
+    yield
+
+
+app = FastAPI(title="Essay Writer", lifespan=_lifespan)
 
 
 # ---------------------------------------------------------------------------
@@ -109,6 +200,7 @@ def _run_pipeline_thread(
         else:
             job.status = "error"
             job.error = "Provide at least a prompt or upload files."
+            job.finished_at = time.time()
             return
 
         (input_dir / "extracted.md").write_text(extracted_text, encoding="utf-8")
@@ -205,11 +297,13 @@ def _run_pipeline_thread(
 
         tracker.write_report(run_dir)
         job.status = "done"
+        job.finished_at = time.time()
 
     except Exception:
         logger.exception("Pipeline failed for job %s", job.job_id)
         job.status = "error"
         job.error = "Pipeline failed. Check server logs for details."
+        job.finished_at = time.time()
 
 
 # ---------------------------------------------------------------------------

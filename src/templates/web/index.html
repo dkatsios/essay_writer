@@ -27,8 +27,10 @@
     .question-block label { font-weight: 400; margin-top: .2rem; cursor: pointer; }
     .error { color: #dc2626; font-weight: 600; }
     .download-link { display: inline-block; margin-top: .5rem; padding: .5rem 1.2rem; background: #16a34a; color: #fff; text-decoration: none; border-radius: 6px; }
-    .download-link:hover { background: #15803d; }
+    .download-link:hover:not(:disabled) { background: #15803d; }
+    .download-link:disabled { opacity: .85; cursor: wait; }
     .hint { font-size: .85rem; color: #64748b; margin-top: .2rem; }
+    .job-gone { color: #334155; font-weight: 600; margin-top: .5rem; }
   </style>
 </head>
 <body>
@@ -70,6 +72,7 @@
     const submitBtn = document.getElementById('submit-btn');
     let jobId = null;
     let pollTimer = null;
+    let downloadInProgress = false;
     /** Read-only HTML for submitted Q&A rounds; kept visible while the pipeline runs. */
     let clarificationsHistoryHtml = '';
 
@@ -119,6 +122,13 @@
       if (!jobId) return;
       try {
         const res = await fetch(`/status/${jobId}`);
+        if (res.status === 404) {
+          clearInterval(pollTimer);
+          showJobGone(
+            'This job is no longer on the server (expired timeout or already cleaned up). If you already downloaded your ZIP, that is expected.'
+          );
+          return;
+        }
         const data = await res.json();
 
         if (data.status === 'running') {
@@ -136,8 +146,12 @@
           clearInterval(pollTimer);
           statusArea.innerHTML =
             clarificationsHistoryHtml +
-            `<p>✅ Essay generated!</p><a class="download-link" href="/download/${jobId}">Download ZIP</a>`;
+            '<p>✅ Essay generated!</p>' +
+            '<button type="button" class="download-link" id="download-btn">Download ZIP</button>' +
+            '<p class="hint">The server removes this package after you download it, or automatically after a timeout if you leave it here.</p>';
           submitBtn.disabled = false;
+          const dl = document.getElementById('download-btn');
+          if (dl) dl.addEventListener('click', () => { void downloadZip(); });
         } else if (data.status === 'error') {
           clearInterval(pollTimer);
           showError(data.error || 'Unknown error');
@@ -239,6 +253,61 @@
       statusArea.innerHTML =
         clarificationsHistoryHtml + `<p class="error">❌ ${esc(msg)}</p>`;
       submitBtn.disabled = false;
+    }
+
+    function showJobGone(msg) {
+      clearInterval(pollTimer);
+      statusArea.innerHTML =
+        clarificationsHistoryHtml +
+        `<p class="job-gone">${esc(msg)}</p>`;
+      submitBtn.disabled = false;
+      jobId = null;
+    }
+
+    async function downloadZip() {
+      if (!jobId || downloadInProgress) return;
+      downloadInProgress = true;
+      const btn = document.getElementById('download-btn');
+      if (btn) {
+        btn.disabled = true;
+        btn.textContent = 'Preparing…';
+      }
+      try {
+        const res = await fetch(`/download/${jobId}`);
+        if (res.status === 404) {
+          showJobGone(
+            'Download is no longer available. The job may have expired or was already downloaded.'
+          );
+          return;
+        }
+        if (!res.ok) {
+          showError('Download failed (' + res.status + '). Try again or start a new run.');
+          return;
+        }
+        const blob = await res.blob();
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = 'essay_' + jobId + '.zip';
+        a.rel = 'noopener';
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        URL.revokeObjectURL(url);
+        statusArea.innerHTML =
+          clarificationsHistoryHtml +
+          '<p>✅ Download started. You can submit another essay when you are ready.</p>';
+        jobId = null;
+        submitBtn.disabled = false;
+      } catch (err) {
+        showError('Download failed: ' + err.message);
+      } finally {
+        downloadInProgress = false;
+        if (btn && document.body.contains(btn)) {
+          btn.disabled = false;
+          btn.textContent = 'Download ZIP';
+        }
+      }
     }
 
     function esc(s) {

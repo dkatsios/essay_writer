@@ -56,6 +56,8 @@ uv run uvicorn src.web:app --reload
 
 Open http://localhost:8000. Upload assignment files, optionally upload your own reference sources, enter a prompt, set a target word count, and download the result as a ZIP.
 
+Completed jobs are deleted from the server right after a successful download. Jobs that are never downloaded are removed after **24 hours** by default (temp directory and in-memory job record). Override with `ESSAY_WEB_JOB_TTL_SECONDS` (seconds; set to `0` to disable only this automatic cleanup). Sweeps run every **300** seconds by default (`ESSAY_WEB_JOB_SWEEP_INTERVAL_SECONDS`, not below **60**).
+
 **Docker:**
 
 ```bash
@@ -73,7 +75,7 @@ The repo includes a `render.yaml` Blueprint for one-click deployment to [Render]
 2. Apply the Blueprint (or create a Web Service pointing at the Dockerfile).
 3. Set the required environment variables (`GOOGLE_API_KEY`, and optionally `SEMANTIC_SCHOLAR_API_KEY`, `LANGSMITH_API_KEY`).
 
-The service exposes the web UI on the port assigned by Render.
+The service exposes the web UI on the port assigned by Render. Optional: set `ESSAY_WEB_JOB_TTL_SECONDS` / `ESSAY_WEB_JOB_SWEEP_INTERVAL_SECONDS` if you need different retention for undownloaded jobs.
 
 ## Configuration
 

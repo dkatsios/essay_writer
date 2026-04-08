@@ -104,7 +104,7 @@ All file I/O is done by the pipeline Python code — LLMs never read or write fi
 The CLI accepts a file or directory path. The intake module (`src/intake.py`):
 - Scans and categorizes files by extension
 - Extracts text from `.md`, `.txt`, `.pdf`, `.docx`, `.pptx`
-- For scanned PDFs (sparse text extraction), falls back to rendering pages as images
+- For scanned PDFs (sparse text extraction), inserts a short text placeholder in `extracted.md` (no page rasterization; no OCR)
 - Encodes images (`.png`, `.jpg`, etc.) as base64 for multimodal LLM consumption
 
 Supported: `.md`, `.txt`, `.text`, `.rst`, `.csv`, `.tsv`, `.log`, `.pdf`, `.docx`, `.pptx`, `.png`, `.jpg`, `.jpeg`, `.gif`, `.bmp`, `.tiff`, `.webp`, `.svg`
@@ -152,3 +152,5 @@ Place test assignment directories under `examples/`. Each subdirectory is a self
 ### Web UI
 
 `src/web.py` is a FastAPI app that wraps the same pipeline used by the CLI. A single HTML page (`src/templates/web/index.html`) provides a form (prompt, file upload, target word count). Jobs run in background threads; validation questions pause the pipeline thread via `threading.Event` and are served to the browser via polling. Results are returned as a ZIP containing the docx, markdown, and sources metadata.
+
+After a successful ZIP download, the server deletes that job’s temp directory and removes the job from memory. Jobs that finish (`done` or `error`) but are never downloaded are removed automatically after a TTL (default 24h). Optional environment variables: `ESSAY_WEB_JOB_TTL_SECONDS` (default `86400`, use `0` to disable TTL cleanup only — download still deletes the job), and `ESSAY_WEB_JOB_SWEEP_INTERVAL_SECONDS` (default `300`, minimum `60` between sweeps). The UI uses fetch-based download and treats `404` on `/status` or `/download` as an expired or already-downloaded job.

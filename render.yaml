@@ -18,3 +18,8 @@ services:
         sync: false
       - key: LANGSMITH_TRACING
         value: "true"
+      # Optional: undownloaded finished jobs are deleted after this many seconds (default 86400).
+      # - key: ESSAY_WEB_JOB_TTL_SECONDS
+      #   value: "86400"
+      # - key: ESSAY_WEB_JOB_SWEEP_INTERVAL_SECONDS
+      #   value: "300"
