@@ -22,6 +22,13 @@ logger = logging.getLogger(__name__)
 _CROSSREF_API = "https://api.crossref.org/works"
 
 
+def _strip_inline_markup(text: str) -> str:
+    """Remove JATS/HTML-style tags Crossref sometimes embeds in title and abstract."""
+    if not text or "<" not in text:
+        return text
+    return re.sub(r"<[^>]+>", "", text).strip()
+
+
 def search_crossref(query: str, max_results: int = 5) -> tuple[list[dict], dict]:
     """Search Crossref and return (results, raw_api_response)."""
     mailto = os.environ.get("CROSSREF_MAILTO", DEFAULT_MAILTO)
@@ -76,12 +83,11 @@ def search_crossref(query: str, max_results: int = 5) -> tuple[list[dict], dict]
             if date_parts and date_parts[0]:
                 year = date_parts[0][0]
 
-        abstract = item.get("abstract", "") or ""
-        if "<" in abstract:
-            abstract = re.sub(r"<[^>]+>", "", abstract).strip()
+        abstract = _strip_inline_markup(item.get("abstract", "") or "")
 
         title_list = item.get("title", [])
-        title = title_list[0] if title_list else ""
+        title_raw = title_list[0] if title_list else ""
+        title = _strip_inline_markup(title_raw)
 
         results.append(
             {
