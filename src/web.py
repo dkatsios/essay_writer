@@ -6,7 +6,6 @@ import json
 import logging
 import os
 import shutil
-import tempfile
 import threading
 import time
 import unicodedata
@@ -35,6 +34,7 @@ from src.tools.web_fetcher import extract_pdf_bytes_to_text  # noqa: E402
 from src.runner import TokenTracker, _StepTimer, _make_callbacks  # noqa: E402
 from src.runner import _parse_validation_answers  # noqa: E402
 from src.schemas import AssignmentBrief, Clarification, ValidationQuestion  # noqa: E402
+from src.scratch_dir import SCRATCH_RUN_DIR, is_scratch_run_dir  # noqa: E402
 
 logger = logging.getLogger(__name__)
 
@@ -86,13 +86,60 @@ class Job:
     optional_pdf_event: threading.Event = field(default_factory=threading.Event)
     error: str = ""
     academic_level: str = ""
+    submit_prompt: str = ""
+    target_words: int | None = None
+    min_sources: int | None = None
     tracker: TokenTracker | None = None
     created_at: float = field(default_factory=time.time)
     """Wall time when the job was submitted."""
     finished_at: float | None = None
     """Wall time when status became ``done`` or ``error``."""
+    clarification_rounds: list[dict] = field(default_factory=list)
+    """Each ``{"items": [{"question": str, "answer": str}, ...]}`` for UI replay after reload."""
+    optional_pdf_rounds: list[dict] = field(default_factory=list)
+    """Each ``{"items": [{"title": str, "answer": str}, ...]}`` for optional-PDF step replay."""
+    optional_pdf_choices: dict[str, str] = field(default_factory=dict)
+    """``source_id -> \"file\"|\"url\"`` for the current optional-PDF step."""
 
 _jobs: dict[str, Job] = {}
+
+
+def _append_clarification_round_for_ui(job: Job, answers: str) -> None:
+    """Record Q&A for the current ``job.questions`` so the web UI can restore history after reload."""
+    if not job.questions:
+        return
+    vqs = [
+        ValidationQuestion(question=q["question"], options=q["options"])
+        for q in job.questions
+    ]
+    parsed = (
+        _parse_validation_answers(vqs, answers) if answers.strip() else []
+    )
+    by_q = {c.question: c.answer for c in parsed}
+    items = [
+        {"question": q["question"], "answer": by_q.get(q["question"], "—")}
+        for q in job.questions
+    ]
+    job.clarification_rounds.append({"items": items})
+
+
+def _append_optional_pdf_round_for_ui(job: Job) -> None:
+    """Snapshot optional-PDF choices for the current ``job.optional_pdf_items``."""
+    items = job.optional_pdf_items or []
+    round_items: list[dict] = []
+    for row in items:
+        sid = str(row["source_id"])
+        how = job.optional_pdf_choices.get(sid)
+        if how == "file":
+            ans = "PDF from file"
+        elif how == "url":
+            ans = "PDF from URL"
+        else:
+            ans = "— skipped / none"
+        title = row.get("title") or sid
+        round_items.append({"title": str(title), "answer": ans})
+    job.optional_pdf_rounds.append({"items": round_items})
+    job.optional_pdf_choices.clear()
 
 
 def _job_ttl_seconds() -> int:
@@ -136,7 +183,8 @@ def job_ttl_sweep_once(now: float | None = None) -> int:
         if t - job.finished_at <= ttl:
             continue
         _jobs.pop(jid, None)
-        shutil.rmtree(job.run_dir, ignore_errors=True)
+        if not is_scratch_run_dir(job.run_dir):
+            shutil.rmtree(job.run_dir, ignore_errors=True)
         removed += 1
         logger.info(
             "TTL cleanup removed job %s (status=%s, age=%.0fs)",
@@ -285,6 +333,7 @@ def _run_pipeline_thread(
         def _on_optional_pdfs(rd: Path, items: list[dict]) -> None:
             if not items:
                 return
+            job.optional_pdf_choices.clear()
             job.optional_pdf_items = items
             job.optional_pdf_allowed_ids = frozenset(
                 str(row["source_id"]) for row in items
@@ -332,8 +381,16 @@ def _run_pipeline_thread(
 # ---------------------------------------------------------------------------
 
 
+def _prepare_scratch_run_dir() -> Path:
+    """Reset ``.output/scratch`` so each web job has a clean tree (last run on disk)."""
+    if SCRATCH_RUN_DIR.exists():
+        shutil.rmtree(SCRATCH_RUN_DIR)
+    SCRATCH_RUN_DIR.mkdir(parents=True, exist_ok=True)
+    return SCRATCH_RUN_DIR
+
+
 def _build_zip(run_dir: Path) -> BytesIO:
-    """Zip the full run directory tree (same layout as ``.output/run_*`` from the CLI)."""
+    """Zip the full run directory tree (same layout as CLI ``--dump-run`` / ``.output/scratch``)."""
     buf = BytesIO()
     root = run_dir.resolve()
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
@@ -375,8 +432,17 @@ async def submit(
     """Accept form data, start the pipeline in a background thread."""
     job_id = uuid.uuid4().hex[:12]
 
-    run_dir = Path(tempfile.mkdtemp(prefix=f"essay_{job_id}_"))
-    job = Job(job_id=job_id, run_dir=run_dir, academic_level=academic_level)
+    run_dir = _prepare_scratch_run_dir()
+    tw = target_words if target_words is not None and target_words > 0 else None
+    ms = min_sources if min_sources is not None and min_sources > 0 else None
+    job = Job(
+        job_id=job_id,
+        run_dir=run_dir,
+        academic_level=academic_level.strip(),
+        submit_prompt=prompt.strip(),
+        target_words=tw,
+        min_sources=ms,
+    )
     _jobs[job_id] = job
 
     # Save uploaded files
@@ -436,6 +502,14 @@ async def status(job_id: str):
         resp["optional_pdf_items"] = job.optional_pdf_items
     if job.status == "error":
         resp["error"] = job.error
+    resp["clarification_rounds"] = job.clarification_rounds
+    resp["optional_pdf_rounds"] = job.optional_pdf_rounds
+    resp["submit"] = {
+        "prompt": job.submit_prompt,
+        "academic_level": job.academic_level,
+        "target_words": job.target_words,
+        "min_sources": job.min_sources,
+    }
     return JSONResponse(resp)
 
 
@@ -449,6 +523,7 @@ async def answer(job_id: str, answers: str = Form("")):
         return JSONResponse({"error": "No pending questions"}, status_code=400)
 
     job.answers = answers
+    _append_clarification_round_for_ui(job, answers)
     job.status = "running"
     job.answers_event.set()
     return JSONResponse({"status": "ok"})
@@ -548,6 +623,7 @@ async def optional_pdf_upload(
     err = _apply_optional_pdf_bytes(job, job_id, sid, raw)
     if err:
         return JSONResponse({"error": err}, status_code=400)
+    job.optional_pdf_choices[sid] = "url" if url_stripped else "file"
     return JSONResponse({"status": "ok", "source_id": sid})
 
 
@@ -560,6 +636,7 @@ async def optional_pdf_done(job_id: str):
     if job.status != "optional_pdfs":
         return JSONResponse({"error": "No optional PDF step active"}, status_code=400)
 
+    _append_optional_pdf_round_for_ui(job)
     job.status = "running"
     job.optional_pdf_event.set()
     return JSONResponse({"status": "ok"})
@@ -588,7 +665,8 @@ async def download(job_id: str):
         finally:
             buf.close()
             try:
-                shutil.rmtree(run_dir, ignore_errors=True)
+                if not is_scratch_run_dir(run_dir):
+                    shutil.rmtree(run_dir, ignore_errors=True)
             finally:
                 _jobs.pop(job_id, None)
 

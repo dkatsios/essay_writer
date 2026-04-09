@@ -192,6 +192,25 @@
     .optional-pdf-row .opt-pdf-url { flex: 1 1 10rem; min-width: 0; max-width: 100%; padding: .3rem .45rem; border: 1px solid #cbd5e1; border-radius: 4px; font-size: .85rem; }
     .optional-pdf-row .upload-status { font-size: .85rem; color: #166534; flex: 1 1 100%; }
     .optional-pdf-row .upload-status.err { color: #b91c1c; }
+    .job-session-bar {
+      margin-top: 1.25rem;
+      padding: .85rem 1rem;
+      border-radius: var(--radius);
+      border: 1px solid rgba(148, 163, 184, 0.45);
+      background: #f8fafc;
+      font-size: .875rem;
+      color: var(--text-muted);
+      line-height: 1.45;
+    }
+    .job-session-bar p { margin: 0 0 .65rem; }
+    .job-session-bar button.secondary-link {
+      margin-top: 0;
+      padding: .4rem .85rem;
+      font-size: .8125rem;
+      background: #64748b;
+    }
+    .job-session-bar button.secondary-link:hover:not(:disabled) { background: #475569; }
+    .resume-hint { margin-bottom: .65rem !important; }
   </style>
 </head>
 <body>
@@ -244,11 +263,18 @@
 
   <div id="status-area"></div>
 
+  <div id="job-session-bar" class="job-session-bar" hidden>
+    <p>This run is tied to your address bar — refresh anytime or bookmark the page to come back while the server works.</p>
+    <button type="button" class="secondary-link" id="start-fresh-btn">Start a new essay</button>
+  </div>
+
   <script>
     const form = document.getElementById('form');
     const statusArea = document.getElementById('status-area');
     const submitBtn = document.getElementById('submit-btn');
     let jobId = null;
+    /** Avoid overwriting the form after the user edits post-job; one restore per job per page load. */
+    let submitSnapshotAppliedForJob = null;
     let pollTimer = null;
     let downloadInProgress = false;
     /** Read-only HTML for submitted Q&A rounds; kept visible while the pipeline runs. */
@@ -256,18 +282,91 @@
     let optionalPdfRoundItems = [];
     let optionalPdfUploaded = {};
 
+    const JOB_QUERY_PARAM = 'job';
+
+    function readJobIdFromUrl() {
+      const u = new URL(location.href);
+      const raw = u.searchParams.get(JOB_QUERY_PARAM);
+      if (!raw) return null;
+      const id = raw.trim().toLowerCase();
+      if (!/^[a-f0-9]{12}$/.test(id)) {
+        u.searchParams.delete(JOB_QUERY_PARAM);
+        const q = u.searchParams.toString();
+        history.replaceState(null, '', u.pathname + (q ? '?' + q : '') + u.hash);
+        return null;
+      }
+      return id;
+    }
+
+    function replaceJobInUrl(id) {
+      const u = new URL(location.href);
+      if (id) u.searchParams.set(JOB_QUERY_PARAM, id);
+      else u.searchParams.delete(JOB_QUERY_PARAM);
+      const q = u.searchParams.toString();
+      history.replaceState(null, '', u.pathname + (q ? '?' + q : '') + u.hash);
+    }
+
+    function updateJobSessionBar() {
+      const bar = document.getElementById('job-session-bar');
+      if (bar) bar.hidden = !jobId;
+    }
+
+    function setActiveJobId(id) {
+      if (jobId !== id) {
+        submitSnapshotAppliedForJob = null;
+      }
+      jobId = id;
+      replaceJobInUrl(id);
+      updateJobSessionBar();
+    }
+
+    function abandonRun() {
+      clearInterval(pollTimer);
+      pollTimer = null;
+      setActiveJobId(null);
+      clarificationsHistoryHtml = '';
+      optionalPdfRoundItems = [];
+      optionalPdfUploaded = {};
+      statusArea.innerHTML = '';
+      submitBtn.disabled = false;
+    }
+
     function resetFormToCleanState() {
       form.reset();
       const filesInput = document.getElementById('files');
       if (filesInput) filesInput.value = '';
     }
 
+    function tryResumeFromUrl() {
+      const id = readJobIdFromUrl();
+      if (!id) return false;
+      clarificationsHistoryHtml = '';
+      optionalPdfRoundItems = [];
+      optionalPdfUploaded = {};
+      setActiveJobId(id);
+      submitBtn.disabled = true;
+      statusArea.innerHTML =
+        '<p class="hint resume-hint">Resuming your run — you can refresh this page or bookmark the URL while the server works.</p>' +
+        '<div class="pipeline-status"><span class="spinner"></span> Connecting…</div>';
+      clearInterval(pollTimer);
+      pollTimer = setInterval(pollStatus, 3000);
+      void pollStatus();
+      return true;
+    }
+
+    document.getElementById('start-fresh-btn')?.addEventListener('click', () => abandonRun());
+
     window.addEventListener('load', () => {
-      queueMicrotask(resetFormToCleanState);
+      queueMicrotask(() => {
+        if (!tryResumeFromUrl()) resetFormToCleanState();
+      });
     });
 
     form.addEventListener('submit', async (e) => {
       e.preventDefault();
+      clearInterval(pollTimer);
+      pollTimer = null;
+      setActiveJobId(null);
       submitBtn.disabled = true;
       clarificationsHistoryHtml = '';
       statusArea.innerHTML = '<span class="spinner"></span> Submitting…';
@@ -289,7 +388,7 @@
         const res = await fetch('/submit', { method: 'POST', body: fd });
         const data = await res.json();
         if (data.error) { showError(data.error); return; }
-        jobId = data.job_id;
+        setActiveJobId(data.job_id);
         statusArea.innerHTML = '<span class="spinner"></span> Starting…';
         pollTimer = setInterval(pollStatus, 3000);
         void pollStatus();
@@ -310,6 +409,8 @@
           return;
         }
         const data = await res.json();
+        syncHistoryFromStatus(data);
+        applySubmitSnapshotFromStatus(data);
 
         if (data.status === 'running') {
           const pipelineEl = statusArea.querySelector('.pipeline-status');
@@ -342,6 +443,63 @@
       } catch (err) {
         /* ignore transient fetch errors */
       }
+    }
+
+    function clarificationsHistoryFromServer(rounds) {
+      if (!rounds || !rounds.length) return '';
+      let html = '';
+      rounds.forEach((round) => {
+        html += '<section class="clarifications-round"><h3>Your clarifications</h3>';
+        (round.items || []).forEach((row) => {
+          const q = row.question || '';
+          const a = row.answer != null ? row.answer : '—';
+          html += `<div class="question-block answered"><p>${esc(q)}</p><p class="user-answer">${esc(a)}</p></div>`;
+        });
+        html += '</section>';
+      });
+      return html;
+    }
+
+    function optionalPdfHistoryFromServer(rounds) {
+      if (!rounds || !rounds.length) return '';
+      let html = '';
+      rounds.forEach((round) => {
+        html += '<section class="clarifications-round"><h3>Optional PDFs</h3>';
+        (round.items || []).forEach((row) => {
+          const t = row.title || '';
+          const a = row.answer != null ? row.answer : '—';
+          html += `<div class="question-block answered"><p>${esc(t)}</p><p class="user-answer">${esc(a)}</p></div>`;
+        });
+        html += '</section>';
+      });
+      return html;
+    }
+
+    /** Rebuild read-only history from server (survives page reload). */
+    function syncHistoryFromStatus(data) {
+      if (!data || typeof data !== 'object') return;
+      if (!('clarification_rounds' in data) && !('optional_pdf_rounds' in data)) return;
+      clarificationsHistoryHtml =
+        clarificationsHistoryFromServer(data.clarification_rounds || []) +
+        optionalPdfHistoryFromServer(data.optional_pdf_rounds || []);
+    }
+
+    /** Restore prompt / options from server (survives page reload). Runs once per active job. */
+    function applySubmitSnapshotFromStatus(data) {
+      if (!jobId || !data || !data.submit || typeof data.submit !== 'object') return;
+      if (submitSnapshotAppliedForJob === jobId) return;
+      const s = data.submit;
+      const pe = document.getElementById('prompt');
+      if (pe && typeof s.prompt === 'string') pe.value = s.prompt;
+      const twEl = document.getElementById('target_words');
+      if (twEl) twEl.value = s.target_words != null ? String(s.target_words) : '';
+      const msEl = document.getElementById('min_sources');
+      if (msEl) msEl.value = s.min_sources != null ? String(s.min_sources) : '';
+      const level = s.academic_level != null ? String(s.academic_level) : '';
+      document.querySelectorAll('input[name="academic_level"]').forEach((r) => {
+        r.checked = r.value === level;
+      });
+      submitSnapshotAppliedForJob = jobId;
     }
 
     function showQuestions(questions) {
@@ -576,6 +734,7 @@
 
     function showError(msg) {
       clearInterval(pollTimer);
+      pollTimer = null;
       statusArea.innerHTML =
         clarificationsHistoryHtml + `<p class="error">❌ ${esc(msg)}</p>`;
       submitBtn.disabled = false;
@@ -583,11 +742,12 @@
 
     function showJobGone(msg) {
       clearInterval(pollTimer);
+      pollTimer = null;
       statusArea.innerHTML =
         clarificationsHistoryHtml +
         `<p class="job-gone">${esc(msg)}</p>`;
       submitBtn.disabled = false;
-      jobId = null;
+      setActiveJobId(null);
     }
 
     async function downloadZip() {
@@ -623,7 +783,7 @@
         statusArea.innerHTML =
           clarificationsHistoryHtml +
           '<p>✅ Download started. You can submit another essay when you are ready.</p>';
-        jobId = null;
+        setActiveJobId(null);
         submitBtn.disabled = false;
       } catch (err) {
         showError('Download failed: ' + err.message);
