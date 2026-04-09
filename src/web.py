@@ -6,6 +6,7 @@ import json
 import logging
 import os
 import shutil
+import tempfile
 import threading
 import time
 import unicodedata
@@ -34,7 +35,6 @@ from src.tools.web_fetcher import extract_pdf_bytes_to_text  # noqa: E402
 from src.runner import TokenTracker, _StepTimer, _make_callbacks  # noqa: E402
 from src.runner import _parse_validation_answers  # noqa: E402
 from src.schemas import AssignmentBrief, Clarification, ValidationQuestion  # noqa: E402
-from src.scratch_dir import SCRATCH_RUN_DIR, is_scratch_run_dir  # noqa: E402
 
 logger = logging.getLogger(__name__)
 
@@ -183,8 +183,7 @@ def job_ttl_sweep_once(now: float | None = None) -> int:
         if t - job.finished_at <= ttl:
             continue
         _jobs.pop(jid, None)
-        if not is_scratch_run_dir(job.run_dir):
-            shutil.rmtree(job.run_dir, ignore_errors=True)
+        shutil.rmtree(job.run_dir, ignore_errors=True)
         removed += 1
         logger.info(
             "TTL cleanup removed job %s (status=%s, age=%.0fs)",
@@ -381,16 +380,8 @@ def _run_pipeline_thread(
 # ---------------------------------------------------------------------------
 
 
-def _prepare_scratch_run_dir() -> Path:
-    """Reset ``.output/scratch`` so each web job has a clean tree (last run on disk)."""
-    if SCRATCH_RUN_DIR.exists():
-        shutil.rmtree(SCRATCH_RUN_DIR)
-    SCRATCH_RUN_DIR.mkdir(parents=True, exist_ok=True)
-    return SCRATCH_RUN_DIR
-
-
 def _build_zip(run_dir: Path) -> BytesIO:
-    """Zip the full run directory tree (same layout as CLI ``--dump-run`` / ``.output/scratch``)."""
+    """Zip the full run directory tree (same layout as ``.output/run_*`` from the CLI)."""
     buf = BytesIO()
     root = run_dir.resolve()
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
@@ -432,7 +423,7 @@ async def submit(
     """Accept form data, start the pipeline in a background thread."""
     job_id = uuid.uuid4().hex[:12]
 
-    run_dir = _prepare_scratch_run_dir()
+    run_dir = Path(tempfile.mkdtemp(prefix=f"essay_{job_id}_"))
     tw = target_words if target_words is not None and target_words > 0 else None
     ms = min_sources if min_sources is not None and min_sources > 0 else None
     job = Job(
@@ -665,8 +656,7 @@ async def download(job_id: str):
         finally:
             buf.close()
             try:
-                if not is_scratch_run_dir(run_dir):
-                    shutil.rmtree(run_dir, ignore_errors=True)
+                shutil.rmtree(run_dir, ignore_errors=True)
             finally:
                 _jobs.pop(job_id, None)
 
