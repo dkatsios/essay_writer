@@ -87,7 +87,7 @@ All tool calls (research, URL fetching, PDF reading) are plain Python functions 
 Each run uses a directory with these subdirectories:
 
 - `brief/assignment.json` — assignment brief (Pydantic `AssignmentBrief`)
-- `brief/validation.json` — validation result (Pydantic `ValidationResult`)
+- `brief/validation.json` — validation result (Pydantic `ValidationResult`); each `ValidationQuestion` includes `suggested_option_index` (0-based default for UI/CLI)
 - `plan/plan.json` — essay plan (Pydantic `EssayPlan`)
 - `sources/registry.json` — source metadata (from `run_research()`)
 - `sources/notes/{source_id}.json` — reader notes, one file per source (Pydantic `SourceNote`)

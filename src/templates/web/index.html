@@ -505,12 +505,21 @@
     function showQuestions(questions) {
       let html = clarificationsHistoryHtml;
       html += '<h3>Assignment has gaps — please clarify:</h3>';
+      html += '<p class="clarify-hint" style="font-size:.9rem;color:#64748b;margin:.35rem 0 .75rem">Suggested answers are pre-selected; change any that look wrong.</p>';
       html += '<div class="clarification-pending">';
       questions.forEach((q, i) => {
+        const nOpt = (q.options && q.options.length) ? q.options.length : 0;
+        let sug = Number.isInteger(q.suggested_option_index) ? q.suggested_option_index : 0;
+        if (nOpt > 0) {
+          sug = Math.max(0, Math.min(sug, nOpt - 1));
+        } else {
+          sug = 0;
+        }
         html += `<div class="question-block"><p>${i + 1}. ${esc(q.question)}</p>`;
         q.options.forEach((opt, j) => {
           const letter = String.fromCharCode(97 + j);
-          html += `<label><input type="radio" name="q${i + 1}" value="${letter}"> ${letter}) ${esc(opt)}</label>`;
+          const checked = j === sug ? ' checked' : '';
+          html += `<label><input type="radio" name="q${i + 1}" value="${letter}"${checked}> ${letter}) ${esc(opt)}</label>`;
         });
         const otherLetter = String.fromCharCode(97 + q.options.length);
         html += `<label class="other-row"><input type="radio" name="q${i + 1}" value="other"> <span>${otherLetter}) Other:</span> <input type="text" class="other-text" data-q="${i + 1}" placeholder="Type your answer…" style="flex:1;min-width:12rem;padding:.3rem .5rem;border:1px solid #ccc;border-radius:4px;font-size:.9rem"></label>`;

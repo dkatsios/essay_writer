@@ -511,8 +511,14 @@ def _format_validation_questions(questions: list[ValidationQuestion]) -> str:
     lines: list[str] = []
     for i, question in enumerate(questions, 1):
         lines.append(f"{i}. {question.question}")
+        n = len(question.options)
+        sugg = question.suggested_option_index if n else 0
+        if n:
+            sugg = max(0, min(sugg, n - 1))
         for j, option in enumerate(question.options):
-            lines.append(f"   {chr(ord('a') + j)}) {option}")
+            label = chr(ord("a") + j)
+            hint = "  ← suggested default" if j == sugg else ""
+            lines.append(f"   {label}) {option}{hint}")
         lines.append("")
     return "\n".join(lines).strip()
 
@@ -567,7 +573,8 @@ def _handle_questions(questions: list[ValidationQuestion], run_dir: Path) -> Non
     )
     print(_format_validation_questions(questions), file=sys.stderr)
     print(
-        "\n  Enter answers (e.g. '1. a, 2. c') or press Enter to skip:",
+        "\n  Enter answers (e.g. '1. a, 2. c'). Lines marked ← suggested default; "
+        "press Enter to skip all:",
         file=sys.stderr,
     )
     answers = input("> ").strip()

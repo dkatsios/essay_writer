@@ -109,7 +109,11 @@ def _append_clarification_round_for_ui(job: Job, answers: str) -> None:
     if not job.questions:
         return
     vqs = [
-        ValidationQuestion(question=q["question"], options=q["options"])
+        ValidationQuestion(
+            question=q["question"],
+            options=q["options"],
+            suggested_option_index=int(q.get("suggested_option_index", 0)),
+        )
         for q in job.questions
     ]
     parsed = (
@@ -306,7 +310,12 @@ def _run_pipeline_thread(
                 return
 
             job.questions = [
-                {"question": q.question, "options": q.options} for q in remaining
+                {
+                    "question": q.question,
+                    "options": q.options,
+                    "suggested_option_index": q.suggested_option_index,
+                }
+                for q in remaining
             ]
             job.status = "questions"
             job.answers_event.clear()

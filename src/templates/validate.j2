@@ -36,3 +36,16 @@ Examples of gaps NOT worth flagging:
 - Write questions and options in {{ language }}
 - Keep questions concise — one line each
 - Maximum 4 questions total
+- You may order options logically (e.g. few → many, shorter → longer ranges, narrower → broader). **Do not** reorder options only to put the default first.
+
+### Suggested default (`suggested_option_index`) — required for every question
+For each question, set **`suggested_option_index`**: the **0-based index** into that question’s `options` array (0 = first option, 1 = second, …). This is the option the UI will pre-select. It **must** satisfy `0 <= suggested_option_index < number of options`.
+
+**How to choose the index (by meaning, not by position):**
+1. **Match the brief** — If the assignment text already implies one answer, pick the index of that option even when it is not the first.
+2. **Avoid over-tightening** — When the brief is silent, prefer the option that stays closest to what was provided: do not impose stricter limits (sources, scope, depth) than stated.
+3. **Ordinal / quantity scales** (e.g. few / some / many, or numeric bands) — If the brief states numbers or clear intensity, pick the matching band. If silent, prefer a **middle** option appropriate to the stated word count or academic level when you can infer it; otherwise prefer a **moderate** default.
+4. **Scope / focus** — If choices differ by breadth and the brief is neutral, prefer **moderate** scope (enough room to develop arguments and use sources), not an extreme narrow or encyclopedic option.
+5. **Uncertainty** — Prefer the **least restrictive** option that still yields a sound essay for the described task.
+
+If two options seem equally valid, prefer the one that **requires the least new assumption** beyond the brief.

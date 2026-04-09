@@ -311,6 +311,25 @@ class TestConfigBackedBehavior:
         assert "within ±5%" in prompt
 
 
+class TestValidationQuestionSuggestedIndex:
+    def test_clamps_suggested_option_index_to_valid_range(self):
+        from src.schemas import ValidationQuestion
+
+        q = ValidationQuestion(
+            question="Q?",
+            options=["a", "b", "c"],
+            suggested_option_index=99,
+        )
+        assert q.suggested_option_index == 2
+
+        q2 = ValidationQuestion(
+            question="Q?",
+            options=["only"],
+            suggested_option_index=-3,
+        )
+        assert q2.suggested_option_index == 0
+
+
 class TestValidationClarifications:
     def test_parse_validation_answers_maps_letter_choices(self):
         from src.runner import _parse_validation_answers

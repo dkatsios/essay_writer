@@ -6,7 +6,7 @@ brief, validation, plan, and source notes. Essays remain markdown.
 
 from __future__ import annotations
 
-from pydantic import BaseModel
+from pydantic import BaseModel, model_validator
 
 
 # -- Brief -----------------------------------------------------------------
@@ -44,6 +44,19 @@ class ValidationQuestion(BaseModel):
 
     question: str
     options: list[str]
+    suggested_option_index: int = 0
+    """0-based index into ``options`` for the recommended default if the user does not change it."""
+
+    @model_validator(mode="after")
+    def _clamp_suggested_option_index(self) -> ValidationQuestion:
+        if not self.options:
+            object.__setattr__(self, "suggested_option_index", 0)
+            return self
+        n = len(self.options)
+        idx = self.suggested_option_index
+        if idx < 0 or idx >= n:
+            object.__setattr__(self, "suggested_option_index", max(0, min(idx, n - 1)))
+        return self
 
 
 class ValidationResult(BaseModel):

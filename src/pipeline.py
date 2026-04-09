@@ -675,9 +675,14 @@ def _format_validation_questions(result: ValidationResult) -> str | None:
     lines: list[str] = []
     for i, q in enumerate(result.questions, 1):
         lines.append(f"{i}. {q.question}")
+        n = len(q.options)
+        sugg = q.suggested_option_index if n else 0
+        if n:
+            sugg = max(0, min(sugg, n - 1))
         for j, opt in enumerate(q.options):
             label = chr(ord("a") + j)
-            lines.append(f"   {label}) {opt}")
+            hint = "  ← suggested default" if j == sugg else ""
+            lines.append(f"   {label}) {opt}{hint}")
         lines.append("")
     return "\n".join(lines).strip()
 
