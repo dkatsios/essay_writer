@@ -6,16 +6,153 @@
   <title>Essay Writer</title>
   <style>
     *, *::before, *::after { box-sizing: border-box; }
-    body { font-family: system-ui, -apple-system, sans-serif; max-width: 640px; margin: 2rem auto; padding: 0 1rem; color: #1a1a1a; }
-    h1 { font-size: 1.5rem; margin-bottom: 1.5rem; }
-    label { display: block; font-weight: 600; margin-top: 1rem; margin-bottom: .3rem; }
-    textarea { width: 100%; min-height: 100px; padding: .5rem; border: 1px solid #ccc; border-radius: 6px; font-size: .95rem; resize: vertical; }
-    input[type="file"], input[type="number"] { padding: .4rem; border: 1px solid #ccc; border-radius: 6px; font-size: .95rem; }
-    input[type="number"] { width: 140px; }
+    :root {
+      --bg: #f1f5f9;
+      --surface: #ffffff;
+      --text: #0f172a;
+      --text-muted: #475569;
+      --border: #cbd5e1;
+      --border-focus: #2563eb;
+      --accent: #2563eb;
+      --accent-hover: #1d4ed8;
+      --radius: 10px;
+      --shadow: 0 1px 3px rgba(15, 23, 42, 0.06), 0 8px 24px rgba(15, 23, 42, 0.06);
+    }
+    html { color-scheme: light; }
+    body {
+      font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+      max-width: 42rem;
+      margin: 0 auto;
+      padding: 2rem 1.25rem 3rem;
+      color: var(--text);
+      background: var(--bg);
+      line-height: 1.5;
+      -webkit-font-smoothing: antialiased;
+    }
+    .page-header { margin-bottom: 1.5rem; }
+    h1 { font-size: 1.375rem; font-weight: 700; letter-spacing: -0.02em; margin: 0; color: var(--text); }
+    .form-card {
+      background: var(--surface);
+      border-radius: var(--radius);
+      box-shadow: var(--shadow);
+      border: 1px solid rgba(148, 163, 184, 0.35);
+      padding: 1.5rem 1.35rem 1.65rem;
+    }
+    @media (min-width: 480px) {
+      .form-card { padding: 1.75rem 1.75rem 1.85rem; }
+    }
+    label.field-label { display: block; font-weight: 600; font-size: .9rem; margin-top: 1.15rem; margin-bottom: .4rem; color: var(--text); }
+    label.field-label:first-of-type { margin-top: 0; }
+    .optional-mark { font-weight: 500; color: var(--text-muted); }
+    textarea {
+      width: 100%;
+      min-height: 7.5rem;
+      padding: .65rem .75rem;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      font-size: .95rem;
+      resize: vertical;
+      font-family: inherit;
+      background: var(--surface);
+      color: var(--text);
+      transition: border-color .15s, box-shadow .15s;
+    }
+    textarea:focus { outline: none; border-color: var(--border-focus); box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.2); }
+    .file-zone {
+      display: block;
+      padding: .65rem .75rem;
+      border: 1px dashed var(--border);
+      border-radius: 8px;
+      background: #f8fafc;
+      transition: border-color .15s, background .15s;
+    }
+    .file-zone:focus-within { border-color: var(--border-focus); background: #f1f5f9; }
+    input[type="file"] {
+      width: 100%;
+      font-size: .875rem;
+      color: var(--text-muted);
+    }
+    input[type="number"] {
+      width: 100%;
+      max-width: 11rem;
+      padding: .55rem .65rem;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      font-size: .95rem;
+      font-family: inherit;
+      background: var(--surface);
+      color: var(--text);
+      transition: border-color .15s, box-shadow .15s;
+    }
+    input[type="number"]:focus { outline: none; border-color: var(--border-focus); box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.2); }
+    .hint { font-size: .8125rem; color: var(--text-muted); margin-top: .35rem; line-height: 1.4; }
+    .config-section {
+      margin-top: 1.35rem;
+      padding-top: 1.25rem;
+      border-top: 1px solid #e2e8f0;
+    }
+    .config-section-title {
+      font-size: .75rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: .06em;
+      color: var(--text-muted);
+      margin: 0 0 .85rem;
+    }
+    .radio-group {
+      display: flex;
+      flex-direction: column;
+      gap: .5rem;
+    }
+    @media (min-width: 520px) {
+      .radio-group { flex-direction: row; flex-wrap: wrap; gap: .65rem 1.25rem; }
+    }
+    .radio-option {
+      display: flex;
+      align-items: center;
+      gap: .45rem;
+      font-weight: 500;
+      font-size: .9rem;
+      color: var(--text);
+      margin: 0;
+      cursor: pointer;
+    }
+    .radio-option input { width: 1rem; height: 1rem; accent-color: var(--accent); cursor: pointer; }
+    .number-row {
+      display: grid;
+      gap: 1rem 1.25rem;
+      margin-top: 1.15rem;
+    }
+    @media (min-width: 480px) {
+      .number-row { grid-template-columns: 1fr 1fr; }
+    }
+    .number-field .field-label { margin-top: 0; }
+    .form-actions {
+      margin-top: 1.75rem;
+      padding-top: 1.5rem;
+      border-top: 1px solid #e2e8f0;
+    }
+    button.primary-submit {
+      width: 100%;
+      margin-top: 0;
+      padding: .75rem 1.25rem;
+      background: var(--accent);
+      color: #fff;
+      border: none;
+      border-radius: 8px;
+      font-size: 1rem;
+      font-weight: 600;
+      cursor: pointer;
+      box-shadow: 0 1px 2px rgba(15, 23, 42, 0.08);
+      transition: background .15s, transform .05s;
+    }
+    button.primary-submit:active:not(:disabled) { transform: scale(0.99); }
     button { margin-top: 1.2rem; padding: .6rem 1.6rem; background: #2563eb; color: #fff; border: none; border-radius: 6px; font-size: 1rem; cursor: pointer; }
     button:disabled { background: #94a3b8; cursor: not-allowed; }
     button:hover:not(:disabled) { background: #1d4ed8; }
-    #status-area { margin-top: 1.5rem; }
+    button.primary-submit:disabled { background: #94a3b8; }
+    button.primary-submit:hover:not(:disabled) { background: var(--accent-hover); }
+    #status-area { margin-top: 1.75rem; max-width: 42rem; margin-left: auto; margin-right: auto; }
     .spinner { display: inline-block; width: 18px; height: 18px; border: 3px solid #ccc; border-top-color: #2563eb; border-radius: 50%; animation: spin .7s linear infinite; vertical-align: middle; margin-right: .5rem; }
     @keyframes spin { to { transform: rotate(360deg); } }
     .question-block { background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 6px; padding: 1rem; margin-bottom: .75rem; }
@@ -24,7 +161,22 @@
     .clarifications-round { margin-bottom: 1rem; }
     .clarifications-round > h3 { font-size: 1.05rem; margin: 0 0 .75rem; color: #334155; }
     .pipeline-status { margin-top: .75rem; padding-top: .75rem; border-top: 1px solid #e2e8f0; }
-    .question-block label { font-weight: 400; margin-top: .2rem; cursor: pointer; }
+    .clarification-pending .question-block label {
+      display: flex;
+      align-items: flex-start;
+      gap: 0.45rem;
+      margin-top: 0.45rem;
+      cursor: pointer;
+      font-weight: 400;
+      line-height: 1.45;
+    }
+    .clarification-pending .question-block label:first-of-type { margin-top: 0.35rem; }
+    .clarification-pending .question-block label > input[type="radio"] {
+      flex-shrink: 0;
+      margin-top: 0.12rem;
+    }
+    .clarification-pending .question-block label.other-row { align-items: center; flex-wrap: wrap; }
+    .clarification-pending .question-block label.other-row > input[type="radio"] { margin-top: 0; }
     .error { color: #dc2626; font-weight: 600; }
     .download-link { display: inline-block; margin-top: .5rem; padding: .5rem 1.2rem; background: #16a34a; color: #fff; text-decoration: none; border-radius: 6px; }
     .download-link:hover:not(:disabled) { background: #15803d; }
@@ -43,34 +195,51 @@
   </style>
 </head>
 <body>
-  <h1>📝 Essay Writer</h1>
+  <header class="page-header">
+    <h1>📝 Essay Writer</h1>
+  </header>
 
-  <form id="form" autocomplete="off">
-    <label for="prompt">Prompt / Instructions</label>
+  <form id="form" class="form-card" autocomplete="off">
+    <label class="field-label" for="prompt">Prompt / Instructions</label>
     <textarea id="prompt" name="prompt" placeholder="Describe the essay topic or paste assignment instructions…"></textarea>
 
-    <label for="files">Upload Files</label>
-    <input type="file" id="files" name="files" multiple>
+    <label class="field-label" for="files">Upload Files</label>
+    <div class="file-zone">
+      <input type="file" id="files" name="files" multiple>
+    </div>
     <div class="hint">PDF, DOCX, images, or text files with assignment materials.</div>
 
-    <label for="sources">Your Sources <span style="font-weight:400">(optional)</span></label>
-    <input type="file" id="sources" name="sources" multiple>
+    <label class="field-label" for="sources">Your Sources <span class="optional-mark">(optional)</span></label>
+    <div class="file-zone">
+      <input type="file" id="sources" name="sources" multiple>
+    </div>
     <div class="hint">PDF, DOCX, or text files of reference papers you want cited in the essay.</div>
 
-    <label>Academic Level <span style="font-weight:400">(optional)</span></label>
-    <div style="display:flex;gap:1rem;flex-wrap:wrap;margin-bottom:.5rem">
-      <label style="font-weight:400;cursor:pointer"><input type="radio" name="academic_level" value=""> Not defined</label>
-      <label style="font-weight:400;cursor:pointer"><input type="radio" name="academic_level" value="undergraduate"> Undergraduate</label>
-      <label style="font-weight:400;cursor:pointer"><input type="radio" name="academic_level" value="postgraduate"> Postgraduate</label>
+    <div class="config-section" aria-labelledby="config-heading">
+      <h2 class="config-section-title" id="config-heading">Options</h2>
+
+      <label class="field-label">Academic Level <span class="optional-mark">(optional)</span></label>
+      <div class="radio-group" role="radiogroup" aria-label="Academic level">
+        <label class="radio-option"><input type="radio" name="academic_level" value=""> Not defined</label>
+        <label class="radio-option"><input type="radio" name="academic_level" value="undergraduate"> Undergraduate</label>
+        <label class="radio-option"><input type="radio" name="academic_level" value="postgraduate"> Postgraduate</label>
+      </div>
+
+      <div class="number-row">
+        <div class="number-field">
+          <label class="field-label" for="target_words">Target word count <span class="optional-mark">(optional)</span></label>
+          <input type="number" id="target_words" name="target_words" min="100" step="100" placeholder="e.g. 3000">
+        </div>
+        <div class="number-field">
+          <label class="field-label" for="min_sources">Minimum sources <span class="optional-mark">(optional)</span></label>
+          <input type="number" id="min_sources" name="min_sources" min="1" max="100" step="1" placeholder="e.g. 10">
+        </div>
+      </div>
     </div>
 
-    <label for="target_words">Target Word Count <span style="font-weight:400">(optional)</span></label>
-    <input type="number" id="target_words" name="target_words" min="100" step="100" placeholder="e.g. 3000">
-
-    <label for="min_sources">Minimum Sources <span style="font-weight:400">(optional)</span></label>
-    <input type="number" id="min_sources" name="min_sources" min="1" max="100" step="1" placeholder="e.g. 10">
-
-    <button type="submit" id="submit-btn">Generate Essay</button>
+    <div class="form-actions">
+      <button type="submit" class="primary-submit" id="submit-btn">Generate Essay</button>
+    </div>
   </form>
 
   <div id="status-area"></div>
@@ -186,7 +355,7 @@
           html += `<label><input type="radio" name="q${i + 1}" value="${letter}"> ${letter}) ${esc(opt)}</label>`;
         });
         const otherLetter = String.fromCharCode(97 + q.options.length);
-        html += `<label style="display:flex;align-items:center;gap:.4rem"><input type="radio" name="q${i + 1}" value="other"> ${otherLetter}) Other: <input type="text" class="other-text" data-q="${i + 1}" placeholder="Type your answer…" style="flex:1;padding:.3rem .5rem;border:1px solid #ccc;border-radius:4px;font-size:.9rem"></label>`;
+        html += `<label class="other-row"><input type="radio" name="q${i + 1}" value="other"> <span>${otherLetter}) Other:</span> <input type="text" class="other-text" data-q="${i + 1}" placeholder="Type your answer…" style="flex:1;min-width:12rem;padding:.3rem .5rem;border:1px solid #ccc;border-radius:4px;font-size:.9rem"></label>`;
         html += '</div>';
       });
       html += '<button id="answer-btn" onclick="submitAnswers()">Submit Answers</button>';
