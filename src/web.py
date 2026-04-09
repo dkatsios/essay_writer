@@ -16,7 +16,9 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from io import BytesIO
 from pathlib import Path
+from urllib.parse import urlparse
 
+import httpx
 from dotenv import load_dotenv
 from fastapi import FastAPI, Form, UploadFile
 from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
@@ -28,6 +30,7 @@ from config.schemas import load_config  # noqa: E402
 from src.agent import create_model  # noqa: E402
 from src.intake import build_extracted_text, scan  # noqa: E402
 from src.pipeline import run_pipeline  # noqa: E402
+from src.tools._http import http_get  # noqa: E402
 from src.tools.web_fetcher import extract_pdf_bytes_to_text  # noqa: E402
 from src.runner import TokenTracker, _StepTimer, _make_callbacks  # noqa: E402
 from src.runner import _parse_validation_answers  # noqa: E402
@@ -454,38 +457,41 @@ async def answer(job_id: str, answers: str = Form("")):
 _MAX_OPTIONAL_PDF_BYTES = 30 * 1024 * 1024
 
 
-@app.post("/optional-pdf/{job_id}")
-async def optional_pdf_upload(
-    job_id: str,
-    source_id: str = Form(""),
-    file: UploadFile | None = None,
-):
-    """Attach a user PDF to a registry source (optional full-text step)."""
-    job = _jobs.get(job_id)
-    if not job:
-        return JSONResponse({"error": "Job not found"}, status_code=404)
-    if job.status != "optional_pdfs":
-        return JSONResponse({"error": "No optional PDF step active"}, status_code=400)
-    sid = source_id.strip()
-    if not sid or job.optional_pdf_allowed_ids is None or sid not in job.optional_pdf_allowed_ids:
-        return JSONResponse({"error": "Invalid source_id"}, status_code=400)
-    if file is None or not file.filename:
-        return JSONResponse({"error": "Missing file"}, status_code=400)
-    if not file.filename.lower().endswith(".pdf"):
-        return JSONResponse({"error": "Only PDF files are accepted"}, status_code=400)
-
-    raw = await file.read()
+def _fetch_pdf_bytes_from_url(url: str) -> tuple[bytes | None, str | None]:
+    """Download PDF bytes from http(s) URL. Returns (data, error_message)."""
+    parsed = urlparse(url)
+    if parsed.scheme not in ("http", "https") or not parsed.netloc:
+        return None, "Invalid URL (use http or https)"
+    try:
+        resp = http_get(
+            url,
+            follow_redirects=True,
+            max_retries=2,
+            initial_backoff=1.0,
+            request_name="optional pdf url",
+        )
+    except httpx.HTTPError as exc:
+        logger.warning("Optional PDF URL fetch failed: %s", exc)
+        return None, "Could not download URL"
+    raw = resp.content
     if len(raw) > _MAX_OPTIONAL_PDF_BYTES:
-        return JSONResponse({"error": "File too large"}, status_code=400)
+        return None, "File too large"
     if not raw.startswith(b"%PDF"):
-        return JSONResponse({"error": "Not a valid PDF"}, status_code=400)
+        return None, "URL did not return a PDF"
+    return raw, None
 
+
+def _apply_optional_pdf_bytes(job: Job, job_id: str, sid: str, raw: bytes) -> str | None:
+    """Persist extracted text to supplement + registry. Returns error message or None."""
+    if len(raw) > _MAX_OPTIONAL_PDF_BYTES:
+        return "File too large"
+    if not raw.startswith(b"%PDF"):
+        return "Not a valid PDF"
     try:
         text = extract_pdf_bytes_to_text(raw)
     except Exception:
         logger.exception("PDF extract failed for job %s source %s", job_id, sid)
-        return JSONResponse({"error": "Could not read PDF text"}, status_code=400)
-
+        return "Could not read PDF text"
     if len(text) > 50_000:
         text = text[:50_000] + "\n\n[... truncated ...]"
 
@@ -499,12 +505,49 @@ async def optional_pdf_upload(
     reg_path = run_dir / "sources" / "registry.json"
     registry = json.loads(reg_path.read_text(encoding="utf-8"))
     if sid not in registry:
-        return JSONResponse({"error": "Source not in registry"}, status_code=400)
+        return "Source not in registry"
     registry[sid]["content_path"] = str(txt_path.resolve())
     reg_path.write_text(
         json.dumps(registry, ensure_ascii=False, indent=2), encoding="utf-8"
     )
+    return None
 
+
+@app.post("/optional-pdf/{job_id}")
+async def optional_pdf_upload(
+    job_id: str,
+    source_id: str = Form(""),
+    pdf_url: str = Form(""),
+    file: UploadFile | None = None,
+):
+    """Attach a user PDF (file upload or http(s) URL) to a registry source."""
+    job = _jobs.get(job_id)
+    if not job:
+        return JSONResponse({"error": "Job not found"}, status_code=404)
+    if job.status != "optional_pdfs":
+        return JSONResponse({"error": "No optional PDF step active"}, status_code=400)
+    sid = source_id.strip()
+    if not sid or job.optional_pdf_allowed_ids is None or sid not in job.optional_pdf_allowed_ids:
+        return JSONResponse({"error": "Invalid source_id"}, status_code=400)
+
+    url_stripped = pdf_url.strip()
+    raw: bytes | None = None
+    if url_stripped:
+        raw, err = _fetch_pdf_bytes_from_url(url_stripped)
+        if err:
+            return JSONResponse({"error": err}, status_code=400)
+    elif file is not None and file.filename:
+        if not file.filename.lower().endswith(".pdf"):
+            return JSONResponse({"error": "Only PDF files are accepted"}, status_code=400)
+        raw = await file.read()
+    else:
+        return JSONResponse(
+            {"error": "Provide a PDF file or a PDF URL"}, status_code=400
+        )
+
+    err = _apply_optional_pdf_bytes(job, job_id, sid, raw)
+    if err:
+        return JSONResponse({"error": err}, status_code=400)
     return JSONResponse({"status": "ok", "source_id": sid})
 
 

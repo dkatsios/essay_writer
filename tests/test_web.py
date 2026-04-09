@@ -3,6 +3,7 @@
 import json
 import time
 from pathlib import Path
+from unittest.mock import MagicMock
 
 from fastapi.testclient import TestClient
 
@@ -116,3 +117,37 @@ def test_optional_pdf_done_requires_active_step():
     _jobs[jid] = Job(job_id=jid, run_dir=Path("."), status="running")
     r = client.post(f"/optional-pdf/{jid}/done")
     assert r.status_code == 400
+
+
+def test_optional_pdf_url_updates_registry(tmp_path, monkeypatch):
+    run_dir = Path(tmp_path) / "run"
+    sources = run_dir / "sources"
+    sources.mkdir(parents=True)
+    reg = {"src_a": {"title": "Paper A", "doi": "10.1000/182", "user_provided": False}}
+    (sources / "registry.json").write_text(
+        json.dumps(reg, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+    jid = "optpdfjob003"
+    _jobs[jid] = Job(
+        job_id=jid,
+        run_dir=run_dir,
+        status="optional_pdfs",
+        optional_pdf_allowed_ids=frozenset({"src_a"}),
+    )
+    pdf_bytes = b"%PDF-1.4\n1 0 obj<<>>endobj\ntrailer<<>>\n%%EOF\n"
+    mock_resp = MagicMock()
+    mock_resp.content = pdf_bytes
+    mock_resp.headers = {"content-type": "application/pdf"}
+
+    def _fake_http_get(url: str, **kwargs):
+        assert url.startswith("http")
+        return mock_resp
+
+    monkeypatch.setattr("src.web.http_get", _fake_http_get)
+
+    data = {"source_id": "src_a", "pdf_url": "https://example.org/paper.pdf"}
+    r = client.post(f"/optional-pdf/{jid}", data=data)
+    assert r.status_code == 200
+    assert r.json().get("status") == "ok"
+    updated = json.loads((sources / "registry.json").read_text(encoding="utf-8"))
+    assert "content_path" in updated["src_a"]
