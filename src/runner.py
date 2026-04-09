@@ -17,7 +17,7 @@ Usage (via uv):
     # Custom config
     uv run python -m src.runner /path/to/files/ --config my_config.yaml
 
-    # Save run outputs to .output/run_<timestamp>/
+    # Save run outputs to .output/run_<timestamp>/ when using --dump-run
     uv run python -m src.runner /path/to/files/ --dump-run
 """
 
@@ -43,6 +43,7 @@ from config.schemas import load_config  # noqa: E402
 from src.agent import create_model  # noqa: E402
 from src.intake import build_extracted_text, scan  # noqa: E402
 from src.pipeline import run_pipeline  # noqa: E402
+from src.scratch_dir import SCRATCH_RUN_DIR  # noqa: E402
 from src.schemas import Clarification, ValidationQuestion  # noqa: E402
 
 
@@ -610,7 +611,7 @@ def run(
     # Setup run directory
     if output_dir:
         output_dir.mkdir(parents=True, exist_ok=True)
-    run_dir = output_dir or Path(".output/scratch")
+    run_dir = output_dir or SCRATCH_RUN_DIR
     run_dir.mkdir(parents=True, exist_ok=True)
 
     log_handler = _setup_file_logging(run_dir) if output_dir else None
@@ -673,7 +674,7 @@ def run_prompt(
     """Run the essay pipeline with a plain text prompt (no files)."""
     config = load_config(config_path)
 
-    run_dir = output_dir or Path(".output/scratch")
+    run_dir = output_dir or SCRATCH_RUN_DIR
     run_dir.mkdir(parents=True, exist_ok=True)
 
     log_handler = _setup_file_logging(run_dir) if output_dir else None
