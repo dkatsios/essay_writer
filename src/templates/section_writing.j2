@@ -16,6 +16,9 @@ Authors: {{ note.authors | join(', ') }}  Year: {{ note.year or 'n.d.' }}
 
 {% endfor %}
 
+## Source coverage
+- Source Notes were gathered for the **whole** essay: over the full draft, every `source_id` should be cited at least once. In **this** section, prefer sources not yet used heavily in prior sections (see context below), and cite multiple distinct ids where the content supports it.
+
 ## Your Task
 
 Write section {{ section.number }}: "{{ section.title }}"
@@ -31,8 +34,8 @@ Write section {{ section.number }}: "{{ section.title }}"
 {% include 'style_common.j2' %}
 
 {% if min_sources %}
-## Source Usage — CRITICAL
-- The full essay must cite **at least {{ min_sources }}** different sources overall.
+## Minimum distinct sources — CRITICAL
+- The full essay must cite **at least {{ min_sources }}** different sources overall; contribute toward that in this section where appropriate.
 - Use as many relevant sources as possible in this section.
 {% endif %}
 

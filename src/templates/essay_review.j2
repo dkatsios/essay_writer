@@ -20,18 +20,13 @@ Review and improve the draft following the criteria below. Output the complete p
 
 {% include 'style_review.j2' %}
 
-{% if min_sources %}
-## Source Usage — CRITICAL
-- The essay MUST cite **at least {{ min_sources }}** different sources. If the draft uses fewer, add citations from the available source notes where relevant.
-{% endif %}
-
 ## Review Focus
 - If the draft opens with submission-form or title-page metadata (student name line, course code, course title, assignment title as an administrative block), remove it entirely; keep only the essay title and scholarly body.
 - Fix grammar, spelling, and awkward phrasing.
 - Tighten prose: eliminate filler, redundancy, and unnecessary qualifiers.
 - Headings must be plain text with `#` markers only — remove any `**` or `*` wrapping from headings.
-- Ensure every claim has a `[[source_id]]` marker.
-- Keep `[[source_id]]` markers intact — do NOT replace with literal citations.
+- Preserve **every** existing `[[source_id]]` marker — do NOT remove, drop, or merge them away when tightening prose; do NOT replace them with literal `(Author, Year)` text.
+- Do **not** reduce how many **distinct** sources are cited unless you are fixing a clear factual or formatting error.
 - Do NOT add a References/Βιβλιογραφία section.
 - Preserve the argument structure, tone, and register — improve expression, do not dramatize or intensify.
 - Do NOT add vivid, dramatic, or rhetorical flourishes not present in the draft.

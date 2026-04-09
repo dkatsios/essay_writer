@@ -42,8 +42,8 @@ class SearchConfig(BaseModel):
     """Academic search settings."""
 
     fetch_per_api: int = 20
-    sources_per_1k_words: int = 3
-    min_sources: int = 8
+    sources_per_1k_words: int = 5
+    min_sources: int = 12
     max_sources: int = 25
     overfetch_multiplier: float = 3.0
     optional_pdf_prompt_top_n: int = 5

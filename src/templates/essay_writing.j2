@@ -20,6 +20,11 @@ Authors: {{ note.authors | join(', ') }}  Year: {{ note.year or 'n.d.' }}
 
 {% endfor %}
 
+## Source coverage — CRITICAL
+- These Source Notes were gathered **for this essay**: treat them as the intended evidence base.
+- Cite **every** `source_id` above **at least once** somewhere in the essay, unless a note is clearly irrelevant to the topic (rare). Do **not** cite only a small subset when more notes are available.
+- Spread citations across sections — avoid leaning on just two or three sources when the brief allows.
+
 ## Task
 
 Write the COMPLETE essay following the plan structure above.
@@ -33,8 +38,8 @@ Write the COMPLETE essay following the plan structure above.
 {% include 'style_common.j2' %}
 
 {% if min_sources %}
-## Source Usage — CRITICAL
-- You MUST cite **at least {{ min_sources }}** different sources from the Source Notes above.
+## Minimum distinct sources — CRITICAL
+- You MUST cite **at least {{ min_sources }}** different sources from the Source Notes above (this is an assignment floor; still prefer citing **all** notes where relevant).
 - Spread citations across all sections — do NOT cluster them in one place.
 {% endif %}
 
