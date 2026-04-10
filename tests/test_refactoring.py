@@ -616,16 +616,29 @@ class TestSelectedSourceNotes:
 
 
 class TestSourceTargetScaling:
-    def test_compute_max_sources_uncapped(self):
+    def test_compute_max_sources_log_scaling(self):
         from config.schemas import EssayWriterConfig
-        from src.pipeline import _compute_max_sources
+        from src.pipeline import _compute_max_sources, _suggested_sources
 
         cfg = EssayWriterConfig()
         target, fetch = _compute_max_sources(24000, cfg, None)
-        assert target == max(
-            cfg.search.min_sources, 24 * cfg.search.sources_per_1k_words
-        )
+        expected = _suggested_sources(24000, cfg.search.sources_per_1k_words)
+        assert target == max(cfg.search.min_sources, expected)
         assert fetch == int(target * cfg.search.overfetch_multiplier)
+        # Log scaling should produce fewer sources than the old linear formula
+        old_linear = 24 * cfg.search.sources_per_1k_words  # 120
+        assert target < old_linear
+
+    def test_suggested_sources_values(self):
+        """Spot-check the log-based formula at key word counts."""
+        from src.pipeline import _suggested_sources
+
+        assert _suggested_sources(0) == 0
+        assert 22 <= _suggested_sources(2000) <= 26
+        assert 37 <= _suggested_sources(5000) <= 41
+        assert 50 <= _suggested_sources(10000) <= 55
+        assert 63 <= _suggested_sources(20000) <= 69
+        assert 72 <= _suggested_sources(30000) <= 77
 
     def test_compute_max_sources_respects_user_floor_above_raw(self):
         from config.schemas import EssayWriterConfig
@@ -636,8 +649,8 @@ class TestSourceTargetScaling:
         assert target == 130
         assert fetch == int(130 * cfg.search.overfetch_multiplier)
 
-    def test_compute_max_sources_explicit_user_below_raw(self):
-        """Rubric min (e.g. 90) must not be raised to the 24k × per-1k target (120)."""
+    def test_compute_max_sources_explicit_user_above_raw(self):
+        """User min (e.g. 90) above log-based suggestion (~65 for 24k) wins."""
         from config.schemas import EssayWriterConfig
         from src.pipeline import _compute_max_sources
 
@@ -645,6 +658,16 @@ class TestSourceTargetScaling:
         target, fetch = _compute_max_sources(24000, cfg, 90)
         assert target == 90
         assert fetch == int(90 * cfg.search.overfetch_multiplier)
+
+    def test_compute_max_sources_explicit_user_below_raw(self):
+        """User min below the log-based suggestion still uses user value."""
+        from config.schemas import EssayWriterConfig
+        from src.pipeline import _compute_max_sources
+
+        cfg = EssayWriterConfig()
+        target, fetch = _compute_max_sources(24000, cfg, 30)
+        assert target == 30
+        assert fetch == int(30 * cfg.search.overfetch_multiplier)
 
 
 class TestLongEssayContextHelpers:

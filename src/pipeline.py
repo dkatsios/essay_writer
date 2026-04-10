@@ -525,6 +525,19 @@ def _parse_sections(run_dir: Path) -> list[Section]:
     return sections
 
 
+def _suggested_sources(target_words: int, sources_per_1k: int = 5) -> int:
+    """Compute a suggested source count using log-based scaling.
+
+    Academic conventions show diminishing marginal sources as word count
+    grows.  The formula uses log2 scaling to produce realistic targets:
+
+        2k -> ~24,  5k -> ~39,  10k -> ~52,  20k -> ~66,  30k -> ~74
+    """
+    if target_words <= 0:
+        return 0
+    return round(sources_per_1k * 3 * math.log2(1 + target_words / 1000))
+
+
 def _compute_max_sources(
     target_words: int,
     config: EssayWriterConfig,
@@ -532,17 +545,15 @@ def _compute_max_sources(
 ) -> tuple[int, int]:
     """Compute (target_sources, fetch_sources) based on word count and config.
 
-    If the brief or user supplied ``min_sources`` (assignment rubric), that
-    value wins over the per-1k heuristic so a stated requirement like “90
-    sources” is not replaced by ``ceil(words/1000) * sources_per_1k_words``
-    (e.g. 120 for 24k words).
+    Uses log-based scaling for realistic source targets. If the brief or
+    user supplied ``min_sources``, that value wins over the heuristic.
 
-    With no explicit minimum, ``target_sources`` scales with length, floored
-    by ``search.min_sources``. ``fetch_sources`` uses the overfetch multiplier
-    so the registry has headroom before selection.
+    With no explicit minimum, ``target_sources`` uses log-based scaling,
+    floored by ``search.min_sources``. ``fetch_sources`` uses the overfetch
+    multiplier so the registry has headroom before selection.
     """
     sc = config.search
-    raw = math.ceil(target_words / 1000) * sc.sources_per_1k_words
+    raw = _suggested_sources(target_words, sc.sources_per_1k_words)
     cfg_floor = sc.min_sources
     if user_min_sources is not None:
         target = max(cfg_floor, user_min_sources)
@@ -991,6 +1002,10 @@ async def _async_read_one_source(
     )
 
 
+_MIN_RELEVANCE_SCORE = 2
+"""Sources scored below this by the reader LLM are filtered out before selection."""
+
+
 def _select_best_sources(
     run_dir: Path, registry: dict, target_sources: int
 ) -> dict[str, dict]:
@@ -998,6 +1013,7 @@ def _select_best_sources(
     notes_dir = run_dir / "sources" / "notes"
     accessible: list[tuple[str, int, int]] = []
     inaccessible: list[str] = []
+    filtered_low_relevance = 0
 
     for sid in registry:
         note_path = notes_dir / f"{sid}.json"
@@ -1006,12 +1022,26 @@ def _select_best_sources(
             continue
         try:
             note = SourceNote.model_validate_json(note_path.read_text(encoding="utf-8"))
-            if note.is_accessible:
-                accessible.append((sid, note.relevance_score, note.content_word_count))
-            else:
+            if not note.is_accessible:
                 inaccessible.append(sid)
+            elif note.relevance_score < _MIN_RELEVANCE_SCORE:
+                filtered_low_relevance += 1
+                logger.info(
+                    "Filtering source %s (relevance_score=%d)",
+                    sid,
+                    note.relevance_score,
+                )
+            else:
+                accessible.append((sid, note.relevance_score, note.content_word_count))
         except Exception:
             inaccessible.append(sid)
+
+    if filtered_low_relevance:
+        logger.info(
+            "Filtered %d low-relevance sources (score < %d)",
+            filtered_low_relevance,
+            _MIN_RELEVANCE_SCORE,
+        )
 
     # Sort: user-provided first, then relevance score, valid authors,
     # citation count, and content word count as tiebreaker
