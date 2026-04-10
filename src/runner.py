@@ -237,6 +237,10 @@ class TokenTracker:
         reviewed_words = _count_words(run_dir / "essay" / "reviewed.md")
         target_words = _parse_target_words(run_dir / "plan" / "plan.json")
         sources_count = _count_sources(run_dir / "sources" / "registry.json")
+        essay_path = run_dir / "essay" / "reviewed.md"
+        if not essay_path.exists():
+            essay_path = run_dir / "essay" / "draft.md"
+        cited_count = _count_cited_sources(essay_path)
 
         lines = [
             "# Run Report",
@@ -248,7 +252,9 @@ class TokenTracker:
             f"| Tokens (in / out / think) | {total_in:,} / {total_out:,} / {total_think:,} |",
         ]
         if sources_count:
-            lines.append(f"| Sources | {sources_count} |")
+            lines.append(f"| Sources fetched | {sources_count} |")
+        if cited_count:
+            lines.append(f"| Sources cited | {cited_count} |")
         if target_words:
             lines.append(f"| Target words | {target_words:,} |")
         if draft_words:
@@ -307,6 +313,16 @@ def _count_sources(path: Path) -> int:
         return len(json.loads(path.read_text(encoding="utf-8")))
     except (json.JSONDecodeError, ValueError):
         return 0
+
+
+def _count_cited_sources(path: Path) -> int:
+    """Count unique [[source_id]] citations in an essay file, 0 if missing."""
+    if not path.exists():
+        return 0
+    import re
+
+    text = path.read_text(encoding="utf-8")
+    return len(set(re.findall(r"\[\[([^|\]]+?)(?:\|[^\]]*?)?\]\]", text)))
 
 
 def _parse_target_words(path: Path) -> int:
