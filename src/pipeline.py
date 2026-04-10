@@ -67,8 +67,7 @@ _OPTIONAL_PDF_STOPWORDS = frozenset(
     "this that these those it its they them their we our you your he she his her not no "
     "but if than then so such also only both all any each more most other some very can "
     "will may might must should could would about into through over after before under "
-    "between out up down new first one two how what when where which who whom why into"
-    .split()
+    "between out up down new first one two how what when where which who whom why into".split()
 )
 
 
@@ -121,9 +120,7 @@ def _optional_pdf_corpus_tokens(run_dir: Path) -> set[str]:
     return tokens
 
 
-def _lexical_relevance_score(
-    corpus: set[str], title: str, abstract: str
-) -> int:
+def _lexical_relevance_score(corpus: set[str], title: str, abstract: str) -> int:
     doc_tokens = _tokenize_for_overlap(title) | _tokenize_for_overlap(abstract)
     return len(doc_tokens & corpus)
 
@@ -157,7 +154,11 @@ def _load_source_body_sync(
         content = Path(content_path).read_text(encoding="utf-8")
         if len(content) > 50_000:
             content = content[:50_000] + "\n\n[... truncated ...]"
-    if not _has_substantive_body(content, min_body_words) and url and not is_user_provided:
+    if (
+        not _has_substantive_body(content, min_body_words)
+        and url
+        and not is_user_provided
+    ):
         if domain_tracker and domain_tracker.should_skip(url):
             logger.info("Skipping %s — domain throttled", url)
         else:
@@ -194,14 +195,16 @@ async def _load_source_body_async(
         )
         if len(content) > 50_000:
             content = content[:50_000] + "\n\n[... truncated ...]"
-    if not _has_substantive_body(content, min_body_words) and url and not is_user_provided:
+    if (
+        not _has_substantive_body(content, min_body_words)
+        and url
+        and not is_user_provided
+    ):
         if domain_tracker and domain_tracker.should_skip(url):
             logger.info("Skipping %s — domain throttled", url)
         else:
             try:
-                fetched = await asyncio.to_thread(
-                    fetch_url_content, url, sources_dir
-                )
+                fetched = await asyncio.to_thread(fetch_url_content, url, sources_dir)
                 if len(fetched) > 50_000:
                     fetched = fetched[:50_000] + "\n\n[... truncated ...]"
                 if _body_word_count(fetched) >= _body_word_count(content):
@@ -863,9 +866,7 @@ def _read_one_source(
     """Fetch and extract notes for a single source."""
     is_user_provided = meta.get("user_provided", False)
     url = meta.get("pdf_url") or meta.get("url", "")
-    content = _load_source_body_sync(
-        meta, sources_dir, domain_tracker, min_body_words
-    )
+    content = _load_source_body_sync(meta, sources_dir, domain_tracker, min_body_words)
     had_body = _has_substantive_body(content, min_body_words)
 
     abstract = meta.get("abstract", "")
@@ -953,9 +954,7 @@ async def _async_read_one_source(
             essay_topic=essay_topic,
         )
         try:
-            note = await _async_structured_call(
-                worker, prompt, SourceNote, callbacks
-            )
+            note = await _async_structured_call(worker, prompt, SourceNote, callbacks)
             return _source_note_with_fulltext_flag(note, had_body)
         except Exception:
             logger.warning("LLM extraction failed for %s, using metadata", source_id)
@@ -1229,7 +1228,8 @@ def _make_read_sources(
 
         if items and top_n > 0:
             paths_before = {
-                sid: (registry.get(sid) or {}).get("content_path") for sid in prompt_sids
+                sid: (registry.get(sid) or {}).get("content_path")
+                for sid in prompt_sids
             }
             cb = c.on_optional_source_pdfs
             if cb:
@@ -1250,9 +1250,7 @@ def _make_read_sources(
                 )
                 reread_pairs = [(sid, registry[sid]) for sid in reread_ids]
                 domain_tracker2 = _DomainFailureTracker()
-                reread_results = asyncio.run(
-                    read_all(reread_pairs, domain_tracker2)
-                )
+                reread_results = asyncio.run(read_all(reread_pairs, domain_tracker2))
                 by_sid = dict(results)
                 for sid, note in reread_results:
                     by_sid[sid] = note
@@ -1696,9 +1694,7 @@ def _build_execution_steps(
 
     if target_words <= threshold:
         steps.append(
-            PipelineStep(
-                "write", _make_write_full(target_words, citation_min_sources)
-            )
+            PipelineStep("write", _make_write_full(target_words, citation_min_sources))
         )
         steps.append(
             PipelineStep(
@@ -1723,9 +1719,7 @@ def _build_execution_steps(
             steps.append(
                 PipelineStep(
                     "write",
-                    _make_write_sections(
-                        sections, target_words, citation_min_sources
-                    ),
+                    _make_write_sections(sections, target_words, citation_min_sources),
                 )
             )
             steps.append(

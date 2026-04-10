@@ -622,7 +622,9 @@ class TestSourceTargetScaling:
 
         cfg = EssayWriterConfig()
         target, fetch = _compute_max_sources(24000, cfg, None)
-        assert target == max(cfg.search.min_sources, 24 * cfg.search.sources_per_1k_words)
+        assert target == max(
+            cfg.search.min_sources, 24 * cfg.search.sources_per_1k_words
+        )
         assert fetch == int(target * cfg.search.overfetch_multiplier)
 
     def test_compute_max_sources_respects_user_floor_above_raw(self):

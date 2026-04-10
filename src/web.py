@@ -103,6 +103,7 @@ class Job:
     fast_track: bool = False
     """If True, do not pause for the optional full-text PDF upload step."""
 
+
 _jobs: dict[str, Job] = {}
 
 
@@ -118,9 +119,7 @@ def _append_clarification_round_for_ui(job: Job, answers: str) -> None:
         )
         for q in job.questions
     ]
-    parsed = (
-        _parse_validation_answers(vqs, answers) if answers.strip() else []
-    )
+    parsed = _parse_validation_answers(vqs, answers) if answers.strip() else []
     by_q = {c.question: c.answer for c in parsed}
     items = [
         {"question": q["question"], "answer": by_q.get(q["question"], "—")}
@@ -447,7 +446,9 @@ async def submit(
         submit_prompt=prompt.strip(),
         target_words=tw,
         min_sources=ms,
-        fast_track=bool(fast_track and fast_track.strip().lower() in ("1", "on", "true", "yes")),
+        fast_track=bool(
+            fast_track and fast_track.strip().lower() in ("1", "on", "true", "yes")
+        ),
     )
     _jobs[job_id] = job
 
@@ -562,7 +563,9 @@ def _fetch_pdf_bytes_from_url(url: str) -> tuple[bytes | None, str | None]:
     return raw, None
 
 
-def _apply_optional_pdf_bytes(job: Job, job_id: str, sid: str, raw: bytes) -> str | None:
+def _apply_optional_pdf_bytes(
+    job: Job, job_id: str, sid: str, raw: bytes
+) -> str | None:
     """Persist extracted text to supplement + registry. Returns error message or None."""
     if len(raw) > _MAX_OPTIONAL_PDF_BYTES:
         return "File too large"
@@ -608,7 +611,11 @@ async def optional_pdf_upload(
     if job.status != "optional_pdfs":
         return JSONResponse({"error": "No optional PDF step active"}, status_code=400)
     sid = source_id.strip()
-    if not sid or job.optional_pdf_allowed_ids is None or sid not in job.optional_pdf_allowed_ids:
+    if (
+        not sid
+        or job.optional_pdf_allowed_ids is None
+        or sid not in job.optional_pdf_allowed_ids
+    ):
         return JSONResponse({"error": "Invalid source_id"}, status_code=400)
 
     url_stripped = pdf_url.strip()
@@ -619,7 +626,9 @@ async def optional_pdf_upload(
             return JSONResponse({"error": err}, status_code=400)
     elif file is not None and file.filename:
         if not file.filename.lower().endswith(".pdf"):
-            return JSONResponse({"error": "Only PDF files are accepted"}, status_code=400)
+            return JSONResponse(
+                {"error": "Only PDF files are accepted"}, status_code=400
+            )
         raw = await file.read()
     else:
         return JSONResponse(
