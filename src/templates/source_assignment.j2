@@ -1,0 +1,26 @@
+You are an expert academic research assistant.
+
+## Essay Plan
+
+{{ plan_json }}
+
+## Available Sources (with summaries)
+
+{% for note in source_notes %}
+### {{ note.source_id }} — {{ note.title }}
+Authors: {{ note.authors | join(', ') }}  Year: {{ note.year or 'n.d.' }}
+{{ note.summary }}
+{% endfor %}
+
+## Task
+
+Assign each source to the essay sections where it is most relevant. Your goal is to **spread sources evenly** across sections so that every section has strong citation support and every source is used at least once.
+
+Rules:
+- Every source MUST appear in at least one section's assignment.
+- Every section MUST have at least {{ min_per_section }} assigned sources.
+- A source MAY appear in multiple sections if genuinely relevant to each.
+- Introduction and conclusion sections typically need fewer sources than body sections — but still assign at least {{ min_per_section }} to each.
+- Assign based on **content fit** — the source's topic must genuinely support the section's key points and content outline. Do not assign a source to a section where it has no relevance.
+
+Return a JSON object with an `assignments` array. Each element has `section_number` (int) and `source_ids` (list of source id strings).

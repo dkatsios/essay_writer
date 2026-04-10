@@ -38,6 +38,7 @@ from src.tools.essay_sanitize import strip_leading_submission_metadata
 from src.schemas import (
     AssignmentBrief,
     EssayPlan,
+    SourceAssignmentPlan,
     SourceNote,
     ValidationQuestion,
     ValidationResult,
@@ -1284,6 +1285,47 @@ def _make_read_sources(
     return _do_read_sources
 
 
+# -- Source assignment (long-essay path only) ------------------------------
+
+
+def _do_assign_sources(ctx: PipelineContext) -> None:
+    """Assign selected sources to sections using the worker model."""
+    plan_json = _read_text(ctx.run_dir / "plan" / "plan.json")
+    source_notes = _load_selected_source_notes(ctx.run_dir)
+    if not source_notes:
+        logger.warning("No source notes available for assignment")
+        return
+
+    sections = _parse_sections(ctx.run_dir)
+    num_sections = len(sections) or 1
+    min_per_section = max(2, len(source_notes) // num_sections)
+
+    prompt = render_prompt(
+        "source_assignment.j2",
+        plan_json=plan_json,
+        source_notes=source_notes,
+        min_per_section=min_per_section,
+    )
+
+    result = _structured_call(ctx.worker, prompt, SourceAssignmentPlan, ctx.callbacks)
+    _write_json(ctx.run_dir / "plan" / "source_assignments.json", result)
+
+
+def _load_source_assignments(run_dir: Path) -> dict[int, list[str]]:
+    """Load source-to-section assignments, returning empty dict if unavailable."""
+    path = run_dir / "plan" / "source_assignments.json"
+    if not path.exists():
+        return {}
+    try:
+        plan = SourceAssignmentPlan.model_validate_json(
+            path.read_text(encoding="utf-8")
+        )
+        return {a.section_number: a.source_ids for a in plan.assignments}
+    except Exception:
+        logger.warning("Failed to load source assignments")
+        return {}
+
+
 # -- Short path: full-essay write & review --------------------------------
 
 
@@ -1399,15 +1441,35 @@ def _make_write_sections(
         order = _writing_order(sections)
         written_sections: list[tuple[Section, str]] = []
 
+        # Load source-to-section assignments (long-path only)
+        section_assignments = _load_source_assignments(ctx.run_dir)
+        notes_by_id = {n.source_id: n for n in source_notes}
+
         for section in order:
             fname = _section_filename(section)
             prior_context = _build_prior_sections_context(written_sections)
             section_corpus = (
                 f"{section.title} {section.key_points} {section.content_outline or ''}"
             )
-            detail_notes, catalog_md, total_n = _split_writer_source_context(
-                section_corpus, source_notes, budget
-            )
+
+            assigned_ids = section_assignments.get(section.number, [])
+            if assigned_ids:
+                # Boost assigned sources to the top of the detail window
+                assigned_notes = [
+                    notes_by_id[sid] for sid in assigned_ids if sid in notes_by_id
+                ]
+                remaining = [
+                    n for n in source_notes if n.source_id not in set(assigned_ids)
+                ]
+                ranked_remaining = _rank_notes_by_corpus(section_corpus, remaining)
+                slots_left = max(0, budget - len(assigned_notes))
+                detail_notes = assigned_notes + ranked_remaining[:slots_left]
+                catalog_md = _source_catalog_markdown(source_notes)
+                total_n = len(source_notes)
+            else:
+                detail_notes, catalog_md, total_n = _split_writer_source_context(
+                    section_corpus, source_notes, budget
+                )
 
             prompt = render_prompt(
                 "section_writing.j2",
@@ -1417,6 +1479,7 @@ def _make_write_sections(
                 total_selected_sources=total_n,
                 section=section,
                 prior_sections=prior_context,
+                assigned_source_ids=assigned_ids,
                 tolerance_percent=round(ctx.config.writing.word_count_tolerance * 100),
                 min_words=round(
                     section.word_target * (1 - ctx.config.writing.word_count_tolerance)
@@ -1716,6 +1779,9 @@ def _build_execution_steps(
                 )
             )
         else:
+            steps.append(
+                PipelineStep("assign_sources", _do_assign_sources),
+            )
             steps.append(
                 PipelineStep(
                     "write",

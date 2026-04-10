@@ -29,6 +29,15 @@ Every id below is in scope for this essay. Cite any of them with `[[source_id]]`
 ## Source coverage
 - Over the **full** essay, cite **every** `source_id` from the catalog at least once where it plausibly supports a claim (skip only if clearly off-topic).
 - In **this** section, prefer sources not yet used heavily in prior sections (see context below), and cite **multiple distinct** ids.
+{% if assigned_source_ids %}
+
+## Assigned sources for this section — CRITICAL
+The following sources were specifically identified as relevant to this section's content. You **MUST** cite each of them at least once in this section:
+{% for sid in assigned_source_ids %}
+- `{{ sid }}`
+{% endfor %}
+You may also cite other sources from the catalog where relevant.
+{% endif %}
 
 ## Your Task
 

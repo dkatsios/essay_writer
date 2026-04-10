@@ -119,3 +119,19 @@ class SourceNote(BaseModel):
         for extract in self.relevant_extracts:
             count += len(extract.split())
         return count
+
+
+# -- Source assignment (long-essay path) -----------------------------------
+
+
+class SectionSourceAssignment(BaseModel):
+    """Maps a section number to its assigned source IDs."""
+
+    section_number: int
+    source_ids: list[str]
+
+
+class SourceAssignmentPlan(BaseModel):
+    """Worker output mapping sources to sections — /plan/source_assignments.json."""
+
+    assignments: list[SectionSourceAssignment]

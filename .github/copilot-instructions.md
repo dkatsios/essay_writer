@@ -38,7 +38,7 @@ uv run python -c "from src.agent import create_model, invoke_with_retry"
 
 ## Architecture
 
-Deterministic Python pipeline for academic essay writing using direct LangChain model calls rather than a deepagents/LangGraph orchestration layer. Produces academic essays as formatted `.docx` files in the language specified by the assignment brief (defaults to Greek). A Python pipeline (`src/pipeline.py`) controls the 8-step workflow; three LLM model roles — **worker**, **writer**, and **reviewer** — perform the language tasks.
+Deterministic Python pipeline for academic essay writing using direct LangChain model calls rather than a deepagents/LangGraph orchestration layer. Produces academic essays as formatted `.docx` files in the language specified by the assignment brief (defaults to Greek). A Python pipeline (`src/pipeline.py`) controls the workflow; three LLM model roles — **worker**, **writer**, and **reviewer** — perform the language tasks.
 
 ### Flow
 
@@ -47,6 +47,7 @@ Deterministic Python pipeline for academic essay writing using direct LangChain 
 3. **Plan** (worker) — creates sections, word targets, research queries → `EssayPlan` via structured output
 4. **Research** — pure Python: extracts queries from plan, calls `run_research()` → `registry.json`
 5. **Read sources** (worker, parallel) — pipeline fetches URLs via `fetch_url_content()`, then worker extracts `SourceNote` via structured output
+5.5. **Assign sources** (worker, long path only) — assigns selected sources to sections based on content fit → `source_assignments.json`
 6. **Write** (writer) — writes the complete essay via `model.invoke()` → `draft.md`
 7. **Review** (reviewer) — reviews draft, writes polished version → `reviewed.md`
 8. **Export** — pure Python `build_document()` call → `essay.docx`
@@ -55,7 +56,7 @@ Deterministic Python pipeline for academic essay writing using direct LangChain 
 
 | Role | Model | Templates | Purpose |
 |------|-------|-----------|---------|
-| **worker** | `gemini-2.5-flash` | `intake.j2`, `validate.j2`, `plan.j2`, `source_reading.j2` | Structured data extraction (brief, plan, notes) |
+| **worker** | `gemini-2.5-flash` | `intake.j2`, `validate.j2`, `plan.j2`, `source_reading.j2`, `source_assignment.j2` | Structured data extraction (brief, plan, notes, source assignment) |
 | **writer** | `gemini-2.5-pro` | `essay_writing.j2`, `section_writing.j2` | Essay text generation |
 | **reviewer** | `gemini-3.1-pro-preview` | `essay_review.j2`, `section_review.j2` | Essay review and polish |
 
@@ -69,7 +70,7 @@ All tool calls (research, URL fetching, PDF reading) are plain Python functions 
 
 ### Templates (per-task Jinja2)
 
-8 templates in `src/templates/`, one per pipeline task. Each template receives specific context variables and renders the complete prompt for that step:
+9 templates in `src/templates/`, one per pipeline task. Each template receives specific context variables and renders the complete prompt for that step:
 
 | Template | Context variables | Output |
 |----------|-------------------|--------|
@@ -77,9 +78,10 @@ All tool calls (research, URL fetching, PDF reading) are plain Python functions 
 | `validate.j2` | `brief_json` | `ValidationResult` JSON |
 | `plan.j2` | `brief_json` | `EssayPlan` JSON |
 | `source_reading.j2` | `source_id`, `title`, `authors`, `year`, `doi`, `abstract`, `content`, `essay_topic` | `SourceNote` JSON |
+| `source_assignment.j2` | `plan_json`, `source_notes`, `min_per_section` | `SourceAssignmentPlan` JSON |
 | `essay_writing.j2` | `brief_json`, `plan_json`, `source_notes`, `target_words` | Essay markdown |
 | `essay_review.j2` | `brief_json`, `plan_json`, `draft_text`, `target_words` | Reviewed markdown |
-| `section_writing.j2` | `plan_json`, `source_notes`, `section`, `prior_sections` | Section markdown |
+| `section_writing.j2` | `plan_json`, `source_notes`, `section`, `prior_sections`, `assigned_source_ids` | Section markdown |
 | `section_review.j2` | `section`, `full_essay` | Reviewed section markdown |
 
 ### File Layout (run directory)
@@ -89,6 +91,7 @@ Each run uses a directory with these subdirectories:
 - `brief/assignment.json` — assignment brief (Pydantic `AssignmentBrief`)
 - `brief/validation.json` — validation result (Pydantic `ValidationResult`); each `ValidationQuestion` includes `suggested_option_index` (0-based default for UI/CLI)
 - `plan/plan.json` — essay plan (Pydantic `EssayPlan`)
+- `plan/source_assignments.json` — source-to-section assignments (Pydantic `SourceAssignmentPlan`; long-path only)
 - `sources/registry.json` — source metadata (from `run_research()`)
 - `sources/notes/{source_id}.json` — reader notes, one file per source (Pydantic `SourceNote`)
 - `sources/selected.json` — best N sources selected for the essay
@@ -139,7 +142,8 @@ No `default.yaml` exists; field defaults in `schemas.py` are canonical.
 - **Long-path writer context** — writer prompts include full summaries for a **lexically ranked** subset (`search.section_source_full_detail_max`) plus a **compact catalog** of every selected source (id, authors, year, title). Review steps see essay text only (refiner; no source bodies).
 - **User-provided sources** — users can supply their own reference PDFs/documents via `--sources` (CLI) or the "Your Sources" upload (web UI). These are saved to `sources/user/`, injected into `registry.json` with `user_provided: true` and placeholder metadata. The source-reading step extracts both notes and bibliographic metadata (title, authors, year, DOI) from the content via the LLM, then backfills the registry. User sources are always read first and are prioritized in `_select_best_sources`.
 - **Optional PDF uploads (web)** — after the first source-read pass, API sources with `SourceNote.fetched_fulltext=False` (abstract-only or short fetch) may be offered to the user (up to `search.optional_pdf_prompt_top_n`, lexical relevance from brief/plan + citation count). The UI accepts a local PDF file or an http(s) URL to a PDF; text is saved under `sources/supplement/` and `registry[id].content_path` is set, then those IDs are re-read before `selected.json`. CLI runs print a stderr hint instead of blocking. Config: `optional_pdf_prompt_top_n`, `optional_pdf_min_body_words`.
-- **Short vs long path** — essays ≤ `long_essay_threshold` (default 4000 words) use full-essay write/review. Longer essays use section-by-section write/review.
+- **Short vs long path** — essays ≤ `long_essay_threshold` (default 4000 words) use full-essay write/review. Longer essays use section-by-section write/review with a source-assignment step (5.5) that distributes sources across sections.
+- **Source assignment (long path)** — after source reading, the worker assigns each selected source to the sections where it is most relevant (`source_assignment.j2` → `SourceAssignmentPlan`). During section writing, assigned sources are boosted to the top of the detail window so the writer sees their full summaries, and the template requires citing each assigned source at least once.
 - **Bounded long-essay context** — section writing includes only the most recent prior sections, and section review includes only adjacent sections with the current section delimited. This keeps prompt growth roughly linear instead of resending the full essay on every section review.
 - **Config-backed word tolerance** — `writing.word_count_tolerance` controls the tolerance used in the writing and review prompts.
 - **Custom AI endpoint** — when `AI_BASE_URL` is set in `.env`, all models route through an OpenAI-compatible endpoint using `AI_API_KEY` and `AI_MODEL`.
