@@ -1,7 +1,7 @@
 """Pydantic configuration schemas for the essay writer."""
 
 from __future__ import annotations
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from pydantic_settings.sources import (
     PydanticBaseSettingsSource,
@@ -41,11 +41,14 @@ class FormattingConfig(BaseModel):
 class SearchConfig(BaseModel):
     """Academic search settings."""
 
+    model_config = ConfigDict(extra="ignore")
+
     fetch_per_api: int = 20
     sources_per_1k_words: int = 5
     min_sources: int = 12
-    max_sources: int = 25
     overfetch_multiplier: float = 3.0
+    section_source_full_detail_max: int = 22
+    """Per section (long path) or single shot (short path): max sources with full summary/extracts in the writer prompt; all selected sources still appear in a compact catalog."""
     optional_pdf_prompt_top_n: int = 5
     """Offer optional PDF upload for up to this many API sources without full text (0 = off)."""
     optional_pdf_min_body_words: int = 50

@@ -526,13 +526,77 @@ def _compute_max_sources(
     config: EssayWriterConfig,
     user_min_sources: int | None = None,
 ) -> tuple[int, int]:
-    """Compute (target_sources, fetch_sources) based on word count and config."""
+    """Compute (target_sources, fetch_sources) based on word count and config.
+
+    ``target_sources`` is not capped: long essays can request many sources
+    (e.g. 80–120 for a 24k-word piece). ``fetch_sources`` scales with the
+    overfetch multiplier so the registry has headroom before selection.
+    """
     sc = config.search
     raw = math.ceil(target_words / 1000) * sc.sources_per_1k_words
     floor = user_min_sources if user_min_sources else sc.min_sources
-    target = max(floor, min(raw, sc.max_sources))
-    fetch = min(int(target * sc.overfetch_multiplier), sc.max_sources * 2)
+    target = max(floor, raw)
+    fetch = max(target, int(target * sc.overfetch_multiplier))
     return target, fetch
+
+
+def _corpus_tokens(text: str) -> set[str]:
+    return set(re.findall(r"\w+", text.lower(), flags=re.UNICODE))
+
+
+def _note_lexical_score(corpus_tokens: set[str], note: SourceNote) -> int:
+    blob = f"{note.title} {note.summary}"[:8000]
+    return len(corpus_tokens & _corpus_tokens(blob))
+
+
+def _rank_notes_by_corpus(corpus: str, notes: list[SourceNote]) -> list[SourceNote]:
+    ct = _corpus_tokens(corpus)
+    return sorted(
+        notes,
+        key=lambda n: _note_lexical_score(ct, n),
+        reverse=True,
+    )
+
+
+def _source_catalog_markdown(notes: list[SourceNote]) -> str:
+    lines: list[str] = []
+    for n in sorted(notes, key=lambda x: x.source_id):
+        au = ", ".join(a.strip() for a in n.authors if a.strip()) or "n.a."
+        lines.append(f"- `{n.source_id}` — {au} ({n.year or 'n.d.'}). {n.title}")
+    return "\n".join(lines)
+
+
+def _plan_corpus_from_json(plan_json: str) -> str:
+    try:
+        data = json.loads(plan_json)
+    except json.JSONDecodeError:
+        return ""
+    parts: list[str] = [data.get("thesis") or "", data.get("title") or ""]
+    for sec in data.get("sections") or []:
+        if not isinstance(sec, dict):
+            continue
+        parts.extend(
+            [
+                str(sec.get("title") or ""),
+                str(sec.get("key_points") or ""),
+                str(sec.get("content_outline") or ""),
+            ]
+        )
+    return " ".join(parts)
+
+
+def _split_writer_source_context(
+    corpus: str,
+    all_notes: list[SourceNote],
+    full_detail_budget: int,
+) -> tuple[list[SourceNote], str, int]:
+    """Return (detail_notes, catalog_markdown, total_count) for writer prompts."""
+    if not all_notes:
+        return [], "", 0
+    ranked = _rank_notes_by_corpus(corpus, all_notes)
+    budget = max(1, full_detail_budget)
+    detail = ranked[:budget]
+    return detail, _source_catalog_markdown(all_notes), len(all_notes)
 
 
 def _load_source_notes(run_dir: Path) -> list[SourceNote]:
@@ -968,12 +1032,14 @@ def _source_read_candidates(
     registry: dict[str, dict],
     target_sources: int,
 ) -> list[tuple[str, dict]]:
-    """Return the ranked source subset worth reading in detail.
+    """Return every registry row worth reading.
 
-    User-provided sources are always included first. API sources are
-    limited to 2× target_sources — enough headroom for good selection
-    without burning LLM calls on sources that won't be used.
+    User-provided sources are first. All API-backed registry entries are
+    included so selection can consider the full research pool (large essays
+    may target dozens of sources). *target_sources* is unused but kept for
+    call-site stability.
     """
+    _ = target_sources
     user_sources = [
         (sid, meta) for sid, meta in registry.items() if meta.get("user_provided")
     ]
@@ -982,8 +1048,7 @@ def _source_read_candidates(
         for sid, meta in registry.items()
         if not meta.get("user_provided") and (meta.get("url") or meta.get("pdf_url"))
     ]
-    read_limit = target_sources * 2
-    return user_sources + api_sources[:read_limit]
+    return user_sources + api_sources
 
 
 _SOURCE_READ_CONCURRENCY = 6
@@ -1217,26 +1282,33 @@ def _make_read_sources(
 
 
 def _make_write_full(
-    target_words: int, min_sources: int | None = None
+    target_words: int, citation_min_sources: int
 ) -> Callable[[PipelineContext], None]:
     def _do_write_full(ctx: PipelineContext) -> None:
         brief_json = _read_text(ctx.run_dir / "brief" / "assignment.json")
         plan_json = _read_text(ctx.run_dir / "plan" / "plan.json")
         source_notes = _load_selected_source_notes(ctx.run_dir)
         language = _get_brief_language(ctx.run_dir)
+        budget = ctx.config.search.section_source_full_detail_max
+        corpus = _plan_corpus_from_json(plan_json)
+        detail_notes, catalog_md, total_n = _split_writer_source_context(
+            corpus, source_notes, budget
+        )
 
         prompt = render_prompt(
             "essay_writing.j2",
             brief_json=brief_json,
             plan_json=plan_json,
-            source_notes=source_notes,
+            source_notes=detail_notes,
+            source_catalog=catalog_md,
+            total_selected_sources=total_n,
             target_words=target_words,
             tolerance_percent=round(ctx.config.writing.word_count_tolerance * 100),
             min_words=round(
                 target_words * (1 - ctx.config.writing.word_count_tolerance)
             ),
             language=language,
-            min_sources=min_sources,
+            min_sources=citation_min_sources,
         )
 
         essay = _text_call(
@@ -1254,7 +1326,7 @@ def _make_write_full(
 
 
 def _make_review_full(
-    target_words: int, min_sources: int | None = None
+    target_words: int, citation_min_sources: int
 ) -> Callable[[PipelineContext], None]:
     def _do_review_full(ctx: PipelineContext) -> None:
         brief_json = _read_text(ctx.run_dir / "brief" / "assignment.json")
@@ -1273,7 +1345,7 @@ def _make_review_full(
             tolerance_ratio=ctx.config.writing.word_count_tolerance,
             tolerance_percent=round(ctx.config.writing.word_count_tolerance * 100),
             language=language,
-            min_sources=min_sources,
+            min_sources=citation_min_sources,
         )
 
         reviewed = _text_call(
@@ -1308,7 +1380,7 @@ def _section_filename(section: Section) -> str:
 def _make_write_sections(
     sections: list[Section],
     target_words: int,
-    min_sources: int | None = None,
+    citation_min_sources: int,
 ) -> Callable[[PipelineContext], None]:
     def _do_write_sections(ctx: PipelineContext) -> None:
         sections_dir = ctx.run_dir / "essay" / "sections"
@@ -1317,17 +1389,26 @@ def _make_write_sections(
         plan_json = _read_text(ctx.run_dir / "plan" / "plan.json")
         source_notes = _load_selected_source_notes(ctx.run_dir)
         language = _get_brief_language(ctx.run_dir)
+        budget = ctx.config.search.section_source_full_detail_max
         order = _writing_order(sections)
         written_sections: list[tuple[Section, str]] = []
 
         for section in order:
             fname = _section_filename(section)
             prior_context = _build_prior_sections_context(written_sections)
+            section_corpus = (
+                f"{section.title} {section.key_points} {section.content_outline or ''}"
+            )
+            detail_notes, catalog_md, total_n = _split_writer_source_context(
+                section_corpus, source_notes, budget
+            )
 
             prompt = render_prompt(
                 "section_writing.j2",
                 plan_json=plan_json,
-                source_notes=source_notes,
+                source_notes=detail_notes,
+                source_catalog=catalog_md,
+                total_selected_sources=total_n,
                 section=section,
                 prior_sections=prior_context,
                 tolerance_percent=round(ctx.config.writing.word_count_tolerance * 100),
@@ -1335,7 +1416,7 @@ def _make_write_sections(
                     section.word_target * (1 - ctx.config.writing.word_count_tolerance)
                 ),
                 language=language,
-                min_sources=min_sources,
+                min_sources=citation_min_sources,
             )
 
             tracker_step = f"write:{section.number}"
@@ -1595,7 +1676,7 @@ def _build_execution_steps(
     target_words: int,
     fetch_sources: int,
     target_sources: int,
-    min_sources: int | None = None,
+    citation_min_sources: int,
 ) -> list[PipelineStep]:
     """Build the dynamic portion of the pipeline after plan is available."""
     threshold = ctx.config.writing.long_essay_threshold
@@ -1606,25 +1687,37 @@ def _build_execution_steps(
     ]
 
     if target_words <= threshold:
-        steps.append(PipelineStep("write", _make_write_full(target_words, min_sources)))
         steps.append(
-            PipelineStep("review", _make_review_full(target_words, min_sources))
+            PipelineStep(
+                "write", _make_write_full(target_words, citation_min_sources)
+            )
+        )
+        steps.append(
+            PipelineStep(
+                "review", _make_review_full(target_words, citation_min_sources)
+            )
         )
     else:
         sections = _parse_sections(ctx.run_dir)
         if not sections:
             logger.warning("Could not parse sections -- falling back to short path")
             steps.append(
-                PipelineStep("write", _make_write_full(target_words, min_sources))
+                PipelineStep(
+                    "write", _make_write_full(target_words, citation_min_sources)
+                )
             )
             steps.append(
-                PipelineStep("review", _make_review_full(target_words, min_sources))
+                PipelineStep(
+                    "review", _make_review_full(target_words, citation_min_sources)
+                )
             )
         else:
             steps.append(
                 PipelineStep(
                     "write",
-                    _make_write_sections(sections, target_words, min_sources),
+                    _make_write_sections(
+                        sections, target_words, citation_min_sources
+                    ),
                 )
             )
             steps.append(
@@ -1720,7 +1813,26 @@ def run_pipeline(
     target_sources, fetch_sources = _compute_max_sources(
         target_words, config, user_min_sources
     )
+    citation_min_sources = max(
+        target_sources,
+        user_min_sources if user_min_sources is not None else 0,
+    )
+    brief_path = run_dir / "brief" / "assignment.json"
+    if brief_path.exists():
+        brief = AssignmentBrief.model_validate_json(
+            brief_path.read_text(encoding="utf-8")
+        )
+        brief.min_sources = citation_min_sources
+        brief_path.write_text(
+            brief.model_dump_json(indent=2, ensure_ascii=False), encoding="utf-8"
+        )
+    logger.info(
+        "Sources: target=%d fetch=%d citation_minimum=%d",
+        target_sources,
+        fetch_sources,
+        citation_min_sources,
+    )
     phase2 = _build_execution_steps(
-        ctx, target_words, fetch_sources, target_sources, user_min_sources
+        ctx, target_words, fetch_sources, target_sources, citation_min_sources
     )
     _execute(phase2, ctx)

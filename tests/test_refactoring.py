@@ -599,7 +599,7 @@ class TestSelectedSourceNotes:
         assert [note.source_id for note in notes] == ["alpha2024", "beta2024"]
         assert "Selected sources had no accessible notes" in caplog.text
 
-    def test_source_read_candidates_caps_at_2x_target(self):
+    def test_source_read_candidates_includes_all_api_sources(self):
         from src.pipeline import _source_read_candidates
 
         registry = {
@@ -611,9 +611,28 @@ class TestSelectedSourceNotes:
 
         candidates = _source_read_candidates(registry, target_sources=8)
 
-        # 2 × 8 = 16, and s_no_url excluded, so 16 from the 20 with URLs
-        assert len(candidates) == 16
+        assert len(candidates) == 20
         assert all(sid != "s_no_url" for sid, _ in candidates)
+
+
+class TestSourceTargetScaling:
+    def test_compute_max_sources_uncapped(self):
+        from config.schemas import EssayWriterConfig
+        from src.pipeline import _compute_max_sources
+
+        cfg = EssayWriterConfig()
+        target, fetch = _compute_max_sources(24000, cfg, None)
+        assert target == max(cfg.search.min_sources, 24 * cfg.search.sources_per_1k_words)
+        assert fetch == int(target * cfg.search.overfetch_multiplier)
+
+    def test_compute_max_sources_respects_user_floor_above_raw(self):
+        from config.schemas import EssayWriterConfig
+        from src.pipeline import _compute_max_sources
+
+        cfg = EssayWriterConfig()
+        target, fetch = _compute_max_sources(24000, cfg, 130)
+        assert target == 130
+        assert fetch == int(130 * cfg.search.overfetch_multiplier)
 
 
 class TestLongEssayContextHelpers:

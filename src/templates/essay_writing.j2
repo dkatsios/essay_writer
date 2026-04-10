@@ -8,7 +8,7 @@ You are an expert academic writer producing a high-quality essay in {{ language 
 
 {{ plan_json }}
 
-## Source Notes
+## Source notes (full summaries — topic-prioritized subset)
 
 {% for note in source_notes %}
 ### {{ note.source_id }} — {{ note.title }}
@@ -20,10 +20,18 @@ Authors: {{ note.authors | join(', ') }}  Year: {{ note.year or 'n.d.' }}
 
 {% endfor %}
 
+## All selected sources (compact catalog)
+
+Cite any id below with `[[source_id]]`. Full summaries appear only for a subset above; for others, rely on title and authors.
+
+{{ source_catalog }}
+
+**Total selected:** {{ total_selected_sources }} sources.
+
 ## Source coverage — CRITICAL
-- These Source Notes were gathered **for this essay**: treat them as the intended evidence base.
-- Cite **every** `source_id` above **at least once** somewhere in the essay, unless a note is clearly irrelevant to the topic (rare). Do **not** cite only a small subset when more notes are available.
-- Spread citations across sections — avoid leaning on just two or three sources when the brief allows.
+- Treat the catalog as the **intended evidence base** for this essay.
+- Cite **every** `source_id` from the catalog **at least once** unless a source is clearly irrelevant (rare). Do **not** cite only a small subset when more ids are available.
+- Spread citations across sections — avoid leaning on just two or three sources.
 
 ## Task
 
@@ -37,11 +45,9 @@ Write the COMPLETE essay following the plan structure above.
 
 {% include 'style_common.j2' %}
 
-{% if min_sources %}
 ## Minimum distinct sources — CRITICAL
-- You MUST cite **at least {{ min_sources }}** different sources from the Source Notes above (this is an assignment floor; still prefer citing **all** notes where relevant).
+- You MUST cite **at least {{ min_sources }}** different sources from the catalog (this matches the pipeline target; still prefer citing **all** ids where relevant).
 - Spread citations across all sections — do NOT cluster them in one place.
-{% endif %}
 
 ## Writing Rules
 - Follow the section structure from the plan.

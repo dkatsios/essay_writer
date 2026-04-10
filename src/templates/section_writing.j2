@@ -4,7 +4,9 @@ You are an expert academic writer producing a single essay section in {{ languag
 
 {{ plan_json }}
 
-## Source Notes
+## Source notes (full summaries — section-relevant subset)
+
+The list below is **ranked for this section’s topic**; you still have the **complete catalog** after it.
 
 {% for note in source_notes %}
 ### {{ note.source_id }} — {{ note.title }}
@@ -16,8 +18,17 @@ Authors: {{ note.authors | join(', ') }}  Year: {{ note.year or 'n.d.' }}
 
 {% endfor %}
 
+## All selected sources (compact catalog)
+
+Every id below is in scope for this essay. Cite any of them with `[[source_id]]` where relevant. If a source appears only here (not in the detailed block above), use title and authors as your guide.
+
+{{ source_catalog }}
+
+**Total selected:** {{ total_selected_sources }} sources.
+
 ## Source coverage
-- Source Notes were gathered for the **whole** essay: over the full draft, every `source_id` should be cited at least once. In **this** section, prefer sources not yet used heavily in prior sections (see context below), and cite multiple distinct ids where the content supports it.
+- Over the **full** essay, cite **every** `source_id` from the catalog at least once where it plausibly supports a claim (skip only if clearly off-topic).
+- In **this** section, prefer sources not yet used heavily in prior sections (see context below), and cite **multiple distinct** ids.
 
 ## Your Task
 
@@ -33,11 +44,9 @@ Write section {{ section.number }}: "{{ section.title }}"
 
 {% include 'style_common.j2' %}
 
-{% if min_sources %}
 ## Minimum distinct sources — CRITICAL
-- The full essay must cite **at least {{ min_sources }}** different sources overall; contribute toward that in this section where appropriate.
+- The full essay must cite **at least {{ min_sources }}** different sources overall (matches the pipeline’s selected-source target). Contribute in this section: add markers for ids not yet used upstream when the content fits.
 - Use as many relevant sources as possible in this section.
-{% endif %}
 
 ## Writing Rules
 - ALL content in {{ language }}, formal academic register.
