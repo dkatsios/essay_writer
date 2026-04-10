@@ -263,7 +263,7 @@
         <div class="number-field">
           <label class="field-label" for="min_sources">Minimum sources <span class="optional-mark">(optional)</span></label>
           <input type="number" id="min_sources" name="min_sources" min="1" max="200" step="1" placeholder="auto">
-          <small id="min_sources_hint" style="color:#888;font-size:0.85em;display:none"></small>
+          <small id="min_sources_hint" style="color:#888;font-size:0.85em;display:none;margin-top:.25rem"></small>
         </div>
       </div>
 
@@ -308,7 +308,7 @@
         if (!w || w <= 0) { hintEl.style.display = 'none'; return; }
         const s = suggestedSources(w);
         hintEl.textContent = 'Suggested: ' + s + ' sources';
-        hintEl.style.display = '';
+        hintEl.style.display = 'block';
         if (!userEdited) { msEl.value = s; msEl.placeholder = String(s); }
       });
     })();
