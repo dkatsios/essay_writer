@@ -634,6 +634,16 @@ class TestSourceTargetScaling:
         assert target == 130
         assert fetch == int(130 * cfg.search.overfetch_multiplier)
 
+    def test_compute_max_sources_explicit_user_below_raw(self):
+        """Rubric min (e.g. 90) must not be raised to the 24k × per-1k target (120)."""
+        from config.schemas import EssayWriterConfig
+        from src.pipeline import _compute_max_sources
+
+        cfg = EssayWriterConfig()
+        target, fetch = _compute_max_sources(24000, cfg, 90)
+        assert target == 90
+        assert fetch == int(90 * cfg.search.overfetch_multiplier)
+
 
 class TestLongEssayContextHelpers:
     def test_prior_section_context_uses_recent_sections_only(self):

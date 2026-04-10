@@ -100,6 +100,8 @@ class Job:
     """Each ``{"items": [{"title": str, "answer": str}, ...]}`` for optional-PDF step replay."""
     optional_pdf_choices: dict[str, str] = field(default_factory=dict)
     """``source_id -> \"file\"|\"url\"`` for the current optional-PDF step."""
+    fast_track: bool = False
+    """If True, do not pause for the optional full-text PDF upload step."""
 
 _jobs: dict[str, Job] = {}
 
@@ -341,6 +343,8 @@ def _run_pipeline_thread(
         def _on_optional_pdfs(rd: Path, items: list[dict]) -> None:
             if not items:
                 return
+            if job.fast_track:
+                return
             job.optional_pdf_choices.clear()
             job.optional_pdf_items = items
             job.optional_pdf_allowed_ids = frozenset(
@@ -426,6 +430,7 @@ async def submit(
     target_words: int | None = Form(None),
     min_sources: int | None = Form(None),
     academic_level: str = Form(""),
+    fast_track: str | None = Form(None),
     files: list[UploadFile] = [],  # noqa: B006
     sources: list[UploadFile] = [],  # noqa: B006
 ):
@@ -442,6 +447,7 @@ async def submit(
         submit_prompt=prompt.strip(),
         target_words=tw,
         min_sources=ms,
+        fast_track=bool(fast_track and fast_track.strip().lower() in ("1", "on", "true", "yes")),
     )
     _jobs[job_id] = job
 

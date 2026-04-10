@@ -29,7 +29,7 @@ Identify: topic, scope, word count target, academic level, course details, profe
 - `course`, `professor`, `student`, `institution`: Include if found, else null.
 - `description` (required): Comprehensive description of the assignment in prose. Do **not** open `description` with a verbatim copy of the submission cover sheet or title-page block (Ονοματεπώνυμο, Κωδικός μαθήματος, Τίτλος μαθήματος, Τίτλος εργασίας, etc.) — put those facts in `course`, `student`, `topic`, and related fields when known, and summarize the actual task in `description`.
 - `special_instructions`: Extra requirements, or null if none.
-- `min_sources`: Minimum number of academic sources to use, as an integer, or null if not specified.
+- `min_sources`: Minimum number of academic sources to use, as an integer, or null if not specified. Greek prompts often use **Λέξεις** / **Πηγές** (or similar) for word count and source count — map those to `word_count` and `min_sources`. Treat thousands separators like `24,000` or `24.000` as the integer 24000.
 
 Extract ALL relevant information from the provided documents — do not leave anything out.
 If information is in Greek, keep it in Greek.

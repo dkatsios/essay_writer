@@ -528,14 +528,22 @@ def _compute_max_sources(
 ) -> tuple[int, int]:
     """Compute (target_sources, fetch_sources) based on word count and config.
 
-    ``target_sources`` is not capped: long essays can request many sources
-    (e.g. 80–120 for a 24k-word piece). ``fetch_sources`` scales with the
-    overfetch multiplier so the registry has headroom before selection.
+    If the brief or user supplied ``min_sources`` (assignment rubric), that
+    value wins over the per-1k heuristic so a stated requirement like “90
+    sources” is not replaced by ``ceil(words/1000) * sources_per_1k_words``
+    (e.g. 120 for 24k words).
+
+    With no explicit minimum, ``target_sources`` scales with length, floored
+    by ``search.min_sources``. ``fetch_sources`` uses the overfetch multiplier
+    so the registry has headroom before selection.
     """
     sc = config.search
     raw = math.ceil(target_words / 1000) * sc.sources_per_1k_words
-    floor = user_min_sources if user_min_sources else sc.min_sources
-    target = max(floor, raw)
+    cfg_floor = sc.min_sources
+    if user_min_sources is not None:
+        target = max(cfg_floor, user_min_sources)
+    else:
+        target = max(cfg_floor, raw)
     fetch = max(target, int(target * sc.overfetch_multiplier))
     return target, fetch
 

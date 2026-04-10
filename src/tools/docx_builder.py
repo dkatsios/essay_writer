@@ -293,7 +293,7 @@ def _format_bib_entry(source: dict) -> str:
 def _process_citations(essay_text: str, sources: dict, style: str) -> str:
     """Replace [[source_id]] markers with formatted citations.
 
-    For 'apa7': (Author, Year) inline + Βιβλιογραφία section.
+    For 'apa7': (Author, Year) inline + Βιβλιογραφία section (numbered list).
     For 'footnotes': superscript ^^N^^ markers + Σημειώσεις section.
     """
     if not sources:
@@ -343,7 +343,8 @@ def _process_citations(essay_text: str, sources: dict, style: str) -> str:
             if source:
                 entries.append(_format_bib_entry(source))
         entries.sort()
-        processed += "\n\n".join(entries)
+        for i, entry in enumerate(entries, 1):
+            processed += f"{i}. {entry}\n\n"
 
     return processed
 
@@ -460,6 +461,10 @@ def _parse_and_add_content(doc: Document, essay_text: str) -> None:
             content = _NUMBERED_RE.match(stripped).group(1)
             p = doc.add_paragraph(style="List Number")
             _add_formatted_runs(p, content)
+            if in_bibliography:
+                p.alignment = WD_ALIGN_PARAGRAPH.LEFT
+                p.paragraph_format.first_line_indent = Cm(0)
+                p.paragraph_format.space_after = Pt(6)
         else:
             current_paragraph_lines.append(stripped)
 

@@ -118,6 +118,17 @@
       cursor: pointer;
     }
     .radio-option input { width: 1rem; height: 1rem; accent-color: var(--accent); cursor: pointer; }
+    .checkbox-option {
+      display: flex;
+      align-items: flex-start;
+      gap: .5rem;
+      margin-top: .85rem;
+      font-weight: 500;
+      font-size: .9rem;
+      color: var(--text);
+      cursor: pointer;
+    }
+    .checkbox-option input { width: 1rem; height: 1rem; margin-top: .15rem; flex-shrink: 0; accent-color: var(--accent); cursor: pointer; }
     .number-row {
       display: grid;
       gap: 1rem 1.25rem;
@@ -254,6 +265,11 @@
           <input type="number" id="min_sources" name="min_sources" min="1" max="100" step="1" placeholder="e.g. 10">
         </div>
       </div>
+
+      <label class="checkbox-option" for="fast_track">
+        <input type="checkbox" id="fast_track" name="fast_track" value="1">
+        <span>Fast track — skip the later step that asks for optional source PDFs</span>
+      </label>
     </div>
 
     <div class="form-actions">
@@ -383,6 +399,7 @@
       for (const f of filesInput.files) fd.append('files', f);
       const sourcesInput = document.getElementById('sources');
       for (const f of sourcesInput.files) fd.append('sources', f);
+      if (document.getElementById('fast_track')?.checked) fd.append('fast_track', '1');
 
       try {
         const res = await fetch('/submit', { method: 'POST', body: fd });
