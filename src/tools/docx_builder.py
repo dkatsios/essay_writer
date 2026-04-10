@@ -15,11 +15,11 @@ from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
 from docx.shared import Cm, Pt
 
+from src.tools.author_names import inline_surnames_from_source
+
 # Counter for creating unique numbering instances (module-level to survive
 # multiple calls within the same process, though each Document is independent).
 _num_id_counter = 1000
-
-from src.tools.author_names import inline_surnames_from_source
 
 
 def _safe_json_loads(s: str) -> dict:
