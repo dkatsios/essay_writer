@@ -15,6 +15,10 @@ from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
 from docx.shared import Cm, Pt
 
+# Counter for creating unique numbering instances (module-level to survive
+# multiple calls within the same process, though each Document is independent).
+_num_id_counter = 1000
+
 from src.tools.author_names import inline_surnames_from_source
 
 
@@ -164,6 +168,113 @@ def _add_page_numbers(doc: Document, position: str = "bottom_center") -> None:
         run2._element.append(instr_text)
         run3 = p.add_run()
         run3._element.append(fld_char_end)
+
+
+def _restart_list_numbering(paragraph, doc: Document) -> str | None:
+    """Force a 'List Number' paragraph to restart numbering from 1.
+
+    Creates a new <w:num> entry in the numbering part that references the same
+    abstract numbering definition as the paragraph's style but overrides the
+    start value to 1.  The new numId is then applied to just this paragraph so
+    subsequent items continue from it naturally.
+
+    Returns the new numId string so callers can apply it to continuation items.
+    """
+    global _num_id_counter
+
+    # Ensure the numbering part exists (it is created lazily by python-docx
+    # when the first list-style paragraph is added).
+    numbering_part = doc.part.numbering_part
+    numbering_elm = numbering_part.numbering_definitions._numbering
+
+    # Find the abstractNumId used by the paragraph's current style.
+    pPr = paragraph._element.find(qn("w:pPr"))
+    numPr = pPr.find(qn("w:numPr")) if pPr is not None else None
+    if numPr is None:
+        # Style-based numbering – look up the style's numId.
+        style = doc.styles["List Number"]
+        s_pPr = style.element.find(qn("w:pPr"))
+        s_numPr = s_pPr.find(qn("w:numPr")) if s_pPr is not None else None
+        if s_numPr is None:
+            return None
+        num_id_el = s_numPr.find(qn("w:numId"))
+        if num_id_el is None:
+            return None
+        base_num_id = int(num_id_el.get(qn("w:val")))
+    else:
+        num_id_el = numPr.find(qn("w:numId"))
+        base_num_id = int(num_id_el.get(qn("w:val"))) if num_id_el is not None else 1
+
+    # Look up the abstractNumId for this numId.
+    abstract_num_id = None
+    for num_el in numbering_elm.findall(qn("w:num")):
+        if int(num_el.get(qn("w:numId"))) == base_num_id:
+            an = num_el.find(qn("w:abstractNumId"))
+            if an is not None:
+                abstract_num_id = int(an.get(qn("w:val")))
+            break
+
+    if abstract_num_id is None:
+        return None
+
+    # Create a new <w:num> with a startOverride so numbering restarts at 1.
+    _num_id_counter += 1
+    new_num_id = _num_id_counter
+
+    new_num = OxmlElement("w:num")
+    new_num.set(qn("w:numId"), str(new_num_id))
+
+    abstract_ref = OxmlElement("w:abstractNumId")
+    abstract_ref.set(qn("w:val"), str(abstract_num_id))
+    new_num.append(abstract_ref)
+
+    lvl_override = OxmlElement("w:lvlOverride")
+    lvl_override.set(qn("w:ilvl"), "0")
+    start_override = OxmlElement("w:startOverride")
+    start_override.set(qn("w:val"), "1")
+    lvl_override.append(start_override)
+    new_num.append(lvl_override)
+
+    numbering_elm.append(new_num)
+
+    # Apply the new numId to this paragraph.
+    if pPr is None:
+        pPr = OxmlElement("w:pPr")
+        paragraph._element.insert(0, pPr)
+    if numPr is None:
+        numPr = OxmlElement("w:numPr")
+        pPr.append(numPr)
+        ilvl = OxmlElement("w:ilvl")
+        ilvl.set(qn("w:val"), "0")
+        numPr.append(ilvl)
+    existing = numPr.find(qn("w:numId"))
+    if existing is not None:
+        numPr.remove(existing)
+    new_numId_el = OxmlElement("w:numId")
+    new_numId_el.set(qn("w:val"), str(new_num_id))
+    numPr.append(new_numId_el)
+    return str(new_num_id)
+
+
+def _apply_num_id(paragraph, num_id: str) -> None:
+    """Apply an explicit numId to a paragraph so it continues an existing list."""
+    pPr = paragraph._element.find(qn("w:pPr"))
+    if pPr is None:
+        pPr = OxmlElement("w:pPr")
+        paragraph._element.insert(0, pPr)
+    numPr = pPr.find(qn("w:numPr"))
+    if numPr is None:
+        numPr = OxmlElement("w:numPr")
+        pPr.append(numPr)
+        ilvl = OxmlElement("w:ilvl")
+        ilvl.set(qn("w:val"), "0")
+        numPr.append(ilvl)
+    existing = numPr.find(qn("w:numId"))
+    if existing is not None:
+        numPr.remove(existing)
+    el = OxmlElement("w:numId")
+    el.set(qn("w:val"), num_id)
+    numPr.append(el)
 
 
 _HEADING_RE = re.compile(r"^(#{1,4})\s+(.+)$")
@@ -396,6 +507,8 @@ def _parse_and_add_content(doc: Document, essay_text: str) -> None:
     current_paragraph_lines: list[str] = []
     skipped_first_h1 = False
     in_bibliography = False
+    in_numbered_list = False
+    current_list_num_id: str | None = None  # numId for the current list group
 
     def flush_paragraph() -> None:
         if current_paragraph_lines:
@@ -419,6 +532,7 @@ def _parse_and_add_content(doc: Document, essay_text: str) -> None:
             and _TABLE_SEP_RE.match(lines[i + 1].strip())
         ):
             flush_paragraph()
+            in_numbered_list = False
             header_cells = [c.strip() for c in stripped.strip("|").split("|")]
             i += 2  # skip header and separator
             data_lines: list[str] = []
@@ -439,6 +553,7 @@ def _parse_and_add_content(doc: Document, essay_text: str) -> None:
                 i += 1
                 continue
             flush_paragraph()
+            in_numbered_list = False
             # Detect bibliography/references section for left-aligned formatting
             lower_text = text.lower()
             if lower_text in (
@@ -453,6 +568,7 @@ def _parse_and_add_content(doc: Document, essay_text: str) -> None:
             flush_paragraph()
         elif _BULLET_RE.match(stripped):
             flush_paragraph()
+            in_numbered_list = False
             content = _BULLET_RE.match(stripped).group(1)
             p = doc.add_paragraph(style="List Bullet")
             _add_formatted_runs(p, content)
@@ -460,12 +576,18 @@ def _parse_and_add_content(doc: Document, essay_text: str) -> None:
             flush_paragraph()
             content = _NUMBERED_RE.match(stripped).group(1)
             p = doc.add_paragraph(style="List Number")
+            if not in_numbered_list:
+                current_list_num_id = _restart_list_numbering(p, doc)
+                in_numbered_list = True
+            elif current_list_num_id:
+                _apply_num_id(p, current_list_num_id)
             _add_formatted_runs(p, content)
             if in_bibliography:
                 p.alignment = WD_ALIGN_PARAGRAPH.LEFT
                 p.paragraph_format.first_line_indent = Cm(0)
                 p.paragraph_format.space_after = Pt(6)
         else:
+            in_numbered_list = False
             current_paragraph_lines.append(stripped)
 
         i += 1
