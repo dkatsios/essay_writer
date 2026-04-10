@@ -129,6 +129,26 @@
       cursor: pointer;
     }
     .checkbox-option input { width: 1rem; height: 1rem; margin-top: .15rem; flex-shrink: 0; accent-color: var(--accent); cursor: pointer; }
+    .checkbox-option[data-tooltip] { position: relative; }
+    .checkbox-option[data-tooltip]::after {
+      content: attr(data-tooltip);
+      position: absolute;
+      left: 0;
+      top: 100%;
+      margin-top: .25rem;
+      background: #1e293b;
+      color: #fff;
+      font-size: .8rem;
+      font-weight: 400;
+      padding: .35rem .6rem;
+      border-radius: .35rem;
+      white-space: nowrap;
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity .15s;
+      z-index: 10;
+    }
+    .checkbox-option[data-tooltip]:hover::after { opacity: 1; }
     .number-row {
       display: grid;
       gap: 1rem 1.25rem;
@@ -267,9 +287,9 @@
         </div>
       </div>
 
-      <label class="checkbox-option" for="fast_track">
+      <label class="checkbox-option" for="fast_track" data-tooltip="Skip the later step that asks for optional source PDFs">
         <input type="checkbox" id="fast_track" name="fast_track" value="1">
-        <span>Fast track — skip the later step that asks for optional source PDFs</span>
+        <span>Fast track</span>
       </label>
     </div>
 
