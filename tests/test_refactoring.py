@@ -406,29 +406,29 @@ class TestValidationClarifications:
         assert saved.clarifications[1].answer == "Yes"
 
 
-class TestPricingLoader:
-    def test_load_pricing_table_uses_json_file(self, tmp_path, monkeypatch):
-        from src import runner
+class TestPricing:
+    def test_calc_cost_known_model(self):
+        from src.runner import _calc_cost
 
-        pricing_file = tmp_path / "pricing.json"
-        pricing_file.write_text(
-            json.dumps(
-                {
-                    "_note": "test",
-                    "gemini-test": {"input": 1.5, "output": 3.0},
-                }
-            ),
-            encoding="utf-8",
+        cost = _calc_cost(
+            "gemini-2.5-flash", input_tokens=1_000_000, output_tokens=1_000_000
         )
+        assert cost > 0
 
-        runner._load_pricing_table.cache_clear()
-        monkeypatch.setattr(runner, "_pricing_file_path", lambda: pricing_file)
+    def test_calc_cost_unknown_model_returns_zero(self):
+        from src.runner import _calc_cost
 
-        pricing = runner._load_pricing_table()
+        cost = _calc_cost("nonexistent-model-xyz", input_tokens=1000, output_tokens=100)
+        assert cost == 0.0
 
-        assert pricing["gemini-test"]["input"] == 1.5
-        assert pricing["gemini-test"]["output"] == 3.0
-        assert pricing["gemini-test"]["thinking"] == 3.0
+    def test_calc_cost_includes_thinking(self):
+        from src.runner import _calc_cost
+
+        cost_no_think = _calc_cost("gpt-4o", input_tokens=1000, output_tokens=100)
+        cost_with_think = _calc_cost(
+            "gpt-4o", input_tokens=1000, output_tokens=100, thinking_tokens=500
+        )
+        assert cost_with_think > cost_no_think
 
 
 # ── intake classify ──────────────────────────────────────────────────────

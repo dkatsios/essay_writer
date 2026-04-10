@@ -29,7 +29,6 @@ import logging
 import shutil
 import sys
 from datetime import datetime, timezone
-from functools import lru_cache
 from pathlib import Path
 from time import monotonic
 
@@ -48,37 +47,34 @@ from src.schemas import Clarification, ValidationQuestion  # noqa: E402
 
 
 # ---------------------------------------------------------------------------
-# Pricing per 1M tokens (google_genai models)
+# Pricing via genai-prices
 # ---------------------------------------------------------------------------
-# Fallback pricing for unknown models
-_DEFAULT_PRICING = {"input": 0.30, "output": 2.50, "thinking": 2.50}
 
 
-def _pricing_file_path() -> Path:
-    return Path(__file__).resolve().parent.parent / "config" / "gemini_pricing.json"
+def _calc_cost(
+    model: str,
+    input_tokens: int,
+    output_tokens: int,
+    thinking_tokens: int = 0,
+) -> float:
+    """Calculate cost in USD using genai-prices.
 
+    Thinking tokens are billed at the output rate, so they are added to
+    output_tokens for the price calculation.  Returns 0.0 for unknown models.
+    """
+    from genai_prices import Usage, calc_price
 
-@lru_cache(maxsize=1)
-def _load_pricing_table() -> dict[str, dict[str, float]]:
-    """Load per-model pricing from the canonical JSON file."""
     try:
-        raw = json.loads(_pricing_file_path().read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
-        logger.warning("Failed to load pricing table: %s", exc)
-        return {}
-
-    pricing: dict[str, dict[str, float]] = {}
-    for model, values in raw.items():
-        if model.startswith("_") or not isinstance(values, dict):
-            continue
-        input_price = float(values.get("input", _DEFAULT_PRICING["input"]))
-        output_price = float(values.get("output", _DEFAULT_PRICING["output"]))
-        pricing[model] = {
-            "input": input_price,
-            "output": output_price,
-            "thinking": float(values.get("thinking", output_price)),
-        }
-    return pricing
+        result = calc_price(
+            Usage(
+                input_tokens=input_tokens, output_tokens=output_tokens + thinking_tokens
+            ),
+            model_ref=model,
+        )
+        return float(result.total_price)
+    except LookupError:
+        logger.debug("No pricing data for model %r — cost will show as $0", model)
+        return 0.0
 
 
 def _model_short_name(full_name: str) -> str:
@@ -175,15 +171,15 @@ class TokenTracker:
         total_out = 0
         total_think = 0
         total_dur = 0.0
-        pricing_table = _load_pricing_table()
 
         for step, data in self._steps.items():
             model = data["model"] or "unknown"
-            pricing = pricing_table.get(model, _DEFAULT_PRICING)
-            in_cost = data["input_tokens"] * pricing["input"] / 1_000_000
-            out_cost = data["output_tokens"] * pricing["output"] / 1_000_000
-            think_cost = data["thinking_tokens"] * pricing["thinking"] / 1_000_000
-            step_cost = in_cost + out_cost + think_cost
+            step_cost = _calc_cost(
+                model,
+                data["input_tokens"],
+                data["output_tokens"],
+                data["thinking_tokens"],
+            )
 
             dur = data["duration"]
             total_cost += step_cost
@@ -212,23 +208,21 @@ class TokenTracker:
         if not self._steps:
             return None
 
-        # Gather totals
         total_cost = 0.0
         total_in = 0
         total_out = 0
         total_think = 0
         total_dur = 0.0
         rows: list[tuple[str, dict, float]] = []
-        pricing_table = _load_pricing_table()
 
         for step, data in self._steps.items():
             model = data["model"] or "unknown"
-            pricing = pricing_table.get(model, _DEFAULT_PRICING)
-            step_cost = (
-                data["input_tokens"] * pricing["input"]
-                + data["output_tokens"] * pricing["output"]
-                + data["thinking_tokens"] * pricing["thinking"]
-            ) / 1_000_000
+            step_cost = _calc_cost(
+                model,
+                data["input_tokens"],
+                data["output_tokens"],
+                data["thinking_tokens"],
+            )
             rows.append((step, data, step_cost))
             total_cost += step_cost
             total_in += data["input_tokens"]

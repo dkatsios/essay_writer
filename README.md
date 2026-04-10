@@ -17,7 +17,7 @@ AI-powered academic essay generator for Greek university students. Uses a determ
 - Search and fetch requests share one HTTP transport with pooled connections and centralized retry behavior
 - Research queries run with bounded query-level concurrency while preserving deterministic merge order
 - Search ranking honors the configured language preference and per-API source cap, and review prompts honor the configured word-count tolerance
-- Cost reporting loads model pricing from `config/gemini_pricing.json`
+- Cost reporting via `genai-prices` with automatic model/provider detection
 - Formatted `.docx` output with cover page, table of contents, and page numbers
 - Supports multiple input formats: PDF, DOCX, PPTX, images, text files
 - User-provided reference sources (separate from assignment files) are prioritized and cited in the essay
