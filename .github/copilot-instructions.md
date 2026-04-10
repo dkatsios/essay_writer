@@ -54,11 +54,13 @@ Deterministic Python pipeline for academic essay writing using direct LangChain 
 
 ### Three-Model Architecture
 
-| Role | Model | Templates | Purpose |
-|------|-------|-----------|---------|
-| **worker** | `gemini-2.5-flash` | `intake.j2`, `validate.j2`, `plan.j2`, `source_reading.j2`, `source_assignment.j2` | Structured data extraction (brief, plan, notes, source assignment) |
-| **writer** | `gemini-2.5-pro` | `essay_writing.j2`, `section_writing.j2` | Essay text generation |
-| **reviewer** | `gemini-3.1-pro-preview` | `essay_review.j2`, `section_review.j2` | Essay review and polish |
+| Role | Google (default) | OpenAI | Anthropic | Templates | Purpose |
+|------|-----------------|--------|-----------|-----------|----------|
+| **worker** | `gemini-2.5-flash` | `gpt-4o-mini` | `claude-haiku-4-5` | `intake.j2`, `validate.j2`, `plan.j2`, `source_reading.j2`, `source_assignment.j2` | Structured data extraction (brief, plan, notes, source assignment) |
+| **writer** | `gemini-2.5-pro` | `gpt-4o` | `claude-sonnet-4` | `essay_writing.j2`, `section_writing.j2` | Essay text generation |
+| **reviewer** | `gemini-3.1-pro-preview` | `o3` | `claude-opus-4` | `essay_review.j2`, `section_review.j2` | Essay review and polish |
+
+Set `models.provider` (or `ESSAY_WRITER_MODELS__PROVIDER`) to `google`, `openai`, or `anthropic` to switch all three roles at once. Individual role overrides still take precedence.
 
 This runtime is a direct pipeline, not a deepagents/LangGraph system. The pipeline calls models directly:
 - `model.with_structured_output(PydanticSchema)` for JSON steps (auto-retry on validation failure)
@@ -116,11 +118,13 @@ Supported: `.md`, `.txt`, `.text`, `.rst`, `.csv`, `.tsv`, `.log`, `.pdf`, `.doc
 
 Uses `pydantic-settings` (`BaseSettings`) with two layers (highest wins):
 
-1. **Environment variables** — prefix `ESSAY_WRITER_`, nested with `__` (e.g., `ESSAY_WRITER_MODELS__WORKER=google_genai:gemini-2.5-flash`)
+1. **Environment variables** — prefix `ESSAY_WRITER_`, nested with `__` (e.g., `ESSAY_WRITER_MODELS__PROVIDER=openai` or `ESSAY_WRITER_MODELS__WORKER=google_genai:gemini-2.5-flash`)
 2. **Custom YAML config file** — override with `--config path/to/custom.yaml`
 3. **Field defaults** — in the Pydantic models at `config/schemas.py`
 
 No `default.yaml` exists; field defaults in `schemas.py` are canonical.
+
+**Provider presets** — `_PROVIDER_PRESETS` in `config/schemas.py` maps `google`, `openai`, `anthropic` to default (worker, writer, reviewer) model specs. When `models.provider` is set, roles not explicitly overridden get the preset values. Explicit role settings always win.
 
 ### Key Invariants
 

@@ -1,7 +1,7 @@
 """Pydantic configuration schemas for the essay writer."""
 
 from __future__ import annotations
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from pydantic_settings.sources import (
     PydanticBaseSettingsSource,
@@ -9,12 +9,67 @@ from pydantic_settings.sources import (
 )
 
 
-class ModelsConfig(BaseModel):
-    """Model selection per agent role."""
+class ProviderModels(BaseModel):
+    """Model specs for a single provider."""
 
+    worker: str
+    writer: str
+    reviewer: str
+
+
+class GoogleModels(ProviderModels):
     worker: str = "google_genai:gemini-2.5-flash"
     writer: str = "google_genai:gemini-2.5-pro"
     reviewer: str = "google_genai:gemini-3.1-pro-preview"
+
+
+class OpenAIModels(ProviderModels):
+    worker: str = "openai:gpt-4o-mini"
+    writer: str = "openai:gpt-4o"
+    reviewer: str = "openai:o3"
+
+
+class AnthropicModels(ProviderModels):
+    worker: str = "anthropic:claude-haiku-4-5"
+    writer: str = "anthropic:claude-sonnet-4"
+    reviewer: str = "anthropic:claude-opus-4"
+
+
+_PROVIDER_PRESETS: dict[str, type[ProviderModels]] = {
+    "google": GoogleModels,
+    "openai": OpenAIModels,
+    "anthropic": AnthropicModels,
+}
+
+
+class ModelsConfig(BaseModel):
+    """Model selection per agent role."""
+
+    provider: str | None = None
+    worker: str = GoogleModels.model_fields["worker"].default
+    writer: str = GoogleModels.model_fields["writer"].default
+    reviewer: str = GoogleModels.model_fields["reviewer"].default
+
+    @model_validator(mode="before")
+    @classmethod
+    def apply_provider_preset(cls, values: dict) -> dict:
+        provider = values.get("provider")
+        if not provider:
+            return values
+        preset_cls = _PROVIDER_PRESETS.get(provider)
+        if not preset_cls:
+            raise ValueError(
+                f"Unknown provider {provider!r}. "
+                f"Choose from: {', '.join(sorted(_PROVIDER_PRESETS))}"
+            )
+        preset = preset_cls()
+        if "worker" not in values:
+            values["worker"] = preset.worker
+        if "writer" not in values:
+            values["writer"] = preset.writer
+        if "reviewer" not in values:
+            values["reviewer"] = preset.reviewer
+        return values
 
 
 class WritingConfig(BaseModel):

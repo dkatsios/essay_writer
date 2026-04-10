@@ -97,10 +97,22 @@ async def ainvoke_with_retry(
 # ---------------------------------------------------------------------------
 
 
+# Map LangChain provider prefixes to gateway (LiteLLM-style) dot-prefixes.
+_GATEWAY_PROVIDER_MAP: dict[str, str] = {
+    "google_vertexai": "vertex_ai.",
+    "google_genai": "vertex_ai.",
+    "openai": "openai.",
+    "anthropic": "vertex_ai.anthropic.",
+}
+
+
 def create_model(model_spec: str) -> BaseChatModel:
     """Create a LangChain chat model from a spec like ``google_genai:gemini-2.5-flash``.
 
     When ``AI_BASE_URL`` is set, routes through an OpenAI-compatible endpoint.
+    The LangChain provider prefix (e.g. ``google_genai``) is translated to
+    the gateway's expected prefix (e.g. ``gemini/``) so that each model role
+    keeps its own model name.
     """
     from langchain.chat_models import init_chat_model
 
@@ -108,8 +120,10 @@ def create_model(model_spec: str) -> BaseChatModel:
     if base_url:
         model_name = os.environ.get("AI_MODEL")
         if not model_name:
-            _, _, model_name = model_spec.partition(":")
-            model_name = model_name or model_spec
+            provider, _, bare_name = model_spec.partition(":")
+            bare_name = bare_name or model_spec
+            gateway_prefix = _GATEWAY_PROVIDER_MAP.get(provider, "")
+            model_name = f"{gateway_prefix}{bare_name}"
         return init_chat_model(
             f"openai:{model_name}",
             base_url=base_url,
