@@ -1338,6 +1338,37 @@ def _do_assign_sources(ctx: PipelineContext) -> None:
     )
 
     result = _structured_call(ctx.worker, prompt, SourceAssignmentPlan, ctx.callbacks)
+
+    # Patch: ensure every selected source appears in at least one assignment.
+    # The LLM may skip some; assign stragglers to the best-fit section by
+    # lexical overlap between the source note and section topic.
+    assigned_ids: set[str] = set()
+    for a in result.assignments:
+        assigned_ids.update(a.source_ids)
+
+    notes_by_id = {n.source_id: n for n in source_notes}
+    missing_ids = [n.source_id for n in source_notes if n.source_id not in assigned_ids]
+
+    if missing_ids and sections:
+        section_corpora = {
+            s.number: _corpus_tokens(
+                f"{s.title} {s.key_points} {s.content_outline or ''}"
+            )
+            for s in sections
+        }
+        for sid in missing_ids:
+            note = notes_by_id[sid]
+            best_section = max(
+                result.assignments,
+                key=lambda a: _note_lexical_score(
+                    section_corpora.get(a.section_number, set()), note
+                ),
+            )
+            best_section.source_ids.append(sid)
+        logger.info(
+            "Patched %d unassigned sources into best-fit sections", len(missing_ids)
+        )
+
     _write_json(ctx.run_dir / "plan" / "source_assignments.json", result)
 
 
