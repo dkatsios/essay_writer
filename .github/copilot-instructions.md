@@ -56,9 +56,9 @@ Deterministic Python pipeline for academic essay writing using direct LangChain 
 
 | Role | Google (default) | OpenAI | Anthropic | Templates | Purpose |
 |------|-----------------|--------|-----------|-----------|----------|
-| **worker** | `gemini-2.5-flash` | `gpt-4o-mini` | `claude-haiku-4-5` | `intake.j2`, `validate.j2`, `plan.j2`, `source_reading.j2`, `source_assignment.j2` | Structured data extraction (brief, plan, notes, source assignment) |
-| **writer** | `gemini-2.5-pro` | `gpt-4o` | `claude-sonnet-4` | `essay_writing.j2`, `section_writing.j2` | Essay text generation |
-| **reviewer** | `gemini-3.1-pro-preview` | `o3` | `claude-opus-4` | `essay_review.j2`, `section_review.j2` | Essay review and polish |
+| **worker** | `gemini-2.5-flash` | `gpt-5.4-nano` | `claude-haiku-4-5` | `intake.j2`, `validate.j2`, `plan.j2`, `source_reading.j2`, `source_assignment.j2` | Structured data extraction (brief, plan, notes, source assignment) |
+| **writer** | `gemini-3.1-pro-preview` | `gpt-5.4` | `claude-sonnet-4-6` | `essay_writing.j2`, `section_writing.j2` | Essay text generation |
+| **reviewer** | `gemini-3.1-pro-preview` | `gpt-5.4` | `claude-opus-4-6` | `essay_review.j2`, `section_review.j2` | Essay review and polish |
 
 Set `models.provider` (or `ESSAY_WRITER_MODELS__PROVIDER`) to `google`, `openai`, or `anthropic` to switch all three roles at once. Individual role overrides still take precedence.
 

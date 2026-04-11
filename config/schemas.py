@@ -19,20 +19,20 @@ class ProviderModels(BaseModel):
 
 class GoogleModels(ProviderModels):
     worker: str = "google_genai:gemini-2.5-flash"
-    writer: str = "google_genai:gemini-2.5-pro"
+    writer: str = "google_genai:gemini-3.1-pro-preview"
     reviewer: str = "google_genai:gemini-3.1-pro-preview"
 
 
 class OpenAIModels(ProviderModels):
-    worker: str = "openai:gpt-4o-mini"
-    writer: str = "openai:gpt-4o"
-    reviewer: str = "openai:o3"
+    worker: str = "openai:gpt-5.4-nano"
+    writer: str = "openai:gpt-5.4"
+    reviewer: str = "openai:gpt-5.4"
 
 
 class AnthropicModels(ProviderModels):
     worker: str = "anthropic:claude-haiku-4-5"
-    writer: str = "anthropic:claude-sonnet-4"
-    reviewer: str = "anthropic:claude-opus-4"
+    writer: str = "anthropic:claude-sonnet-4-6"
+    reviewer: str = "anthropic:claude-opus-4-6"
 
 
 _PROVIDER_PRESETS: dict[str, type[ProviderModels]] = {
