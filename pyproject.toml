@@ -1,7 +1,7 @@
 [project]
 name = "essay-writer"
 version = "0.1.0"
-description = "Deep agent system for writing academic essays in Greek"
+description = "Deterministic Python pipeline for academic essay writing"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [

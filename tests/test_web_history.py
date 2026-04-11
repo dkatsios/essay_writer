@@ -10,8 +10,8 @@ from src.web import (
     Job,
     _append_clarification_round_for_ui,
     _append_optional_pdf_round_for_ui,
+    _build_status_payload,
     _jobs,
-    app,
 )
 
 
@@ -33,7 +33,7 @@ def test_append_clarification_round_skip_shows_em_dash() -> None:
     assert job.clarification_rounds[0]["items"][0]["answer"] == "—"
 
 
-def test_status_includes_submit_snapshot() -> None:
+def test_status_payload_includes_submit_snapshot() -> None:
     jid = "deadbeef0001"
     job = Job(
         job_id=jid,
@@ -45,10 +45,7 @@ def test_status_includes_submit_snapshot() -> None:
     )
     _jobs[jid] = job
     try:
-        client = TestClient(app)
-        r = client.get(f"/status/{jid}")
-        assert r.status_code == 200
-        body = r.json()
+        body = _build_status_payload(job)
         assert body["submit"]["academic_level"] == "undergraduate"
         assert body["submit"]["prompt"] == "Topic line"
         assert body["submit"]["target_words"] == 3000

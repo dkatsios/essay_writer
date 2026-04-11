@@ -549,15 +549,6 @@ async def submit(
     return JSONResponse({"job_id": job_id})
 
 
-@app.get("/status/{job_id}")
-async def status(job_id: str):
-    """Poll job status (kept for backward compatibility; prefer ``/stream`` SSE)."""
-    job = _jobs.get(job_id)
-    if not job:
-        return JSONResponse({"error": "Job not found"}, status_code=404)
-    return JSONResponse(_build_status_payload(job))
-
-
 _SSE_POLL_INTERVAL = 2.0  # seconds between stage-change checks during "running"
 
 

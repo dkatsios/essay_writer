@@ -686,7 +686,6 @@ def main() -> None:
     )
     parser.add_argument(
         "--dump-run",
-        "--dump-vfs",
         dest="dump_run",
         action="store_true",
         default=False,

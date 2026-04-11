@@ -509,24 +509,6 @@
       }
     });
 
-    async function pollStatus() {
-      if (!jobId) return;
-      try {
-        const res = await fetch(`/status/${jobId}`);
-        if (res.status === 404) {
-          clearInterval(pollTimer);
-          showJobGone(
-            'This job is no longer on the server (expired timeout or already cleaned up). If you already downloaded your ZIP, that is expected.'
-          );
-          return;
-        }
-        const data = await res.json();
-        handleStatusUpdate(data);
-      } catch (err) {
-        /* ignore transient fetch errors */
-      }
-    }
-
     function startSSE() {
       stopSSE();
       if (!jobId) return;

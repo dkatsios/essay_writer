@@ -29,7 +29,7 @@ for scenario in "${SCENARIOS[@]}"; do
     echo "================================================================"
 
     if ESSAY_WRITER_WRITING__INTERACTIVE_VALIDATION=false \
-       uv run python -m src.runner "$dir" --dump-vfs 2>&1 | tee "$outdir.log"; then
+         uv run python -m src.runner "$dir" --dump-run 2>&1 | tee "$outdir.log"; then
         # Move timestamped output to predictable path
         latest=$(ls -dt .output/run_* 2>/dev/null | head -1)
         if [[ -n "$latest" ]]; then

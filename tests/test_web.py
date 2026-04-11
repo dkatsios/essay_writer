@@ -81,11 +81,6 @@ def test_job_ttl_zero_disables_sweep(tmp_path, monkeypatch):
     assert jid in _jobs
 
 
-def test_status_404_when_job_missing():
-    r = client.get("/status/nonexistentjob")
-    assert r.status_code == 404
-
-
 def test_optional_pdf_upload_updates_registry(tmp_path):
     run_dir = Path(tmp_path) / "run"
     sources = run_dir / "sources"

@@ -73,7 +73,7 @@ The repo includes a `render.yaml` Blueprint for one-click deployment to [Render]
 
 1. Connect this repo in the Render dashboard.
 2. Apply the Blueprint (or create a Web Service pointing at the Dockerfile).
-3. Set the required environment variables (`GOOGLE_API_KEY`, and optionally `SEMANTIC_SCHOLAR_API_KEY`, `LANGSMITH_API_KEY`).
+3. Set the required environment variables (`GOOGLE_API_KEY`, and optionally `SEMANTIC_SCHOLAR_API_KEY`).
 
 The service exposes the web UI on the port assigned by Render. Optional: set `ESSAY_WEB_JOB_TTL_SECONDS` / `ESSAY_WEB_JOB_SWEEP_INTERVAL_SECONDS` if you need different retention for undownloaded jobs.
 
