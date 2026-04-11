@@ -106,13 +106,15 @@ _GATEWAY_PROVIDER_MAP: dict[str, str] = {
 }
 
 
-def create_model(model_spec: str) -> BaseChatModel:
+def create_model(model_spec: str, *, api_key: str | None = None) -> BaseChatModel:
     """Create a LangChain chat model from a spec like ``google_genai:gemini-2.5-flash``.
 
     When ``AI_BASE_URL`` is set, routes through an OpenAI-compatible endpoint.
     The LangChain provider prefix (e.g. ``google_genai``) is translated to
     the gateway's expected prefix (e.g. ``gemini/``) so that each model role
     keeps its own model name.
+
+    An explicit *api_key* overrides the environment variable for the provider.
     """
     from langchain.chat_models import init_chat_model
 
@@ -127,8 +129,11 @@ def create_model(model_spec: str) -> BaseChatModel:
         return init_chat_model(
             f"openai:{model_name}",
             base_url=base_url,
-            api_key=os.environ.get("AI_API_KEY", ""),
+            api_key=api_key or os.environ.get("AI_API_KEY", ""),
             timeout=_REQUEST_TIMEOUT,
         )
 
-    return init_chat_model(model_spec, timeout=_REQUEST_TIMEOUT)
+    kwargs: dict = {"timeout": _REQUEST_TIMEOUT}
+    if api_key:
+        kwargs["api_key"] = api_key
+    return init_chat_model(model_spec, **kwargs)

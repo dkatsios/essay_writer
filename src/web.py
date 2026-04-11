@@ -27,7 +27,7 @@ from jinja2 import Environment, FileSystemLoader
 
 load_dotenv()
 
-from config.schemas import load_config  # noqa: E402
+from config.schemas import ModelsConfig, _PROVIDER_PRESETS, load_config  # noqa: E402
 from src.agent import create_model  # noqa: E402
 from src.intake import build_extracted_text, scan  # noqa: E402
 from src.pipeline import run_pipeline  # noqa: E402
@@ -103,6 +103,10 @@ class Job:
     """``source_id -> \"file\"|\"url\"`` for the current optional-PDF step."""
     fast_track: bool = False
     """If True, do not pause for the optional full-text PDF upload step."""
+    provider: str = ""
+    """Provider override selected in the UI (google, openai, anthropic, or empty for server default)."""
+    api_key: str = ""
+    """Per-job API key override. Cleared from memory after model creation."""
     _sse_event: threading.Event = field(default_factory=threading.Event)
     """Set whenever job state changes to wake SSE listeners."""
 
@@ -133,6 +137,7 @@ def _build_status_payload(job: Job) -> dict:
         "academic_level": job.academic_level,
         "target_words": job.target_words,
         "min_sources": job.min_sources,
+        "provider": job.provider,
     }
     return resp
 
@@ -276,6 +281,10 @@ def _run_pipeline_thread(
     try:
         config = load_config()
 
+        # Apply per-job provider override
+        if job.provider:
+            config.models = ModelsConfig(provider=job.provider)
+
         run_dir = job.run_dir
         input_dir = run_dir / "input"
         input_dir.mkdir(parents=True, exist_ok=True)
@@ -295,9 +304,11 @@ def _run_pipeline_thread(
 
         (input_dir / "extracted.md").write_text(extracted_text, encoding="utf-8")
 
-        worker = create_model(config.models.worker)
-        writer = create_model(config.models.writer)
-        reviewer = create_model(config.models.reviewer)
+        _api_key = job.api_key or None
+        job.api_key = ""  # clear from memory immediately
+        worker = create_model(config.models.worker, api_key=_api_key)
+        writer = create_model(config.models.writer, api_key=_api_key)
+        reviewer = create_model(config.models.reviewer, api_key=_api_key)
 
         timer = _StepTimer()
         tracker = TokenTracker()
@@ -464,6 +475,8 @@ async def submit(
     target_words: int | None = Form(None),
     min_sources: int | None = Form(None),
     academic_level: str = Form(""),
+    provider: str = Form(""),
+    api_key: str = Form(""),
     fast_track: str | None = Form(None),
     files: list[UploadFile] = [],  # noqa: B006
     sources: list[UploadFile] = [],  # noqa: B006
@@ -474,6 +487,14 @@ async def submit(
     run_dir = Path(tempfile.mkdtemp(prefix=f"essay_{job_id}_"))
     tw = target_words if target_words is not None and target_words > 0 else None
     ms = min_sources if min_sources is not None and min_sources > 0 else None
+    prov = provider.strip().lower()
+    if prov and prov not in _PROVIDER_PRESETS:
+        return JSONResponse(
+            {
+                "error": f"Unknown provider {prov!r}. Choose from: {', '.join(sorted(_PROVIDER_PRESETS))}."
+            },
+            status_code=400,
+        )
     job = Job(
         job_id=job_id,
         run_dir=run_dir,
@@ -484,6 +505,8 @@ async def submit(
         fast_track=bool(
             fast_track and fast_track.strip().lower() in ("1", "on", "true", "yes")
         ),
+        provider=prov,
+        api_key=api_key.strip(),
     )
     _jobs[job_id] = job
 

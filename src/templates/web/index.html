@@ -85,6 +85,33 @@
       transition: border-color .15s, box-shadow .15s;
     }
     input[type="number"]:focus { outline: none; border-color: var(--border-focus); box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.2); }
+    select {
+      width: 100%;
+      max-width: 16rem;
+      padding: .55rem .65rem;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      font-size: .95rem;
+      font-family: inherit;
+      background: var(--surface);
+      color: var(--text);
+      transition: border-color .15s, box-shadow .15s;
+      cursor: pointer;
+    }
+    select:focus { outline: none; border-color: var(--border-focus); box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.2); }
+    input[type="password"] {
+      width: 100%;
+      max-width: 24rem;
+      padding: .55rem .65rem;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      font-size: .95rem;
+      font-family: inherit;
+      background: var(--surface);
+      color: var(--text);
+      transition: border-color .15s, box-shadow .15s;
+    }
+    input[type="password"]:focus { outline: none; border-color: var(--border-focus); box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.2); }
     .hint { font-size: .8125rem; color: var(--text-muted); margin-top: .35rem; line-height: 1.4; }
     .config-section {
       margin-top: 1.35rem;
@@ -268,6 +295,21 @@
     <div class="config-section" aria-labelledby="config-heading">
       <h2 class="config-section-title" id="config-heading">Options</h2>
 
+      <label class="field-label" for="provider">AI Provider <span class="optional-mark">(optional)</span></label>
+      <select id="provider" name="provider">
+        <option value="">Server default</option>
+        <option value="google">Google</option>
+        <option value="openai">OpenAI</option>
+        <option value="anthropic">Anthropic</option>
+      </select>
+      <div class="hint">Leave on "Server default" to use the provider configured on the server.</div>
+
+      <div id="api-key-group" style="display:none">
+        <label class="field-label" for="api_key">API Key <span class="optional-mark">(optional)</span></label>
+        <input type="password" id="api_key" name="api_key" placeholder="Overrides the server key for this run" autocomplete="off">
+        <div class="hint">If blank, the server's own key for the selected provider will be used.</div>
+      </div>
+
       <label class="field-label">Academic Level <span class="optional-mark">(optional)</span></label>
       <div class="radio-group" role="radiogroup" aria-label="Academic level">
         <label class="radio-option"><input type="radio" name="academic_level" value=""> Not defined</label>
@@ -309,6 +351,15 @@
     const form = document.getElementById('form');
     const statusArea = document.getElementById('status-area');
     const submitBtn = document.getElementById('submit-btn');
+
+    /* --- Provider / API key show-hide --- */
+    (function initProviderToggle() {
+      const provEl = document.getElementById('provider');
+      const keyGroup = document.getElementById('api-key-group');
+      provEl.addEventListener('change', function() {
+        keyGroup.style.display = provEl.value ? '' : 'none';
+      });
+    })();
 
     /* --- Suggested sources (mirrors _suggested_sources in pipeline.py) --- */
     const SOURCES_PER_1K = 5;
@@ -441,6 +492,10 @@
       const sourcesInput = document.getElementById('sources');
       for (const f of sourcesInput.files) fd.append('sources', f);
       if (document.getElementById('fast_track')?.checked) fd.append('fast_track', '1');
+      const prov = document.getElementById('provider').value;
+      if (prov) fd.append('provider', prov);
+      const ak = document.getElementById('api_key').value.trim();
+      if (ak) fd.append('api_key', ak);
 
       try {
         const res = await fetch('/submit', { method: 'POST', body: fd });
@@ -591,6 +646,9 @@
       document.querySelectorAll('input[name="academic_level"]').forEach((r) => {
         r.checked = r.value === level;
       });
+      const prov = s.provider != null ? String(s.provider) : '';
+      const provEl = document.getElementById('provider');
+      if (provEl) { provEl.value = prov; provEl.dispatchEvent(new Event('change')); }
       submitSnapshotAppliedForJob = jobId;
     }
 
