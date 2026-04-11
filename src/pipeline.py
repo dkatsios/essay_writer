@@ -333,12 +333,7 @@ def _structured_call(
     callbacks: list | None = None,
     retries: int = _STRUCTURED_RETRIES,
 ) -> BaseModel:
-    """Call a model with structured output, retrying on validation errors.
-
-    Uses ``model.with_structured_output(schema)`` which constrains the
-    LLM to produce valid JSON matching the Pydantic model.  On validation
-    failure, re-invokes with the error message for self-correction.
-    """
+    """Call a model with structured output, retrying on validation errors."""
     from src.agent import invoke_with_retry
 
     structured = model.with_structured_output(schema)
@@ -350,7 +345,6 @@ def _structured_call(
             result = invoke_with_retry(structured, messages, config=run_config)
             if isinstance(result, BaseModel):
                 return result
-            # Some providers return dict instead of model
             return schema.model_validate(result)
         except (ValidationError, Exception) as exc:
             if attempt < retries and isinstance(exc, ValidationError):
@@ -370,7 +364,6 @@ def _structured_call(
                 continue
             raise
 
-    # Unreachable, but satisfies type checker
     raise RuntimeError("Structured call exhausted retries")
 
 
