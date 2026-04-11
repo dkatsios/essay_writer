@@ -438,21 +438,12 @@ def _make_callbacks(timer: _StepTimer, tracker: TokenTracker) -> list:
 
         def on_llm_end(self, response, *, run_id, **kw):
             model = self._models.pop(str(run_id), "")
-            # Try llm_output first
-            llm_out = response.llm_output or {}
-            usage = llm_out.get("usage_metadata") or llm_out.get("token_usage") or {}
-            # Fall back to generation_info on the first generation
-            if not usage and response.generations:
-                for gen_list in response.generations:
-                    for gen in gen_list:
-                        info = gen.generation_info or {}
-                        usage = info.get("usage_metadata", {})
-                        if usage:
-                            break
-                    if usage:
-                        break
-            # Also try message.usage_metadata (ChatGeneration stores AIMessage)
-            if not usage and response.generations:
+            # Prefer message.usage_metadata (LangChain-normalized, includes
+            # output_token_details.reasoning for thinking models across all
+            # providers). Fall back to llm_output / generation_info for older
+            # integrations that don't populate the message field.
+            usage = {}
+            if response.generations:
                 for gen_list in response.generations:
                     for gen in gen_list:
                         msg = getattr(gen, "message", None)
@@ -469,11 +460,25 @@ def _make_callbacks(timer: _StepTimer, tracker: TokenTracker) -> list:
                                         ),
                                     }
                                 )
-                                # Check response_metadata for model
                                 rm = getattr(msg, "response_metadata", {}) or {}
                                 if not model and "model_name" in rm:
                                     model = rm["model_name"]
                                 break
+                    if usage:
+                        break
+            # Fallback: llm_output, then generation_info
+            if not usage:
+                llm_out = response.llm_output or {}
+                usage = (
+                    llm_out.get("usage_metadata") or llm_out.get("token_usage") or {}
+                )
+            if not usage and response.generations:
+                for gen_list in response.generations:
+                    for gen in gen_list:
+                        info = gen.generation_info or {}
+                        usage = info.get("usage_metadata", {})
+                        if usage:
+                            break
                     if usage:
                         break
 
@@ -489,9 +494,12 @@ def _make_callbacks(timer: _StepTimer, tracker: TokenTracker) -> list:
                 or usage.get("candidates_token_count")
                 or 0
             )
-            # Thinking tokens are nested under output_token_details.reasoning
+            # Thinking tokens: LangChain normalizes to output_token_details.reasoning
+            # for both OpenAI and Gemini. Also check Gemini raw thoughts_token_count.
             details = usage.get("output_token_details") or {}
             think_tok = details.get("reasoning", 0) if isinstance(details, dict) else 0
+            if not think_tok:
+                think_tok = usage.get("thoughts_token_count", 0) or 0
             # output_tokens from API includes thinking; separate them for billing
             out_tok = max(raw_out - think_tok, 0)
             if in_tok or out_tok or think_tok:
