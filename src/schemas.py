@@ -6,7 +6,9 @@ brief, validation, plan, and source notes. Essays remain markdown.
 
 from __future__ import annotations
 
-from pydantic import BaseModel, model_validator
+import json
+
+from pydantic import BaseModel, field_validator, model_validator
 
 
 # -- Brief -----------------------------------------------------------------
@@ -111,6 +113,19 @@ class SourceNote(BaseModel):
     relevance_score: int = 0
     inaccessible_reason: str | None = None
     url: str | None = None
+
+    @field_validator("authors", "relevant_extracts", mode="before")
+    @classmethod
+    def _parse_stringified_list(cls, v: object) -> object:
+        """Anthropic tool-based output sometimes serialises lists as JSON strings."""
+        if isinstance(v, str):
+            try:
+                parsed = json.loads(v)
+                if isinstance(parsed, list):
+                    return parsed
+            except (json.JSONDecodeError, ValueError):
+                pass
+        return v
 
     @property
     def content_word_count(self) -> int:

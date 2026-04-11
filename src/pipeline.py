@@ -341,7 +341,7 @@ def _structured_call(
     """
     from src.agent import invoke_with_retry
 
-    structured = model.with_structured_output(schema, method="json_schema")
+    structured = model.with_structured_output(schema)
     messages = [HumanMessage(content=prompt)]
     run_config = {"callbacks": callbacks} if callbacks else None
 
@@ -384,7 +384,7 @@ async def _async_structured_call(
     """Async version of _structured_call."""
     from src.agent import ainvoke_with_retry
 
-    structured = model.with_structured_output(schema, method="json_schema")
+    structured = model.with_structured_output(schema)
     messages = [HumanMessage(content=prompt)]
     run_config = {"callbacks": callbacks} if callbacks else None
 
