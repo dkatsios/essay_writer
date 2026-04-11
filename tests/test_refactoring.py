@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+import asyncio
 import json
 import logging
 import threading
@@ -17,56 +18,185 @@ import pytest
 # ── agent retry logic ─────────────────────────────────────────────────
 
 
-class TestInvokeWithRetry:
-    """Tests for invoke_with_retry in agent.py."""
+class TestRetryWithBackoff:
+    """Tests for _retry_with_backoff in agent.py."""
 
     def test_immediate_success(self):
-        from src.agent import invoke_with_retry
+        from src.agent import _retry_with_backoff
 
-        model = MagicMock()
-        model.invoke.return_value = MagicMock(content="hello")
-        result = invoke_with_retry(model, ["test"])
-        assert result.content == "hello"
-        model.invoke.assert_called_once()
+        result = _retry_with_backoff(lambda: "hello")
+        assert result == "hello"
 
     def test_retries_on_resource_exhausted(self):
-        from src.agent import invoke_with_retry
+        from src.agent import _retry_with_backoff
 
-        model = MagicMock()
-        model.invoke.side_effect = [
-            Exception("429 RESOURCE_EXHAUSTED"),
-            MagicMock(content="ok"),
-        ]
-        # Patch sleep to avoid waiting
+        calls = []
+
+        def fn():
+            calls.append(1)
+            if len(calls) == 1:
+                raise Exception("429 RESOURCE_EXHAUSTED")
+            return "ok"
+
         import src.agent
 
         original_sleep = src.agent.time.sleep
         src.agent.time.sleep = lambda _: None
         try:
-            result = invoke_with_retry(model, ["test"])
-            assert result.content == "ok"
-            assert model.invoke.call_count == 2
+            result = _retry_with_backoff(fn)
+            assert result == "ok"
+            assert len(calls) == 2
         finally:
             src.agent.time.sleep = original_sleep
 
     def test_retries_on_timeout(self):
-        from src.agent import invoke_with_retry
+        from src.agent import _retry_with_backoff
 
-        model = MagicMock()
-        model.invoke.side_effect = [
-            TimeoutError("Request timed out"),
-            MagicMock(content="ok"),
-        ]
+        calls = []
+
+        def fn():
+            calls.append(1)
+            if len(calls) == 1:
+                raise TimeoutError("Request timed out")
+            return "ok"
+
         import src.agent
 
         original_sleep = src.agent.time.sleep
         src.agent.time.sleep = lambda _: None
         try:
-            result = invoke_with_retry(model, ["test"])
-            assert result.content == "ok"
-            assert model.invoke.call_count == 2
+            result = _retry_with_backoff(fn)
+            assert result == "ok"
+            assert len(calls) == 2
         finally:
             src.agent.time.sleep = original_sleep
+
+
+class TestStructuredCallRepair:
+    def test_essay_plan_parses_stringified_sections(self):
+        from src.schemas import EssayPlan
+
+        plan = EssayPlan.model_validate(
+            {
+                "title": "Test",
+                "thesis": "Test thesis",
+                "sections": json.dumps(
+                    [
+                        {
+                            "number": 1,
+                            "title": "Intro",
+                            "heading": "Intro",
+                            "word_target": 400,
+                        },
+                        {
+                            "number": 2,
+                            "title": "Body",
+                            "heading": "Body",
+                            "word_target": 600,
+                        },
+                    ]
+                ),
+                "research_queries": ["query"],
+                "total_word_target": 1000,
+            }
+        )
+
+        assert len(plan.sections) == 2
+        assert plan.sections[0].title == "Intro"
+
+    def test_essay_plan_rejects_missing_sections(self):
+        from src.schemas import EssayPlan
+
+        with pytest.raises(ValueError, match="sections must be a non-empty array"):
+            EssayPlan(
+                title="Η πτώση της εμπιστοσύνης",
+                thesis="Η ανάλυση απαιτεί σύνθεση κοινωνικών και θεσμικών παραγόντων.",
+                research_queries=["πτώση εμπιστοσύνης θεσμοί Ελλάδα"],
+                total_word_target=1200,
+            )
+
+    def test_structured_call_uses_instructor(self, monkeypatch):
+        """Verify _structured_call delegates to Instructor's create()."""
+        from src.pipeline import _structured_call
+        from src.schemas import EssayPlan
+        from src.agent import ModelClient
+
+        complete_plan = EssayPlan.model_validate(
+            {
+                "title": "Test",
+                "thesis": "Test thesis",
+                "research_queries": ["query"],
+                "total_word_target": 1000,
+                "sections": [
+                    {
+                        "number": 1,
+                        "title": "Intro",
+                        "heading": "Intro",
+                        "word_target": 1000,
+                    }
+                ],
+            }
+        )
+
+        mock_instructor = MagicMock()
+        mock_instructor.chat.completions.create.return_value = complete_plan
+        client = ModelClient(
+            client=mock_instructor, model="test-model", model_spec="openai:test-model"
+        )
+
+        # Patch _retry_with_backoff to just call the fn
+        monkeypatch.setattr("src.pipeline._retry_with_backoff", lambda fn, **kw: fn())
+
+        result = _structured_call(client, "Plan prompt", EssayPlan)
+
+        assert len(result.sections) == 1
+        mock_instructor.chat.completions.create.assert_called_once()
+        call_kwargs = mock_instructor.chat.completions.create.call_args
+        assert call_kwargs.kwargs["response_model"] is EssayPlan
+        assert call_kwargs.kwargs["model"] == "test-model"
+
+    def test_async_structured_call_uses_instructor(self, monkeypatch):
+        """Verify _async_structured_call delegates to async Instructor."""
+        from src.pipeline import _async_structured_call
+        from src.schemas import EssayPlan
+        from src.agent import AsyncModelClient
+
+        complete_plan = EssayPlan.model_validate(
+            {
+                "title": "Test",
+                "thesis": "Test thesis",
+                "research_queries": ["query"],
+                "total_word_target": 1000,
+                "sections": [
+                    {
+                        "number": 1,
+                        "title": "Intro",
+                        "heading": "Intro",
+                        "word_target": 1000,
+                    }
+                ],
+            }
+        )
+
+        mock_instructor = MagicMock()
+
+        async def fake_create(**kwargs):
+            return complete_plan
+
+        mock_instructor.chat.completions.create = fake_create
+        client = AsyncModelClient(
+            client=mock_instructor, model="test-model", model_spec="openai:test-model"
+        )
+
+        # Patch _retry_with_backoff to handle async
+        async def fake_retry(fn, *, is_async=False):
+            return await fn()
+
+        monkeypatch.setattr("src.pipeline._retry_with_backoff", fake_retry)
+
+        result = asyncio.run(_async_structured_call(client, "Plan prompt", EssayPlan))
+
+        assert len(result.sections) == 1
 
 
 # ── web_fetcher HTML stripping ────────────────────────────────────────────

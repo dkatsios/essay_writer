@@ -39,7 +39,7 @@ logger = logging.getLogger(__name__)
 load_dotenv()
 
 from config.schemas import load_config  # noqa: E402
-from src.agent import create_model  # noqa: E402
+from src.agent import create_client  # noqa: E402
 from src.intake import build_extracted_text, scan  # noqa: E402
 from src.pipeline import run_pipeline  # noqa: E402
 from src.scratch_dir import SCRATCH_RUN_DIR  # noqa: E402
@@ -418,106 +418,6 @@ class _StepTimer:
         return "\n".join(lines)
 
 
-def _make_callbacks(timer: _StepTimer, tracker: TokenTracker) -> list:
-    from langchain_core.callbacks import BaseCallbackHandler
-
-    class _H(BaseCallbackHandler):
-        def __init__(self):
-            super().__init__()
-            self._models: dict[str, str] = {}  # run_id -> model name
-
-        def on_chat_model_start(self, serialized, messages, *, run_id, **kw):
-            model = (kw.get("invocation_params") or {}).get("model", "")
-            if not model:
-                model = serialized.get("kwargs", {}).get("model", "")
-            if not model:
-                ids = serialized.get("id", [])
-                model = ids[-1] if ids else ""
-            self._models[str(run_id)] = model
-            tracker.snapshot_step(str(run_id))
-
-        def on_llm_end(self, response, *, run_id, **kw):
-            model = self._models.pop(str(run_id), "")
-            # Prefer message.usage_metadata (LangChain-normalized, includes
-            # output_token_details.reasoning for thinking models across all
-            # providers). Fall back to llm_output / generation_info for older
-            # integrations that don't populate the message field.
-            usage = {}
-            if response.generations:
-                for gen_list in response.generations:
-                    for gen in gen_list:
-                        msg = getattr(gen, "message", None)
-                        if msg:
-                            um = getattr(msg, "usage_metadata", None)
-                            if um:
-                                usage = (
-                                    um
-                                    if isinstance(um, dict)
-                                    else {
-                                        "input_tokens": getattr(um, "input_tokens", 0),
-                                        "output_tokens": getattr(
-                                            um, "output_tokens", 0
-                                        ),
-                                    }
-                                )
-                                rm = getattr(msg, "response_metadata", {}) or {}
-                                if not model and "model_name" in rm:
-                                    model = rm["model_name"]
-                                break
-                    if usage:
-                        break
-            # Fallback: llm_output, then generation_info
-            if not usage:
-                llm_out = response.llm_output or {}
-                usage = (
-                    llm_out.get("usage_metadata") or llm_out.get("token_usage") or {}
-                )
-            if not usage and response.generations:
-                for gen_list in response.generations:
-                    for gen in gen_list:
-                        info = gen.generation_info or {}
-                        usage = info.get("usage_metadata", {})
-                        if usage:
-                            break
-                    if usage:
-                        break
-
-            in_tok = (
-                usage.get("input_tokens")
-                or usage.get("prompt_tokens")
-                or usage.get("prompt_token_count")
-                or 0
-            )
-            raw_out = (
-                usage.get("output_tokens")
-                or usage.get("completion_tokens")
-                or usage.get("candidates_token_count")
-                or 0
-            )
-            # Thinking tokens: LangChain normalizes to output_token_details.reasoning
-            # for both OpenAI and Gemini. Also check Gemini raw thoughts_token_count.
-            details = usage.get("output_token_details") or {}
-            think_tok = details.get("reasoning", 0) if isinstance(details, dict) else 0
-            if not think_tok:
-                think_tok = usage.get("thoughts_token_count", 0) or 0
-            # output_tokens from API includes thinking; separate them for billing
-            out_tok = max(raw_out - think_tok, 0)
-            if in_tok or out_tok or think_tok:
-                step = tracker.pop_step(str(run_id))
-                tracker.record(model, in_tok, out_tok, think_tok, step=step)
-
-        def on_tool_start(self, serialized, input_str, *, run_id, **kw):
-            timer.on_tool_start(serialized.get("name", "unknown"), str(run_id))
-
-        def on_tool_end(self, output, *, run_id, **kw):
-            timer.on_tool_end(getattr(output, "name", None) or "tool", str(run_id))
-
-        def on_tool_error(self, error, *, run_id, **kw):
-            timer.on_tool_error("tool", str(run_id))
-
-    return [_H()]
-
-
 def _setup_file_logging(output_dir: Path) -> logging.FileHandler:
     log_path = output_dir / "run.log"
     handler = logging.FileHandler(log_path, encoding="utf-8")
@@ -659,13 +559,12 @@ def run(
     (input_dir / "extracted.md").write_text(extracted_text, encoding="utf-8")
 
     # Create models
-    worker = create_model(config.models.worker)
-    writer = create_model(config.models.writer)
-    reviewer = create_model(config.models.reviewer)
+    worker = create_client(config.models.worker)
+    writer = create_client(config.models.writer)
+    reviewer = create_client(config.models.reviewer)
 
     timer = _StepTimer()
     tracker = TokenTracker()
-    callbacks = _make_callbacks(timer, tracker)
 
     try:
         run_pipeline(
@@ -675,7 +574,6 @@ def run(
             run_dir,
             config,
             extra_prompt=prompt,
-            callbacks=callbacks,
             token_tracker=tracker,
             on_questions=_handle_questions
             if config.writing.interactive_validation
@@ -723,13 +621,12 @@ def run_prompt(
         f"# Assignment\n\n{prompt}\n", encoding="utf-8"
     )
 
-    worker = create_model(config.models.worker)
-    writer = create_model(config.models.writer)
-    reviewer = create_model(config.models.reviewer)
+    worker = create_client(config.models.worker)
+    writer = create_client(config.models.writer)
+    reviewer = create_client(config.models.reviewer)
 
     timer = _StepTimer()
     tracker = TokenTracker()
-    callbacks = _make_callbacks(timer, tracker)
 
     try:
         run_pipeline(
@@ -738,7 +635,6 @@ def run_prompt(
             reviewer,
             run_dir,
             config,
-            callbacks=callbacks,
             token_tracker=tracker,
             on_questions=_handle_questions
             if config.writing.interactive_validation
@@ -810,7 +706,7 @@ def main() -> None:
     )
     logging.getLogger("httpx").setLevel(logging.WARNING)
     logging.getLogger("httpcore").setLevel(logging.WARNING)
-    logging.getLogger("langchain").setLevel(logging.WARNING)
+    logging.getLogger("openai").setLevel(logging.WARNING)
 
     sources_dir = Path(args.sources) if args.sources else None
 

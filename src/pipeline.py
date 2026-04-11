@@ -5,8 +5,8 @@ Two-phase execution:
   Phase 2 (dynamic): steps built from plan analysis (short vs long path)
 
 LLM calls use:
-- ``model.with_structured_output(Schema)`` for JSON steps (auto-retry)
-- ``model.invoke(messages)`` for text steps (essays)
+- Instructor ``client.chat.completions.create(response_model=Schema)`` for JSON steps
+- OpenAI SDK ``client.chat.completions.create(messages=...)`` for text steps
 
 The pipeline handles all file I/O; LLMs never touch disk.
 """
@@ -28,10 +28,15 @@ from typing import TYPE_CHECKING
 from urllib.parse import urlparse
 
 import httpx
-from langchain_core.language_models import BaseChatModel
-from langchain_core.messages import HumanMessage, SystemMessage
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel
 
+from src.agent import (
+    AsyncModelClient,
+    ModelClient,
+    _retry_with_backoff,
+    extract_text,
+    extract_usage,
+)
 from src.rendering import render_prompt
 from src.tools.author_names import surname_from_author_string
 from src.tools.essay_sanitize import strip_leading_submission_metadata
@@ -258,13 +263,12 @@ class _DomainFailureTracker:
 class PipelineContext:
     """Shared state passed to every step."""
 
-    worker: BaseChatModel
-    writer: BaseChatModel
-    reviewer: BaseChatModel
+    worker: ModelClient
+    writer: ModelClient
+    reviewer: ModelClient
     run_dir: Path
     config: EssayWriterConfig
     extra_prompt: str | None = None
-    callbacks: list | None = None
     tracker: object | None = None  # TokenTracker (optional)
     user_sources_dir: Path | None = None
     on_optional_source_pdfs: Callable[[Path, list[dict]], None] | None = None
@@ -326,111 +330,87 @@ def _execute(steps: list[PipelineStep], ctx: PipelineContext) -> None:
 _STRUCTURED_RETRIES = 2
 
 
+def _record_usage(tracker: object | None, response) -> None:
+    """Record token usage from any provider's API response on the tracker."""
+    if tracker is None or response is None:
+        return
+    u = extract_usage(response)
+    if u["input"] or u["output"] or u["thinking"]:
+        tracker.record(u["model"], u["input"], u["output"], u["thinking"])
+
+
 def _structured_call(
-    model: BaseChatModel,
+    client: ModelClient,
     prompt: str,
     schema: type[BaseModel],
-    callbacks: list | None = None,
+    tracker: object | None = None,
     retries: int = _STRUCTURED_RETRIES,
 ) -> BaseModel:
-    """Call a model with structured output, retrying on validation errors."""
-    from src.agent import invoke_with_retry
+    """Call a model with structured output (Instructor handles validation retries)."""
 
-    structured = model.with_structured_output(schema)
-    messages = [HumanMessage(content=prompt)]
-    run_config = {"callbacks": callbacks} if callbacks else None
+    def _do_call():
+        result = client.client.chat.completions.create(
+            model=client.model,
+            response_model=schema,
+            max_retries=retries,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        return result
 
-    for attempt in range(retries + 1):
-        try:
-            result = invoke_with_retry(structured, messages, config=run_config)
-            if isinstance(result, BaseModel):
-                return result
-            return schema.model_validate(result)
-        except (ValidationError, Exception) as exc:
-            if attempt < retries and isinstance(exc, ValidationError):
-                logger.warning(
-                    "Structured output validation failed (attempt %d/%d): %s",
-                    attempt + 1,
-                    retries + 1,
-                    exc,
-                )
-                messages = [
-                    HumanMessage(content=prompt),
-                    HumanMessage(
-                        content=f"Your previous output had validation errors:\n{exc}\n"
-                        "Please fix these errors and try again."
-                    ),
-                ]
-                continue
-            raise
-
-    raise RuntimeError("Structured call exhausted retries")
+    result = _retry_with_backoff(_do_call)
+    # Instructor returns the Pydantic model directly; usage is on _raw_response
+    raw = getattr(result, "_raw_response", None)
+    if raw:
+        _record_usage(tracker, raw)
+    return result
 
 
 async def _async_structured_call(
-    model: BaseChatModel,
+    client: AsyncModelClient,
     prompt: str,
     schema: type[BaseModel],
-    callbacks: list | None = None,
+    tracker: object | None = None,
     retries: int = _STRUCTURED_RETRIES,
 ) -> BaseModel:
     """Async version of _structured_call."""
-    from src.agent import ainvoke_with_retry
 
-    structured = model.with_structured_output(schema)
-    messages = [HumanMessage(content=prompt)]
-    run_config = {"callbacks": callbacks} if callbacks else None
+    async def _do_call():
+        result = await client.client.chat.completions.create(
+            model=client.model,
+            response_model=schema,
+            max_retries=retries,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        return result
 
-    for attempt in range(retries + 1):
-        try:
-            result = await ainvoke_with_retry(structured, messages, config=run_config)
-            if isinstance(result, BaseModel):
-                return result
-            return schema.model_validate(result)
-        except (ValidationError, Exception) as exc:
-            if attempt < retries and isinstance(exc, ValidationError):
-                logger.warning(
-                    "Structured output validation failed (attempt %d/%d): %s",
-                    attempt + 1,
-                    retries + 1,
-                    exc,
-                )
-                messages = [
-                    HumanMessage(content=prompt),
-                    HumanMessage(
-                        content=f"Your previous output had validation errors:\n{exc}\n"
-                        "Please fix these errors and try again."
-                    ),
-                ]
-                continue
-            raise
-
-    raise RuntimeError("Async structured call exhausted retries")
+    result = await _retry_with_backoff(_do_call, is_async=True)
+    raw = getattr(result, "_raw_response", None)
+    if raw:
+        _record_usage(tracker, raw)
+    return result
 
 
 def _text_call(
-    model: BaseChatModel,
+    client: ModelClient,
     system_prompt: str,
     user_prompt: str,
-    callbacks: list | None = None,
+    tracker: object | None = None,
 ) -> str:
     """Call a model for free-form text output (essays, reviews)."""
-    from src.agent import invoke_with_retry
 
-    messages = [
-        SystemMessage(content=system_prompt),
-        HumanMessage(content=user_prompt),
-    ]
-    run_config = {"callbacks": callbacks} if callbacks else None
-    response = invoke_with_retry(model, messages, config=run_config)
-    content = response.content
-    # Some providers return content as a list of blocks
-    if isinstance(content, list):
-        content = "\n".join(
-            block.get("text", "") if isinstance(block, dict) else str(block)
-            for block in content
+    def _do_call():
+        return client.client.chat.completions.create(
+            model=client.model,
+            response_model=None,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
         )
-    return content
+
+    response = _retry_with_backoff(_do_call)
+    _record_usage(tracker, response)
+    return extract_text(response)
 
 
 # ---------------------------------------------------------------------------
@@ -727,7 +707,7 @@ def _do_intake(ctx: PipelineContext) -> None:
         extra_prompt=ctx.extra_prompt,
     )
 
-    brief = _structured_call(ctx.worker, prompt, AssignmentBrief, ctx.callbacks)
+    brief = _structured_call(ctx.worker, prompt, AssignmentBrief, ctx.tracker)
     _write_json(ctx.run_dir / "brief" / "assignment.json", brief)
 
 
@@ -736,7 +716,7 @@ def _do_validate(ctx: PipelineContext) -> None:
     language = _get_brief_language(ctx.run_dir)
     prompt = render_prompt("validate.j2", brief_json=brief_json, language=language)
 
-    result = _structured_call(ctx.worker, prompt, ValidationResult, ctx.callbacks)
+    result = _structured_call(ctx.worker, prompt, ValidationResult, ctx.tracker)
     _write_json(ctx.run_dir / "brief" / "validation.json", result)
 
 
@@ -772,17 +752,7 @@ def _do_plan(ctx: PipelineContext) -> None:
     language = _get_brief_language(ctx.run_dir)
     prompt = render_prompt("plan.j2", brief_json=brief_json, language=language)
 
-    plan = _structured_call(ctx.worker, prompt, EssayPlan, ctx.callbacks)
-
-    # Fallback: derive research queries from the brief topic when the model omits them
-    if not plan.research_queries:
-        brief = json.loads(brief_json)
-        topic = brief.get("topic", "")
-        if topic:
-            plan.research_queries = [topic]
-            logger.warning(
-                "Plan had no research_queries; using brief topic as fallback query"
-            )
+    plan = _structured_call(ctx.worker, prompt, EssayPlan, ctx.tracker)
 
     _write_json(ctx.run_dir / "plan" / "plan.json", plan)
 
@@ -871,9 +841,9 @@ def _do_research(ctx: PipelineContext, fetch_sources: int) -> None:
 def _read_one_source(
     source_id: str,
     meta: dict,
-    worker: BaseChatModel,
+    worker: ModelClient,
     sources_dir: str,
-    callbacks: list | None,
+    tracker: object | None = None,
     domain_tracker: _DomainFailureTracker | None = None,
     essay_topic: str = "",
     *,
@@ -900,7 +870,7 @@ def _read_one_source(
             essay_topic=essay_topic,
         )
         try:
-            note = _structured_call(worker, prompt, SourceNote, callbacks)
+            note = _structured_call(worker, prompt, SourceNote, tracker)
             return _source_note_with_fulltext_flag(note, had_body)
         except Exception:
             logger.warning("LLM extraction failed for %s, using metadata", source_id)
@@ -939,9 +909,9 @@ def _read_one_source(
 async def _async_read_one_source(
     source_id: str,
     meta: dict,
-    worker: BaseChatModel,
+    worker: AsyncModelClient,
     sources_dir: str,
-    callbacks: list | None,
+    tracker: object | None = None,
     domain_tracker: _DomainFailureTracker | None = None,
     essay_topic: str = "",
     *,
@@ -970,7 +940,7 @@ async def _async_read_one_source(
             essay_topic=essay_topic,
         )
         try:
-            note = await _async_structured_call(worker, prompt, SourceNote, callbacks)
+            note = await _async_structured_call(worker, prompt, SourceNote, tracker)
             return _source_note_with_fulltext_flag(note, had_body)
         except Exception:
             logger.warning("LLM extraction failed for %s, using metadata", source_id)
@@ -1189,6 +1159,7 @@ def _make_read_sources(
 
         domain_tracker = _DomainFailureTracker()
         semaphore = asyncio.Semaphore(_SOURCE_READ_CONCURRENCY)
+        async_worker = c.worker.to_async()
 
         async def read_one(
             sid: str,
@@ -1200,9 +1171,9 @@ def _make_read_sources(
                     note = await _async_read_one_source(
                         sid,
                         meta,
-                        c.worker,
+                        async_worker,
                         sources_dir,
-                        c.callbacks,
+                        tracker=c.tracker,
                         domain_tracker=dt,
                         essay_topic=essay_topic,
                         min_body_words=min_body,
@@ -1341,7 +1312,7 @@ def _do_assign_sources(ctx: PipelineContext) -> None:
         min_per_section=min_per_section,
     )
 
-    result = _structured_call(ctx.worker, prompt, SourceAssignmentPlan, ctx.callbacks)
+    result = _structured_call(ctx.worker, prompt, SourceAssignmentPlan, ctx.tracker)
 
     # Patch: ensure every selected source appears in at least one assignment.
     # The LLM may skip some; assign stragglers to the best-fit section by
@@ -1428,7 +1399,7 @@ def _make_write_full(
             ctx.writer,
             f"You are an expert academic writer producing essays in {language}.",
             prompt,
-            ctx.callbacks,
+            ctx.tracker,
         )
         _write_text(
             ctx.run_dir / "essay" / "draft.md",
@@ -1479,7 +1450,7 @@ def _make_review_full(
             ctx.reviewer,
             f"You are an expert academic editor polishing essays in {language}.",
             prompt,
-            ctx.callbacks,
+            ctx.tracker,
         )
         _write_text(
             ctx.run_dir / "essay" / "reviewed.md",
@@ -1576,7 +1547,7 @@ def _make_write_sections(
                 ctx.writer,
                 f"You are an expert academic writer producing essays in {language}.",
                 prompt,
-                ctx.callbacks,
+                ctx.tracker,
             )
             dur = monotonic() - t0
 
@@ -1670,7 +1641,7 @@ def _make_review_sections(
                 ctx.reviewer,
                 f"You are an expert academic editor polishing essays in {language}.",
                 prompt,
-                ctx.callbacks,
+                ctx.tracker,
             )
             dur = monotonic() - t0
 
@@ -1880,14 +1851,13 @@ def _build_execution_steps(
 
 
 def run_pipeline(
-    worker: BaseChatModel,
-    writer: BaseChatModel,
-    reviewer: BaseChatModel,
+    worker: ModelClient,
+    writer: ModelClient,
+    reviewer: ModelClient,
     run_dir: Path,
     config: EssayWriterConfig,
     *,
     extra_prompt: str | None = None,
-    callbacks: list | None = None,
     token_tracker=None,
     on_questions: Callable[[list[ValidationQuestion], Path], None] | None = None,
     on_optional_source_pdfs: Callable[[Path, list[dict]], None] | None = None,
@@ -1906,7 +1876,6 @@ def run_pipeline(
         run_dir=run_dir,
         config=config,
         extra_prompt=extra_prompt,
-        callbacks=callbacks,
         tracker=token_tracker,
         user_sources_dir=user_sources_dir,
         on_optional_source_pdfs=on_optional_source_pdfs,

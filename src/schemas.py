@@ -12,6 +12,24 @@ import json
 from pydantic import BaseModel, field_validator, model_validator
 
 
+def _parse_stringified_list_value(v: object) -> object:
+    """Best-effort parsing for providers that serialize arrays as strings."""
+    if isinstance(v, str):
+        try:
+            parsed = json.loads(v)
+            if isinstance(parsed, list):
+                return parsed
+        except (json.JSONDecodeError, ValueError):
+            pass
+        try:
+            parsed = ast.literal_eval(v)
+            if isinstance(parsed, list):
+                return parsed
+        except (ValueError, SyntaxError):
+            pass
+    return v
+
+
 # -- Brief -----------------------------------------------------------------
 
 
@@ -88,15 +106,31 @@ class EssayPlan(BaseModel):
 
     title: str
     thesis: str
-    sections: list[PlanSection]
+    sections: list[PlanSection] = []
     research_queries: list[str] = []
     total_word_target: int = 0
 
+    @field_validator("sections", "research_queries", mode="before")
+    @classmethod
+    def _parse_stringified_plan_lists(cls, v: object) -> object:
+        return _parse_stringified_list_value(v)
+
     @model_validator(mode="after")
     def _derive_totals(self) -> EssayPlan:
-        """Compute total_word_target from sections when the model omits it."""
+        """Normalize totals and reject incomplete essay plans."""
         if not self.total_word_target and self.sections:
             self.total_word_target = sum(s.word_target for s in self.sections)
+        issues: list[str] = []
+        if not self.sections:
+            issues.append("sections must be a non-empty array of section objects")
+        if not self.research_queries:
+            issues.append("research_queries must be a non-empty array of strings")
+        if self.total_word_target <= 0:
+            issues.append("total_word_target must be a positive integer")
+        if any(section.word_target <= 0 for section in self.sections):
+            issues.append("each section.word_target must be a positive integer")
+        if issues:
+            raise ValueError("; ".join(issues))
         return self
 
 
@@ -134,21 +168,10 @@ class SourceNote(BaseModel):
         with quote styles.  As a last resort, wrap the string in a single-element
         list so we never lose data.
         """
+        parsed = _parse_stringified_list_value(v)
+        if parsed is not v:
+            return parsed
         if isinstance(v, str):
-            # 1. Try strict JSON
-            try:
-                parsed = json.loads(v)
-                if isinstance(parsed, list):
-                    return parsed
-            except (json.JSONDecodeError, ValueError):
-                pass
-            # 2. Try Python literal (handles mixed quoting, trailing commas)
-            try:
-                parsed = ast.literal_eval(v)
-                if isinstance(parsed, list):
-                    return parsed
-            except (ValueError, SyntaxError):
-                pass
             # 3. Last resort: treat entire string as one item
             if v.strip():
                 return [v]

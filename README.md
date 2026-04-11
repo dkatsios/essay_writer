@@ -1,13 +1,13 @@
 # Essay Writer
 
-AI-powered academic essay generator for Greek university students. Uses a deterministic Python pipeline with direct LangChain model calls to research, plan, write, review, and export formatted `.docx` essays.
+AI-powered academic essay generator for Greek university students. Uses a deterministic Python pipeline with OpenAI SDK + Instructor to research, plan, write, review, and export formatted `.docx` essays.
 
 ## Features
 
 - Deterministic 8-step Python pipeline (intake → validate → plan → research → read → write → review → export)
 - Three model roles: worker (fast model for research/planning), writer (quality model for essay text), and reviewer (highest-quality model for polishing)
-- Direct LangChain model calls with no orchestration framework or middleware layer
-- `model.with_structured_output()` for automatic Pydantic-validated JSON outputs with retry
+- OpenAI SDK + Instructor for model calls with no orchestration framework or middleware layer
+- Instructor-powered structured output with automatic Pydantic validation and retry
 - Interactive validation: catches incomplete assignments and prompts for missing info before proceeding
 - Deterministic academic source research via Semantic Scholar, OpenAlex, and Crossref
 - Selects the best source subset and uses that selection during essay generation

@@ -37,7 +37,7 @@ docker run -p 8000:8000 --env-file .env essay-writer
 uv run python -m pytest tests/ -v
 
 # Import check
-uv run python -c "from src.agent import create_model, invoke_with_retry"
+uv run python -c "from src.agent import create_client, _retry_with_backoff"
 ```
 
 ## Documentation Sync

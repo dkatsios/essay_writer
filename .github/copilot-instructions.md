@@ -33,22 +33,22 @@ docker run -p 8000:8000 --env-file .env essay-writer
 uv run python -m pytest tests/ -v
 
 # Import check
-uv run python -c "from src.agent import create_model, invoke_with_retry"
+uv run python -c "from src.agent import create_client, _retry_with_backoff"
 ```
 
 ## Architecture
 
-Deterministic Python pipeline for academic essay writing using direct LangChain model calls rather than a deepagents/LangGraph orchestration layer. Produces academic essays as formatted `.docx` files in the language specified by the assignment brief (defaults to Greek). A Python pipeline (`src/pipeline.py`) controls the workflow; three LLM model roles — **worker**, **writer**, and **reviewer** — perform the language tasks.
+Deterministic Python pipeline for academic essay writing using the OpenAI SDK + Instructor rather than a deepagents/LangGraph orchestration layer. Produces academic essays as formatted `.docx` files in the language specified by the assignment brief (defaults to Greek). A Python pipeline (`src/pipeline.py`) controls the workflow; three LLM model roles — **worker**, **writer**, and **reviewer** — perform the language tasks.
 
 ### Flow
 
-1. **Intake** (worker) — reads extracted text, produces `AssignmentBrief` via `model.with_structured_output()`
+1. **Intake** (worker) — reads extracted text, produces `AssignmentBrief` via Instructor structured output
 2. **Validate** (worker) — checks brief completeness; if gaps found, prompts user interactively and updates brief JSON
 3. **Plan** (worker) — creates sections, word targets, research queries → `EssayPlan` via structured output
 4. **Research** — pure Python: extracts queries from plan, calls `run_research()` → `registry.json`
 5. **Read sources** (worker, parallel) — pipeline fetches URLs via `fetch_url_content()`, then worker extracts `SourceNote` via structured output
 5.5. **Assign sources** (worker, long path only) — assigns selected sources to sections based on content fit → `source_assignments.json`
-6. **Write** (writer) — writes the complete essay via `model.invoke()` → `draft.md`
+6. **Write** (writer) — writes the complete essay via OpenAI SDK `chat.completions.create()` → `draft.md`
 7. **Review** (reviewer) — reviews draft, writes polished version → `reviewed.md`
 8. **Export** — pure Python `build_document()` call → `essay.docx`
 
@@ -62,9 +62,9 @@ Deterministic Python pipeline for academic essay writing using direct LangChain 
 
 Set `models.provider` (or `ESSAY_WRITER_MODELS__PROVIDER`) to `google`, `openai`, or `anthropic` to switch all three roles at once. Individual role overrides still take precedence.
 
-This runtime is a direct pipeline, not a deepagents/LangGraph system. The pipeline calls models directly:
-- `model.with_structured_output(PydanticSchema)` for JSON steps (auto-retry on validation failure)
-- `model.invoke([SystemMessage, HumanMessage])` for text steps (essays)
+This runtime is a direct pipeline, not a deepagents/LangGraph system. The pipeline calls models via:
+- Instructor `client.chat.completions.create(response_model=PydanticSchema)` for JSON steps (auto-retry on validation failure)
+- OpenAI SDK `client.chat.completions.create(messages=[...])` for text steps (essays)
 
 Historical note: `docs/DEEPAGENTS_REFERENCE.md` is archival design material only and is not authoritative for the current codebase.
 
@@ -129,17 +129,17 @@ No `default.yaml` exists; field defaults in `schemas.py` are canonical.
 ### Key Invariants
 
 - **Deterministic pipeline** — `src/pipeline.py` runs steps in sequence. No LLM decides the flow. Steps 1–5 use the worker model; step 6 uses the writer model; step 7 uses the reviewer model; step 8 is pure Python.
-- **Direct model calls** — no agent framework. `_structured_call()` uses `model.with_structured_output(Schema)` for JSON steps with auto-retry on validation failure. `_text_call()` uses `model.invoke()` for text steps.
+- **Direct model calls** — no agent framework. `_structured_call()` uses Instructor `client.chat.completions.create(response_model=Schema)` for JSON steps with auto-retry on validation failure. `_text_call()` uses OpenAI SDK `client.chat.completions.create()` for text steps.
 - **Jinja2 templates** (`src/templates/*.j2`) render prompts. 8 templates, one per pipeline task.
 - **Plain function tools** — `run_research()`, `fetch_url_content()`, `read_pdf_text()`, `read_docx_text()` are plain Python functions called by the pipeline. No `@tool` decorators.
-- **Retry logic** — `invoke_with_retry()` in `src/agent.py` handles transient 429/503 API errors and timeouts with exponential backoff. All models are created with a 300-second request timeout (`_REQUEST_TIMEOUT`) to prevent hung connections. `_structured_call()` retries on Pydantic `ValidationError`.
+- **Retry logic** — `_retry_with_backoff()` in `src/agent.py` handles transient 429/503 API errors and timeouts with exponential backoff. All clients are created with a 300-second request timeout (`_REQUEST_TIMEOUT`) to prevent hung connections. Instructor handles validation retries.
 - **Input flow** — `scan()` extracts content and `build_extracted_text()` writes `input/extracted.md` directly into the run directory. The pipeline reads that file and passes it to the intake template.
 - **`run_research()`** — runs queries with bounded query-level concurrency, fans each query out across Semantic Scholar, OpenAlex, and Crossref, deduplicates by DOI/title, and writes registry JSON. Zero LLM tokens consumed.
 - **Config-backed search controls** — `search.fetch_per_api` sets the per-API-per-query fetch limit (default 20), independent of how many sources the essay ultimately uses.
 - **Citation-aware ranking** — after deduplication, sources are sorted by citation count (higher first), then accessibility tier (OA PDF > DOI > metadata-only) as tiebreaker. This ensures highly-cited paywalled papers outrank low-citation OA papers. OpenAlex requests use sort `relevance_score:desc`: that field is **OpenAlex’s API relevance** (how well each work matches that search request). It is unrelated to **`SourceNote.relevance_score`** in `schemas.py`, which is a **1–5 topic-fit score** assigned by the worker during source reading from the assignment brief’s `topic` (`source_reading.j2`).
 - **Shared HTTP transport** — search APIs and URL fetching use a shared `httpx.Client` with centralized retry behavior and connection pooling in `src/tools/_http.py`.
 - **Pricing** — cost reporting in `src/runner.py` uses the `genai-prices` package for automatic per-model pricing across all providers.
-- **Parallel source reading** — `asyncio.gather()` with `Semaphore(6)` reads **every** API row in `registry.json` (plus all user uploads) concurrently, bounded only by registry size. URL fetching runs in `asyncio.to_thread()`, LLM calls use `ainvoke_with_retry()`.
+- **Parallel source reading** — `asyncio.gather()` with `Semaphore(6)` reads **every** API row in `registry.json` (plus all user uploads) concurrently, bounded only by registry size. URL fetching runs in `asyncio.to_thread()`, LLM calls use async Instructor client.
 - **`_select_best_sources`** — builds `sources/selected.json` with up to `target_sources` IDs. Sources with `relevance_score < 2` (barely relevant) are filtered out before ranking. Only sources whose `SourceNote` has `is_accessible` are ranked; the rest are “inaccessible” for ordering. Sort keys (all descending where numeric, `reverse=True` on the composite tuple): **`user_provided`** in registry (user uploads first), **`SourceNote.relevance_score`**, registry row has at least one non-blank author string, registry **`citation_count`**, then **`content_word_count`** on the note. If fewer than `target_sources` are accessible, remaining slots are filled from inaccessible IDs in encounter order (no re-ranking).
 - **Source target scaling** — `target_sources` uses log-based scaling (`sources_per_1k_words × 3 × log2(1 + words/1000)`) for diminishing marginal growth, floored by `search.min_sources` or the brief/user minimum. The web UI auto-fills the suggested source count when the user enters a word target. `fetch_sources` is `max(target_sources, target × overfetch_multiplier)`. After plan, `brief.min_sources` is set to `max(target_sources, user/brief minimum)` so writers always see a citation floor aligned with the selected-source target.
 - **Selected sources drive writing** — after source reading, `sources/selected.json` is the preferred source set for essay generation. If the selected set has no accessible notes, the pipeline falls back to all accessible notes.

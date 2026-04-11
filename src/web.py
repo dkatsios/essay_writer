@@ -28,12 +28,12 @@ from jinja2 import Environment, FileSystemLoader
 load_dotenv()
 
 from config.schemas import ModelsConfig, _PROVIDER_PRESETS, load_config  # noqa: E402
-from src.agent import create_model  # noqa: E402
+from src.agent import create_client  # noqa: E402
 from src.intake import build_extracted_text, scan  # noqa: E402
 from src.pipeline import run_pipeline  # noqa: E402
 from src.tools._http import http_get  # noqa: E402
 from src.tools.web_fetcher import extract_pdf_bytes_to_text  # noqa: E402
-from src.runner import TokenTracker, _StepTimer, _make_callbacks  # noqa: E402
+from src.runner import TokenTracker, _StepTimer  # noqa: E402
 from src.runner import _parse_validation_answers  # noqa: E402
 from src.schemas import AssignmentBrief, Clarification, ValidationQuestion  # noqa: E402
 
@@ -306,14 +306,13 @@ def _run_pipeline_thread(
 
         _api_key = job.api_key or None
         job.api_key = ""  # clear from memory immediately
-        worker = create_model(config.models.worker, api_key=_api_key)
-        writer = create_model(config.models.writer, api_key=_api_key)
-        reviewer = create_model(config.models.reviewer, api_key=_api_key)
+        worker = create_client(config.models.worker, api_key=_api_key)
+        writer = create_client(config.models.writer, api_key=_api_key)
+        reviewer = create_client(config.models.reviewer, api_key=_api_key)
 
         timer = _StepTimer()
         tracker = TokenTracker()
         job.tracker = tracker
-        callbacks = _make_callbacks(timer, tracker)
 
         def _on_questions(questions: list[ValidationQuestion], rd: Path) -> None:
             # Auto-answer academic level question if user already chose one
@@ -406,7 +405,6 @@ def _run_pipeline_thread(
             run_dir,
             config,
             extra_prompt=prompt,
-            callbacks=callbacks,
             token_tracker=tracker,
             on_questions=_on_questions,
             on_optional_source_pdfs=_on_optional_pdfs,
