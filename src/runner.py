@@ -78,9 +78,18 @@ def _calc_cost(
 
 
 def _model_short_name(full_name: str) -> str:
-    """Extract model name from full spec like 'google_genai:gemini-2.5-flash'."""
+    """Extract model name from full spec like 'google_genai:gemini-2.5-flash'.
+
+    Also strips LiteLLM gateway prefixes (e.g. ``vertex_ai.anthropic.``,
+    ``openai.``, ``vertex_ai.``) so the bare model name reaches genai-prices.
+    """
     if ":" in full_name:
         full_name = full_name.split(":", 1)[1]
+    # Strip LiteLLM-style gateway/provider prefixes
+    for prefix in ("vertex_ai.anthropic.", "vertex_ai.", "openai."):
+        if full_name.startswith(prefix):
+            full_name = full_name[len(prefix) :]
+            break
     # Remove version suffixes like -001
     for suffix in ("-001", "-002", "-latest"):
         full_name = full_name.removesuffix(suffix)
