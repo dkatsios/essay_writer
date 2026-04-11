@@ -336,6 +336,7 @@
     /** Avoid overwriting the form after the user edits post-job; one restore per job per page load. */
     let submitSnapshotAppliedForJob = null;
     let pollTimer = null;
+    let eventSource = null;
     let downloadInProgress = false;
     /** Read-only HTML for submitted Q&A rounds; kept visible while the pipeline runs. */
     let clarificationsHistoryHtml = '';
@@ -381,8 +382,7 @@
     }
 
     function abandonRun() {
-      clearInterval(pollTimer);
-      pollTimer = null;
+      stopSSE();
       setActiveJobId(null);
       clarificationsHistoryHtml = '';
       optionalPdfRoundItems = [];
@@ -408,9 +408,7 @@
       statusArea.innerHTML =
         '<p class="hint resume-hint">Resuming your run — you can refresh this page or bookmark the URL while the server works.</p>' +
         '<div class="pipeline-status"><span class="spinner"></span> Connecting…</div>';
-      clearInterval(pollTimer);
-      pollTimer = setInterval(pollStatus, 3000);
-      void pollStatus();
+      startSSE();
       return true;
     }
 
@@ -424,8 +422,7 @@
 
     form.addEventListener('submit', async (e) => {
       e.preventDefault();
-      clearInterval(pollTimer);
-      pollTimer = null;
+      stopSSE();
       setActiveJobId(null);
       submitBtn.disabled = true;
       clarificationsHistoryHtml = '';
@@ -451,8 +448,7 @@
         if (data.error) { showError(data.error); return; }
         setActiveJobId(data.job_id);
         statusArea.innerHTML = '<span class="spinner"></span> Starting…';
-        pollTimer = setInterval(pollStatus, 3000);
-        void pollStatus();
+        startSSE();
       } catch (err) {
         showError('Failed to submit: ' + err.message);
       }
@@ -470,39 +466,74 @@
           return;
         }
         const data = await res.json();
-        syncHistoryFromStatus(data);
-        applySubmitSnapshotFromStatus(data);
-
-        if (data.status === 'running') {
-          const pipelineEl = statusArea.querySelector('.pipeline-status');
-          const line = runningStatusHtml(data.stage);
-          if (pipelineEl) {
-            pipelineEl.innerHTML = line;
-          } else if (!clarificationsHistoryHtml) {
-            statusArea.innerHTML = line;
-          }
-        } else if (data.status === 'questions') {
-          clearInterval(pollTimer);
-          showQuestions(data.questions);
-        } else if (data.status === 'optional_pdfs') {
-          clearInterval(pollTimer);
-          showOptionalPdfPrompt(data.optional_pdf_items || []);
-        } else if (data.status === 'done') {
-          clearInterval(pollTimer);
-          statusArea.innerHTML =
-            clarificationsHistoryHtml +
-            '<p>✅ Essay generated!</p>' +
-            '<button type="button" class="download-link" id="download-btn">Download ZIP</button>' +
-            '<p class="hint">The server removes this package after you download it, or automatically after a timeout if you leave it here.</p>';
-          submitBtn.disabled = false;
-          const dl = document.getElementById('download-btn');
-          if (dl) dl.addEventListener('click', () => { void downloadZip(); });
-        } else if (data.status === 'error') {
-          clearInterval(pollTimer);
-          showError(data.error || 'Unknown error');
-        }
+        handleStatusUpdate(data);
       } catch (err) {
         /* ignore transient fetch errors */
+      }
+    }
+
+    function startSSE() {
+      stopSSE();
+      if (!jobId) return;
+      eventSource = new EventSource('/stream/' + jobId);
+      eventSource.onmessage = function(event) {
+        try {
+          var data = JSON.parse(event.data);
+        } catch (e) { return; }
+        handleStatusUpdate(data);
+      };
+      eventSource.onerror = function() {
+        // EventSource auto-reconnects on transient failures.
+        // Terminal states (done/error/gone) close via handleStatusUpdate.
+      };
+    }
+
+    function stopSSE() {
+      clearInterval(pollTimer);
+      pollTimer = null;
+      if (eventSource) {
+        eventSource.close();
+        eventSource = null;
+      }
+    }
+
+    function handleStatusUpdate(data) {
+      syncHistoryFromStatus(data);
+      applySubmitSnapshotFromStatus(data);
+
+      if (data.status === 'gone') {
+        stopSSE();
+        showJobGone(
+          'This job is no longer on the server (expired timeout or already cleaned up). If you already downloaded your ZIP, that is expected.'
+        );
+        return;
+      }
+
+      if (data.status === 'running') {
+        const pipelineEl = statusArea.querySelector('.pipeline-status');
+        const line = runningStatusHtml(data.stage);
+        if (pipelineEl) {
+          pipelineEl.innerHTML = line;
+        } else if (!clarificationsHistoryHtml) {
+          statusArea.innerHTML = line;
+        }
+      } else if (data.status === 'questions') {
+        showQuestions(data.questions);
+      } else if (data.status === 'optional_pdfs') {
+        showOptionalPdfPrompt(data.optional_pdf_items || []);
+      } else if (data.status === 'done') {
+        stopSSE();
+        statusArea.innerHTML =
+          clarificationsHistoryHtml +
+          '<p>✅ Essay generated!</p>' +
+          '<button type="button" class="download-link" id="download-btn">Download ZIP</button>' +
+          '<p class="hint">The server removes this package after you download it, or automatically after a timeout if you leave it here.</p>';
+        submitBtn.disabled = false;
+        const dl = document.getElementById('download-btn');
+        if (dl) dl.addEventListener('click', () => { void downloadZip(); });
+      } else if (data.status === 'error') {
+        stopSSE();
+        showError(data.error || 'Unknown error');
       }
     }
 
@@ -655,8 +686,7 @@
       statusArea.innerHTML =
         clarificationsHistoryHtml +
         '<div class="pipeline-status"><span class="spinner"></span> Starting…</div>';
-      pollTimer = setInterval(pollStatus, 3000);
-      void pollStatus();
+      startSSE();
     }
 
     function showOptionalPdfPrompt(items) {
@@ -798,21 +828,18 @@
       statusArea.innerHTML =
         clarificationsHistoryHtml +
         '<div class="pipeline-status"><span class="spinner"></span> Reading sources…</div>';
-      pollTimer = setInterval(pollStatus, 3000);
-      void pollStatus();
+      startSSE();
     }
 
     function showError(msg) {
-      clearInterval(pollTimer);
-      pollTimer = null;
+      stopSSE();
       statusArea.innerHTML =
         clarificationsHistoryHtml + `<p class="error">❌ ${esc(msg)}</p>`;
       submitBtn.disabled = false;
     }
 
     function showJobGone(msg) {
-      clearInterval(pollTimer);
-      pollTimer = null;
+      stopSSE();
       statusArea.innerHTML =
         clarificationsHistoryHtml +
         `<p class="job-gone">${esc(msg)}</p>`;

@@ -7,7 +7,7 @@ from unittest.mock import MagicMock
 
 from fastapi.testclient import TestClient
 
-from src.web import Job, _jobs, app, job_ttl_sweep_once
+from src.web import Job, _jobs, app, job_ttl_sweep_once, _notify_job
 
 client = TestClient(app)
 
@@ -151,3 +151,73 @@ def test_optional_pdf_url_updates_registry(tmp_path, monkeypatch):
     assert r.json().get("status") == "ok"
     updated = json.loads((sources / "registry.json").read_text(encoding="utf-8"))
     assert "content_path" in updated["src_a"]
+
+
+def test_stream_sse_returns_done_event(tmp_path):
+    """SSE endpoint sends the current status as a JSON event and closes on terminal state."""
+    jid = "ssejob000001"
+    _jobs[jid] = Job(
+        job_id=jid, run_dir=Path(tmp_path), status="done", finished_at=time.time()
+    )
+
+    with client.stream("GET", f"/stream/{jid}") as resp:
+        assert resp.status_code == 200
+        assert resp.headers["content-type"].startswith("text/event-stream")
+        lines = []
+        for line in resp.iter_lines():
+            lines.append(line)
+    # SSE format: "data: {json}"
+    data_lines = [l for l in lines if l.startswith("data: ")]
+    assert len(data_lines) >= 1
+    payload = json.loads(data_lines[0].removeprefix("data: "))
+    assert payload["status"] == "done"
+    _jobs.pop(jid, None)
+
+
+def test_stream_sse_gone_for_missing_job():
+    """SSE endpoint returns a 'gone' event for unknown job IDs."""
+    jid = "ssemissing01"
+    _jobs.pop(jid, None)
+
+    with client.stream("GET", f"/stream/{jid}") as resp:
+        assert resp.status_code == 200
+        lines = list(resp.iter_lines())
+    data_lines = [l for l in lines if l.startswith("data: ")]
+    assert len(data_lines) == 1
+    payload = json.loads(data_lines[0].removeprefix("data: "))
+    assert payload["status"] == "gone"
+
+
+def test_stream_sse_notify_sends_update(tmp_path):
+    """_notify_job causes SSE to send a new event when status changes."""
+    import threading
+
+    jid = "ssenotify001"
+    job = Job(job_id=jid, run_dir=Path(tmp_path), status="running")
+    _jobs[jid] = job
+
+    events = []
+
+    def _consume():
+        with client.stream("GET", f"/stream/{jid}") as resp:
+            for line in resp.iter_lines():
+                if line.startswith("data: "):
+                    events.append(json.loads(line.removeprefix("data: ")))
+
+    t = threading.Thread(target=_consume, daemon=True)
+    t.start()
+
+    # Give SSE time to connect and send initial event
+    time.sleep(0.3)
+
+    # Transition to done
+    job.status = "done"
+    job.finished_at = time.time()
+    _notify_job(job)
+
+    t.join(timeout=5)
+    _jobs.pop(jid, None)
+
+    assert len(events) >= 2
+    assert events[0]["status"] == "running"
+    assert events[-1]["status"] == "done"

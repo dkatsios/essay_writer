@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
@@ -102,9 +103,38 @@ class Job:
     """``source_id -> \"file\"|\"url\"`` for the current optional-PDF step."""
     fast_track: bool = False
     """If True, do not pause for the optional full-text PDF upload step."""
+    _sse_event: threading.Event = field(default_factory=threading.Event)
+    """Set whenever job state changes to wake SSE listeners."""
 
 
 _jobs: dict[str, Job] = {}
+
+
+def _notify_job(job: Job) -> None:
+    """Signal SSE listeners that job state changed."""
+    job._sse_event.set()
+
+
+def _build_status_payload(job: Job) -> dict:
+    """Build the status JSON dict shared by ``/status`` and ``/stream``."""
+    resp: dict = {"status": job.status}
+    if job.status == "running" and job.tracker is not None:
+        resp["stage"] = job.tracker.get_current_step()
+    if job.status == "questions" and job.questions:
+        resp["questions"] = job.questions
+    if job.status == "optional_pdfs" and job.optional_pdf_items:
+        resp["optional_pdf_items"] = job.optional_pdf_items
+    if job.status == "error":
+        resp["error"] = job.error
+    resp["clarification_rounds"] = job.clarification_rounds
+    resp["optional_pdf_rounds"] = job.optional_pdf_rounds
+    resp["submit"] = {
+        "prompt": job.submit_prompt,
+        "academic_level": job.academic_level,
+        "target_words": job.target_words,
+        "min_sources": job.min_sources,
+    }
+    return resp
 
 
 def _append_clarification_round_for_ui(job: Job, answers: str) -> None:
@@ -260,6 +290,7 @@ def _run_pipeline_thread(
             job.status = "error"
             job.error = "Provide at least a prompt or upload files."
             job.finished_at = time.time()
+            _notify_job(job)
             return
 
         (input_dir / "extracted.md").write_text(extracted_text, encoding="utf-8")
@@ -319,6 +350,7 @@ def _run_pipeline_thread(
                 for q in remaining
             ]
             job.status = "questions"
+            _notify_job(job)
             job.answers_event.clear()
             # Block until web user submits answers
             job.answers_event.wait()
@@ -350,6 +382,7 @@ def _run_pipeline_thread(
                 str(row["source_id"]) for row in items
             )
             job.status = "optional_pdfs"
+            _notify_job(job)
             job.optional_pdf_event.clear()
             job.optional_pdf_event.wait()
             job.optional_pdf_items = None
@@ -379,12 +412,14 @@ def _run_pipeline_thread(
         tracker.write_report(run_dir)
         job.status = "done"
         job.finished_at = time.time()
+        _notify_job(job)
 
     except Exception:
         logger.exception("Pipeline failed for job %s", job.job_id)
         job.status = "error"
         job.error = "Pipeline failed. Check server logs for details."
         job.finished_at = time.time()
+        _notify_job(job)
 
 
 # ---------------------------------------------------------------------------
@@ -495,29 +530,66 @@ async def submit(
 
 @app.get("/status/{job_id}")
 async def status(job_id: str):
-    """Poll job status."""
+    """Poll job status (kept for backward compatibility; prefer ``/stream`` SSE)."""
     job = _jobs.get(job_id)
     if not job:
         return JSONResponse({"error": "Job not found"}, status_code=404)
+    return JSONResponse(_build_status_payload(job))
 
-    resp: dict = {"status": job.status}
-    if job.status == "running" and job.tracker is not None:
-        resp["stage"] = job.tracker.get_current_step()
-    if job.status == "questions" and job.questions:
-        resp["questions"] = job.questions
-    if job.status == "optional_pdfs" and job.optional_pdf_items:
-        resp["optional_pdf_items"] = job.optional_pdf_items
-    if job.status == "error":
-        resp["error"] = job.error
-    resp["clarification_rounds"] = job.clarification_rounds
-    resp["optional_pdf_rounds"] = job.optional_pdf_rounds
-    resp["submit"] = {
-        "prompt": job.submit_prompt,
-        "academic_level": job.academic_level,
-        "target_words": job.target_words,
-        "min_sources": job.min_sources,
-    }
-    return JSONResponse(resp)
+
+_SSE_POLL_INTERVAL = 2.0  # seconds between stage-change checks during "running"
+
+
+@app.get("/stream/{job_id}")
+async def stream(job_id: str):
+    """Server-Sent Events stream for real-time job status updates."""
+    job = _jobs.get(job_id)
+
+    async def generate():
+        if job is None:
+            yield f"data: {json.dumps({'status': 'gone'})}\n\n"
+            return
+
+        last_json: str | None = None
+
+        # Send initial state immediately
+        payload = _build_status_payload(job)
+        last_json = json.dumps(payload, ensure_ascii=False)
+        yield f"data: {last_json}\n\n"
+
+        if job.status in ("done", "error"):
+            return
+
+        while True:
+            # Wait for explicit notification or timeout (catches stage changes)
+            await asyncio.to_thread(job._sse_event.wait, _SSE_POLL_INTERVAL)
+            job._sse_event.clear()
+
+            # Job removed (downloaded or TTL sweep)
+            if job_id not in _jobs:
+                yield f"data: {json.dumps({'status': 'gone'})}\n\n"
+                return
+
+            payload = _build_status_payload(job)
+            payload_json = json.dumps(payload, ensure_ascii=False)
+
+            # Only send when something changed
+            if payload_json != last_json:
+                last_json = payload_json
+                yield f"data: {payload_json}\n\n"
+
+            if job.status in ("done", "error"):
+                return
+
+    return StreamingResponse(
+        generate(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 @app.post("/answer/{job_id}")
@@ -532,6 +604,7 @@ async def answer(job_id: str, answers: str = Form("")):
     job.answers = answers
     _append_clarification_round_for_ui(job, answers)
     job.status = "running"
+    _notify_job(job)
     job.answers_event.set()
     return JSONResponse({"status": "ok"})
 
@@ -653,6 +726,7 @@ async def optional_pdf_done(job_id: str):
 
     _append_optional_pdf_round_for_ui(job)
     job.status = "running"
+    _notify_job(job)
     job.optional_pdf_event.set()
     return JSONResponse({"status": "ok"})
 
