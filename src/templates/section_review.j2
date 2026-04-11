@@ -18,7 +18,7 @@ Output ONLY the improved version of the target section — do NOT output adjacen
 
 ## Review Focus
 - Fix grammar, spelling, and awkward phrasing.
-- Tighten prose: eliminate filler, redundancy, and unnecessary qualifiers.
+- Improve clarity and precision: replace weak or vague phrasing with better phrasing of similar length rather than deleting content.
 - Improve transitions to/from adjacent sections for coherent reading.
 - Ensure clarity and precision — prefer concise, direct expression.
 - Headings must be plain text with `#` markers only — remove any `**` or `*` wrapping from headings.
@@ -35,15 +35,19 @@ Output ONLY the improved version of the target section — do NOT output adjacen
 
 ## Word Count — CRITICAL
 {% set delta = section_words - section.word_target %}
-{% set tolerance = (section.word_target * tolerance_ratio) | int %}
-{% if delta > tolerance %}
-⚠ The section is **{{ section_words }}** words — **{{ delta }}** words OVER the target of {{ section.word_target }}.
-You MUST cut approximately {{ delta }} words. Remove redundancy, tighten phrasing, eliminate filler.
+{% set over_tolerance = (section.word_target * tolerance_ratio_over) | int %}
+{% set under_tolerance = (section.word_target * tolerance_ratio) | int %}
+{% set floor_words = section.word_target - under_tolerance %}
+{% if delta > over_tolerance %}
+⚠ The section is **{{ section_words }}** words — **{{ delta }}** words OVER the target of {{ section.word_target }} (over-tolerance: {{ tolerance_percent_over }}%).
+Cut approximately {{ delta - over_tolerance }} to {{ delta }} words. Remove redundancy, tighten phrasing, eliminate filler.
 Do NOT add new content. Focus on making the text leaner while preserving every argument and citation.
-{% elif delta < -tolerance %}
+{% elif delta < -under_tolerance %}
 ⚠ The section is **{{ section_words }}** words — **{{ (-delta) }}** words UNDER the target of {{ section.word_target }}.
 You MUST expand by approximately {{ (-delta) }} words. Elaborate on existing points with more detail or nuance — do NOT introduce new arguments or dramatic language.
 {% else %}
-The section is **{{ section_words }}** words (target: {{ section.word_target }}). Length is acceptable (within ±{{ tolerance_percent }}%).
+The section is **{{ section_words }}** words (target: {{ section.word_target }}). Length is acceptable.
 Focus on quality improvements only. Do NOT significantly change the word count.
 {% endif %}
+
+**Hard floor: your output MUST be at least {{ floor_words }} words.** Falling below the target word count is much worse than being slightly over it. When in doubt, keep content rather than cutting it.

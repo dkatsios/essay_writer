@@ -305,10 +305,12 @@ class TestConfigBackedBehavior:
             section_words=96,
             tolerance_ratio=0.05,
             tolerance_percent=5,
+            tolerance_ratio_over=0.20,
+            tolerance_percent_over=20,
             language="English",
         )
 
-        assert "within ±5%" in prompt
+        assert "at least" in prompt.lower()
 
 
 class TestValidationQuestionSuggestedIndex:

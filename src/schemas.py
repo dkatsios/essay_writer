@@ -89,8 +89,15 @@ class EssayPlan(BaseModel):
     title: str
     thesis: str
     sections: list[PlanSection]
-    research_queries: list[str]
-    total_word_target: int
+    research_queries: list[str] = []
+    total_word_target: int = 0
+
+    @model_validator(mode="after")
+    def _derive_totals(self) -> EssayPlan:
+        """Compute total_word_target from sections when the model omits it."""
+        if not self.total_word_target and self.sections:
+            self.total_word_target = sum(s.word_target for s in self.sections)
+        return self
 
 
 # -- Source notes ----------------------------------------------------------

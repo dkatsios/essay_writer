@@ -773,6 +773,17 @@ def _do_plan(ctx: PipelineContext) -> None:
     prompt = render_prompt("plan.j2", brief_json=brief_json, language=language)
 
     plan = _structured_call(ctx.worker, prompt, EssayPlan, ctx.callbacks)
+
+    # Fallback: derive research queries from the brief topic when the model omits them
+    if not plan.research_queries:
+        brief = json.loads(brief_json)
+        topic = brief.get("topic", "")
+        if topic:
+            plan.research_queries = [topic]
+            logger.warning(
+                "Plan had no research_queries; using brief topic as fallback query"
+            )
+
     _write_json(ctx.run_dir / "plan" / "plan.json", plan)
 
 
@@ -1453,6 +1464,10 @@ def _make_review_full(
             draft_words=draft_words,
             tolerance_ratio=ctx.config.writing.word_count_tolerance,
             tolerance_percent=round(ctx.config.writing.word_count_tolerance * 100),
+            tolerance_ratio_over=ctx.config.writing.word_count_tolerance_over,
+            tolerance_percent_over=round(
+                ctx.config.writing.word_count_tolerance_over * 100
+            ),
             language=language,
             min_sources=citation_min_sources,
             source_catalog=catalog_md,
@@ -1639,6 +1654,10 @@ def _make_review_sections(
                 section_words=section_words,
                 tolerance_ratio=ctx.config.writing.word_count_tolerance,
                 tolerance_percent=round(ctx.config.writing.word_count_tolerance * 100),
+                tolerance_ratio_over=ctx.config.writing.word_count_tolerance_over,
+                tolerance_percent_over=round(
+                    ctx.config.writing.word_count_tolerance_over * 100
+                ),
                 language=language,
             )
 

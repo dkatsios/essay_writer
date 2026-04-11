@@ -41,7 +41,7 @@ Review and improve the draft following the criteria below. Output the complete p
 ## Review Focus
 - If the draft opens with submission-form or title-page metadata (student name line, course code, course title, assignment title as an administrative block), remove it entirely; keep only the essay title and scholarly body.
 - Fix grammar, spelling, and awkward phrasing.
-- Tighten prose: eliminate filler, redundancy, and unnecessary qualifiers.
+- Improve clarity and precision: replace weak or vague phrasing with better phrasing of similar length rather than deleting content.
 - Headings must be plain text with `#` markers only — remove any `**` or `*` wrapping from headings.
 - Preserve **every** existing `[[source_id]]` marker — do NOT remove, drop, or merge them away when tightening prose; do NOT replace them with literal `(Author, Year)` text.
 - Do **not** reduce how many **distinct** sources are cited unless you are fixing a clear factual or formatting error.
@@ -51,15 +51,19 @@ Review and improve the draft following the criteria below. Output the complete p
 
 ## Word Count — CRITICAL
 {% set delta = draft_words - target_words %}
-{% set tolerance = (target_words * tolerance_ratio) | int %}
-{% if delta > tolerance %}
-⚠ The draft is **{{ draft_words }}** words — **{{ delta }}** words OVER the target of {{ target_words }}.
-You MUST cut approximately {{ delta }} words. Remove redundancy, tighten phrasing, eliminate filler.
+{% set over_tolerance = (target_words * tolerance_ratio_over) | int %}
+{% set under_tolerance = (target_words * tolerance_ratio) | int %}
+{% set floor_words = target_words - under_tolerance %}
+{% if delta > over_tolerance %}
+⚠ The draft is **{{ draft_words }}** words — **{{ delta }}** words OVER the target of {{ target_words }} (over-tolerance: {{ tolerance_percent_over }}%).
+Cut approximately {{ delta - over_tolerance }} to {{ delta }} words. Remove redundancy, tighten phrasing, eliminate filler.
 Do NOT add new content. Focus on making the text leaner while preserving every argument and citation.
-{% elif delta < -tolerance %}
+{% elif delta < -under_tolerance %}
 ⚠ The draft is **{{ draft_words }}** words — **{{ (-delta) }}** words UNDER the target of {{ target_words }}.
 You MUST expand by approximately {{ (-delta) }} words. Elaborate on existing points with more detail or nuance — do NOT introduce new arguments or dramatic language.
 {% else %}
-The draft is **{{ draft_words }}** words (target: {{ target_words }}). Length is acceptable (within ±{{ tolerance_percent }}%).
+The draft is **{{ draft_words }}** words (target: {{ target_words }}). Length is acceptable.
 Focus on quality improvements only. Do NOT significantly change the total word count.
 {% endif %}
+
+**Hard floor: your output MUST be at least {{ floor_words }} words.** Falling below the target word count is much worse than being slightly over it. When in doubt, keep content rather than cutting it.
