@@ -237,6 +237,7 @@ class TokenTracker:
         reviewed_words = _count_words(run_dir / "essay" / "reviewed.md")
         target_words = _parse_target_words(run_dir / "plan" / "plan.json")
         sources_count = _count_sources(run_dir / "sources" / "registry.json")
+        selected_count = _count_sources(run_dir / "sources" / "selected.json")
         essay_path = run_dir / "essay" / "reviewed.md"
         if not essay_path.exists():
             essay_path = run_dir / "essay" / "draft.md"
@@ -253,6 +254,8 @@ class TokenTracker:
         ]
         if sources_count:
             lines.append(f"| Sources fetched | {sources_count} |")
+        if selected_count:
+            lines.append(f"| Sources selected | {selected_count} |")
         if cited_count:
             lines.append(f"| Sources cited | {cited_count} |")
         if target_words:
