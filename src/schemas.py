@@ -6,6 +6,7 @@ brief, validation, plan, and source notes. Essays remain markdown.
 
 from __future__ import annotations
 
+import ast
 import json
 
 from pydantic import BaseModel, field_validator, model_validator
@@ -117,14 +118,33 @@ class SourceNote(BaseModel):
     @field_validator("authors", "relevant_extracts", mode="before")
     @classmethod
     def _parse_stringified_list(cls, v: object) -> object:
-        """Anthropic tool-based output sometimes serialises lists as JSON strings."""
+        """LLM structured output sometimes serialises lists as JSON strings.
+
+        Anthropic (and occasionally other providers) return ``["a", "b"]`` as a
+        plain string instead of a real JSON array.  ``json.loads`` handles clean
+        cases, but the model often embeds unescaped inner quotes or odd escaping
+        that breaks strict JSON parsing.  ``ast.literal_eval`` is more lenient
+        with quote styles.  As a last resort, wrap the string in a single-element
+        list so we never lose data.
+        """
         if isinstance(v, str):
+            # 1. Try strict JSON
             try:
                 parsed = json.loads(v)
                 if isinstance(parsed, list):
                     return parsed
             except (json.JSONDecodeError, ValueError):
                 pass
+            # 2. Try Python literal (handles mixed quoting, trailing commas)
+            try:
+                parsed = ast.literal_eval(v)
+                if isinstance(parsed, list):
+                    return parsed
+            except (ValueError, SyntaxError):
+                pass
+            # 3. Last resort: treat entire string as one item
+            if v.strip():
+                return [v]
         return v
 
     @property
