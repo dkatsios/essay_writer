@@ -1443,6 +1443,13 @@ def _make_review_full(
         draft = _read_text(ctx.run_dir / "essay" / "draft.md")
         draft_words = len(draft.split())
         language = _get_brief_language(ctx.run_dir)
+        source_notes = _load_selected_source_notes(ctx.run_dir)
+        catalog_md = _source_catalog_markdown(source_notes)
+        total_selected = len(source_notes)
+        cited_ids = set(re.findall(r"\[\[([^|\]]+?)(?:\|[^\]]*?)?\]\]", draft))
+        uncited_ids = [
+            n.source_id for n in source_notes if n.source_id not in cited_ids
+        ]
 
         prompt = render_prompt(
             "essay_review.j2",
@@ -1455,6 +1462,9 @@ def _make_review_full(
             tolerance_percent=round(ctx.config.writing.word_count_tolerance * 100),
             language=language,
             min_sources=citation_min_sources,
+            source_catalog=catalog_md,
+            total_selected_sources=total_selected,
+            uncited_ids=uncited_ids,
         )
 
         reviewed = _text_call(
