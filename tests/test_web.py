@@ -11,6 +11,7 @@ from fastapi.testclient import TestClient
 from config.schemas import EssayWriterConfig
 from src.web import (
     Job,
+    _JobInteractionTimeout,
     _jobs,
     _notify_job,
     _run_pipeline_thread,
@@ -131,6 +132,35 @@ def test_pipeline_thread_respects_interactive_validation_setting(tmp_path, monke
     _run_pipeline_thread(job, upload_dir=None, prompt="Test prompt")
 
     assert captured["on_questions"] is None
+
+
+def test_pipeline_thread_stops_after_question_timeout(tmp_path, monkeypatch):
+    job = Job(job_id="timeoutjob001", run_dir=Path(tmp_path), status="running")
+    captured = {"continued": False}
+
+    config = EssayWriterConfig()
+
+    monkeypatch.setattr("src.web.load_config", lambda: config)
+    monkeypatch.setattr("src.web.create_client", lambda *args, **kwargs: object())
+    monkeypatch.setattr("src.web._interaction_timeout_seconds", lambda: 0)
+
+    class _Question:
+        question = "Need clarification?"
+        options = ["Yes", "No"]
+        suggested_option_index = 0
+
+    def fake_run_pipeline(*args, **kwargs):
+        kwargs["on_questions"]([_Question()], Path(tmp_path))
+        captured["continued"] = True
+
+    monkeypatch.setattr("src.web.run_pipeline", fake_run_pipeline)
+
+    _run_pipeline_thread(job, upload_dir=None, prompt="Test prompt")
+
+    assert captured["continued"] is False
+    assert job.status == "error"
+    assert job.error == "Timed out waiting for clarification answers."
+    assert job.finished_at is not None
 
 
 def test_optional_pdf_upload_updates_registry(tmp_path):

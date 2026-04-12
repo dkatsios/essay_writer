@@ -49,6 +49,28 @@ class TestRetryWithBackoff:
         finally:
             src.agent.time.sleep = original_sleep
 
+    def test_retries_on_timeout(self):
+        from src.agent import _retry_with_backoff
+
+        calls = []
+
+        def fn():
+            calls.append(1)
+            if len(calls) == 1:
+                raise TimeoutError("Request timed out")
+            return "ok"
+
+        import src.agent
+
+        original_sleep = src.agent.time.sleep
+        src.agent.time.sleep = lambda _: None
+        try:
+            result = _retry_with_backoff(fn)
+            assert result == "ok"
+            assert len(calls) == 2
+        finally:
+            src.agent.time.sleep = original_sleep
+
 
 def test_model_client_to_async_preserves_api_key(monkeypatch):
     from src.agent import ModelClient
@@ -76,28 +98,6 @@ def test_model_client_to_async_preserves_api_key(monkeypatch):
         "model_spec": "openai:gpt-5.4",
         "api_key": "secret-key",
     }
-
-    def test_retries_on_timeout(self):
-        from src.agent import _retry_with_backoff
-
-        calls = []
-
-        def fn():
-            calls.append(1)
-            if len(calls) == 1:
-                raise TimeoutError("Request timed out")
-            return "ok"
-
-        import src.agent
-
-        original_sleep = src.agent.time.sleep
-        src.agent.time.sleep = lambda _: None
-        try:
-            result = _retry_with_backoff(fn)
-            assert result == "ok"
-            assert len(calls) == 2
-        finally:
-            src.agent.time.sleep = original_sleep
 
 
 class TestStructuredCallRepair:

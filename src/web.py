@@ -227,6 +227,10 @@ def _set_job_error(job: Job, message: str) -> None:
     _notify_job(job)
 
 
+class _JobInteractionTimeout(Exception):
+    """Raised when a web job waits too long for user interaction."""
+
+
 def _wait_for_job_signal(
     job: Job,
     event: threading.Event,
@@ -234,7 +238,6 @@ def _wait_for_job_signal(
     error_message: str,
     timeout: int | None = None,
 ) -> bool:
-    event.clear()
     wait_seconds = _interaction_timeout_seconds() if timeout is None else timeout
     if event.wait(wait_seconds):
         return True
@@ -404,6 +407,7 @@ def _run_pipeline_thread(
                 }
                 for q in remaining
             ]
+            job.answers_event.clear()
             job.status = "questions"
             _notify_job(job)
             if not _wait_for_job_signal(
@@ -411,7 +415,7 @@ def _run_pipeline_thread(
                 job.answers_event,
                 error_message="Timed out waiting for clarification answers.",
             ):
-                return
+                raise _JobInteractionTimeout()
 
             if not job.answers:
                 job.questions = None
@@ -441,6 +445,7 @@ def _run_pipeline_thread(
             job.optional_pdf_allowed_ids = frozenset(
                 str(row["source_id"]) for row in items
             )
+            job.optional_pdf_event.clear()
             job.status = "optional_pdfs"
             _notify_job(job)
             if not _wait_for_job_signal(
@@ -448,7 +453,7 @@ def _run_pipeline_thread(
                 job.optional_pdf_event,
                 error_message="Timed out waiting for optional PDF input.",
             ):
-                return
+                raise _JobInteractionTimeout()
             job.optional_pdf_items = None
             job.optional_pdf_allowed_ids = None
 
@@ -479,6 +484,8 @@ def _run_pipeline_thread(
         job.finished_at = time.time()
         _notify_job(job)
 
+    except _JobInteractionTimeout:
+        return
     except Exception:
         logger.exception("Pipeline failed for job %s", job.job_id)
         _set_job_error(job, "Pipeline failed. Check server logs for details.")
