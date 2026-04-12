@@ -9,6 +9,7 @@ AI-powered academic essay generator for Greek university students. Uses a determ
 - OpenAI SDK + Instructor for model calls with no orchestration framework or middleware layer
 - Instructor-powered structured output with automatic Pydantic validation and retry
 - Interactive validation: catches incomplete assignments and prompts for missing info before proceeding
+- Preserves explicit user-provided essay structure and headings more strongly when they appear in the prompt or assignment materials
 - Deterministic academic source research via Semantic Scholar, OpenAlex, and Crossref
 - Selects the best source subset and uses that selection during essay generation
 - Bounds source reading to the top ranked candidates instead of LLM-reading every fetched result

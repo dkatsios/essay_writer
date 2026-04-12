@@ -37,6 +37,11 @@ Cite any id below with `[[source_id]]`. Full summaries appear only for a subset 
 
 Write the COMPLETE essay following the plan structure above.
 
+## Structure Fidelity — CRITICAL
+- Follow the section order and headings from the plan exactly.
+- If the plan reflects a user-specified custom structure, preserve it faithfully.
+- Do NOT merge sections, invent replacement headings, reorder sections, or fall back to a generic introduction-body-conclusion template unless that is what the plan itself says.
+
 ## Word Count — CRITICAL
 - Target: **{{ target_words }}** words total.
 - Your output MUST be within ±{{ tolerance_percent }}% of the target. Under {{ min_words }} words = FAILURE.
@@ -52,6 +57,7 @@ Write the COMPLETE essay following the plan structure above.
 ## Writing Rules
 - Follow the section structure from the plan.
 - ALL content in {{ language }}, formal academic register.
+- Preserve the plan's section boundaries and cover each planned section explicitly.
 - Headings must be plain text with `#` markers only — do NOT wrap headings in `**bold**` or `*italic*`.
 {% if language and 'Greek' in language %}
 - For **Greek** section headings, use sentence-style capitalisation (see *Greek — titles and `#` headings* above), not English Title Case — correct the plan’s headings if they look like the latter.

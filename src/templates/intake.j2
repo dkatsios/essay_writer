@@ -21,6 +21,13 @@ Analyze the following extracted content from the user's assignment files and pro
 
 Identify: topic, scope, word count target, academic level, course details, professor name, student name, any specific instructions.
 
+If the user provides an explicit essay structure anywhere in the extracted content or additional instructions, treat it as important task-defining information rather than a stylistic preference. This includes:
+- exact section headings or chapter titles
+- required section order
+- required number of sections or subsections
+- required introduction/conclusion or explicitly omitted introduction/conclusion
+- instructions like "follow this structure", "use the following headings", "organize the essay as follows", or equivalent Greek phrasing
+
 ### Field rules
 - `topic` (required): The main essay topic/title.
 - `word_count`: Target word count as a string, or null if not specified.
@@ -28,9 +35,10 @@ Identify: topic, scope, word count target, academic level, course details, profe
 - `language`: The language the essay should be written in. Detect from the assignment documents. Default "Greek (Δημοτική)" if unclear.
 - `course`, `professor`, `student`, `institution`: Include if found, else null.
 - `description` (required): Comprehensive description of the assignment in prose. Do **not** open `description` with a verbatim copy of the submission cover sheet or title-page block (Ονοματεπώνυμο, Κωδικός μαθήματος, Τίτλος μαθήματος, Τίτλος εργασίας, etc.) — put those facts in `course`, `student`, `topic`, and related fields when known, and summarize the actual task in `description`.
-- `special_instructions`: Extra requirements, or null if none.
+- `special_instructions`: Extra requirements, or null if none. If the user specified a structure, headings, order, or mandatory sections, capture that explicitly here in a concrete way. Prefer preserving the exact supplied headings/order when they are clear.
 - `min_sources`: Minimum number of academic sources to use, as an integer, or null if not specified. Greek prompts often use **Λέξεις** / **Πηγές** (or similar) for word count and source count — map those to `word_count` and `min_sources`. Treat thousands separators like `24,000` or `24.000` as the integer 24000.
 
 Extract ALL relevant information from the provided documents — do not leave anything out.
+Do not generalize away an explicit user-provided outline into a generic essay description.
 If information is in Greek, keep it in Greek.
 If a field cannot be determined from the documents, set it to null.

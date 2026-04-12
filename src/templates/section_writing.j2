@@ -47,6 +47,11 @@ Write section {{ section.number }}: "{{ section.title }}"
 - **Key points**: {{ section.key_points }}
 {% if section.content_outline %}- **Content outline**: {{ section.content_outline }}{% endif %}
 
+## Structure Fidelity — CRITICAL
+- This section is part of the approved plan structure. Preserve its role, scope, and placement in that structure.
+- Do NOT turn this section into a generic introduction/body/conclusion substitute if the heading or outline is more specific.
+- Do NOT absorb content that belongs to other planned sections.
+
 ## Word Count — CRITICAL
 - Your output MUST be within ±{{ tolerance_percent }}% of {{ section.word_target }} words. Under {{ min_words }} words = FAILURE.
 - Write LONG, detailed paragraphs. Develop every argument fully.
@@ -60,6 +65,7 @@ Write section {{ section.number }}: "{{ section.title }}"
 ## Writing Rules
 - ALL content in {{ language }}, formal academic register.
 - Headings must be plain text with `#` markers only — do NOT wrap headings in `**bold**` or `*italic*`.
+- Use the planned section heading and keep the section aligned with the plan's custom structure if one exists.
 {% if language and 'Greek' in language %}
 - For **Greek**, use the **exact** `heading` text from the plan for your `#` line, but if it shows English-style Title Case, output sentence-style Greek instead (see *Greek — titles and `#` headings* above).
 {% endif %}
