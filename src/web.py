@@ -5,318 +5,103 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import os
-import shutil
 import tempfile
 import threading
-import time
-import unicodedata
 import uuid
-import zipfile
 from contextlib import asynccontextmanager
-from dataclasses import dataclass, field
-from io import BytesIO
 from pathlib import Path
-from urllib.parse import urlparse
 
-import httpx
 from dotenv import load_dotenv
 from fastapi import FastAPI, Form, UploadFile
-from fastapi.responses import HTMLResponse, JSONResponse, Response, StreamingResponse
+from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from jinja2 import Environment, FileSystemLoader
 
 load_dotenv()
 
 from config.schemas import ModelsConfig, _PROVIDER_PRESETS, load_config  # noqa: E402
+from src import web_jobs  # noqa: E402
 from src.agent import create_async_client, create_client  # noqa: E402
 from src.intake import build_extracted_text, scan  # noqa: E402
 from src.pipeline import run_pipeline  # noqa: E402
-from src.tools._http import http_get  # noqa: E402
-from src.tools.web_fetcher import extract_pdf_bytes_to_text  # noqa: E402
-from src.runner import TokenTracker  # noqa: E402
-from src.runner import _parse_validation_answers  # noqa: E402
-from src.schemas import AssignmentBrief, Clarification, ValidationQuestion  # noqa: E402
+from src.runtime import parse_validation_answers  # noqa: E402
 
 logger = logging.getLogger(__name__)
-
-# Remove completed/failed web jobs (and temp dirs) if never downloaded.
-_DEFAULT_JOB_TTL_SECONDS = 86_400
-_DEFAULT_SWEEP_INTERVAL_SECONDS = 300
-_DEFAULT_INTERACTION_TIMEOUT_SECONDS = 1_800
+http_get = web_jobs.http_get
 
 _jinja_env = Environment(
     loader=FileSystemLoader(Path(__file__).parent / "templates" / "web"),
     autoescape=True,
 )
 
-# Keywords (Greek + English) that indicate an academic-level question
-_LEVEL_KEYWORDS = {
-    "ακαδημαϊκό επίπεδο",
-    "ακαδημαικό επίπεδο",
-    "academic level",
-    "προπτυχιακό",
-    "μεταπτυχιακό",
-    "επίπεδο σπουδών",
-    "επιπεδο σπουδων",
-}
-# Pre-normalize keywords to NFC
-_LEVEL_KEYWORDS_NFC = {unicodedata.normalize("NFC", kw) for kw in _LEVEL_KEYWORDS}
+Job = web_jobs.Job
+_JobInteractionTimeout = web_jobs.JobInteractionTimeout
+_jobs = web_jobs.jobs
+_notify_job = web_jobs.notify_job
+_build_status_payload = web_jobs.build_status_payload
+job_ttl_sweep_once = web_jobs.job_ttl_sweep_once
 
 
-def _is_academic_level_question(q: ValidationQuestion) -> bool:
-    text = unicodedata.normalize("NFC", q.question.lower())
-    return any(kw in text for kw in _LEVEL_KEYWORDS_NFC)
-
-
-# ---------------------------------------------------------------------------
-# Job store
-# ---------------------------------------------------------------------------
-
-
-@dataclass
-class Job:
-    """In-memory state for a single pipeline run."""
-
-    job_id: str
-    status: str = "running"  # running | questions | optional_pdfs | done | error
-    run_dir: Path = field(default_factory=lambda: Path("."))
-    questions: list[dict] | None = None
-    answers_event: threading.Event = field(default_factory=threading.Event)
-    answers: str = ""
-    optional_pdf_items: list[dict] | None = None
-    optional_pdf_allowed_ids: frozenset[str] | None = None
-    optional_pdf_event: threading.Event = field(default_factory=threading.Event)
-    error: str = ""
-    academic_level: str = ""
-    submit_prompt: str = ""
-    target_words: int | None = None
-    min_sources: int | None = None
-    tracker: TokenTracker | None = None
-    created_at: float = field(default_factory=time.time)
-    """Wall time when the job was submitted."""
-    finished_at: float | None = None
-    """Wall time when status became ``done`` or ``error``."""
-    clarification_rounds: list[dict] = field(default_factory=list)
-    """Each ``{"items": [{"question": str, "answer": str}, ...]}`` for UI replay after reload."""
-    optional_pdf_rounds: list[dict] = field(default_factory=list)
-    """Each ``{"items": [{"title": str, "answer": str}, ...]}`` for optional-PDF step replay."""
-    optional_pdf_choices: dict[str, str] = field(default_factory=dict)
-    """``source_id -> \"file\"|\"url\"`` for the current optional-PDF step."""
-    fast_track: bool = False
-    """If True, do not pause for the optional full-text PDF upload step."""
-    provider: str = ""
-    """Provider override selected in the UI (google, openai, anthropic, or empty for server default)."""
-    api_key: str = ""
-    """Per-job API key override. Cleared from memory after model creation."""
-    _sse_event: threading.Event = field(default_factory=threading.Event)
-    """Set whenever job state changes to wake SSE listeners."""
-
-
-_jobs: dict[str, Job] = {}
-
-
-def _notify_job(job: Job) -> None:
-    """Signal SSE listeners that job state changed."""
-    job._sse_event.set()
-
-
-def _build_status_payload(job: Job) -> dict:
-    """Build the status JSON dict shared by ``/status`` and ``/stream``."""
-    resp: dict = {"status": job.status}
-    if job.status == "running" and job.tracker is not None:
-        resp["stage"] = job.tracker.get_current_step()
-    if job.status == "questions" and job.questions:
-        resp["questions"] = job.questions
-    if job.status == "optional_pdfs" and job.optional_pdf_items:
-        resp["optional_pdf_items"] = job.optional_pdf_items
-    if job.status == "error":
-        resp["error"] = job.error
-    resp["clarification_rounds"] = job.clarification_rounds
-    resp["optional_pdf_rounds"] = job.optional_pdf_rounds
-    resp["submit"] = {
-        "prompt": job.submit_prompt,
-        "academic_level": job.academic_level,
-        "target_words": job.target_words,
-        "min_sources": job.min_sources,
-        "provider": job.provider,
-    }
-    return resp
+def _parse_validation_answers(*args, **kwargs):
+    return parse_validation_answers(*args, **kwargs)
 
 
 def _append_clarification_round_for_ui(job: Job, answers: str) -> None:
-    """Record Q&A for the current ``job.questions`` so the web UI can restore history after reload."""
-    if not job.questions:
-        return
-    vqs = [
-        ValidationQuestion(
-            question=q["question"],
-            options=q["options"],
-            suggested_option_index=int(q.get("suggested_option_index", 0)),
-        )
-        for q in job.questions
-    ]
-    parsed = _parse_validation_answers(vqs, answers) if answers.strip() else []
-    by_q = {c.question: c.answer for c in parsed}
-    items = [
-        {"question": q["question"], "answer": by_q.get(q["question"], "—")}
-        for q in job.questions
-    ]
-    job.clarification_rounds.append({"items": items})
+    web_jobs.append_clarification_round_for_ui(
+        job,
+        answers,
+        parse_validation_answers_fn=_parse_validation_answers,
+    )
 
 
 def _append_optional_pdf_round_for_ui(job: Job) -> None:
-    """Snapshot optional-PDF choices for the current ``job.optional_pdf_items``."""
-    items = job.optional_pdf_items or []
-    round_items: list[dict] = []
-    for row in items:
-        sid = str(row["source_id"])
-        how = job.optional_pdf_choices.get(sid)
-        if how == "file":
-            ans = "PDF from file"
-        elif how == "url":
-            ans = "PDF from URL"
-        else:
-            ans = "— skipped / none"
-        title = row.get("title") or sid
-        round_items.append({"title": str(title), "answer": ans})
-    job.optional_pdf_rounds.append({"items": round_items})
-    job.optional_pdf_choices.clear()
+    web_jobs.append_optional_pdf_round_for_ui(job)
 
 
-def _job_ttl_seconds() -> int:
-    raw = os.environ.get(
-        "ESSAY_WEB_JOB_TTL_SECONDS", str(_DEFAULT_JOB_TTL_SECONDS)
-    ).strip()
+def _fetch_pdf_bytes_from_url(url: str):
+    parsed = web_jobs.urlparse(url)
+    if parsed.scheme not in ("http", "https") or not parsed.netloc:
+        return None, "Invalid URL (use http or https)"
     try:
-        n = int(raw)
-    except ValueError:
-        return _DEFAULT_JOB_TTL_SECONDS
-    return max(0, n)
-
-
-def _job_sweep_interval_seconds() -> int:
-    raw = os.environ.get(
-        "ESSAY_WEB_JOB_SWEEP_INTERVAL_SECONDS", str(_DEFAULT_SWEEP_INTERVAL_SECONDS)
-    ).strip()
-    try:
-        n = int(raw)
-    except ValueError:
-        return _DEFAULT_SWEEP_INTERVAL_SECONDS
-    return max(60, n)
+        response = http_get(
+            url,
+            follow_redirects=True,
+            max_retries=2,
+            initial_backoff=1.0,
+            request_name="optional pdf url",
+        )
+    except web_jobs.httpx.HTTPError as exc:
+        logger.warning("Optional PDF URL fetch failed: %s", exc)
+        return None, "Could not download URL"
+    raw = response.content
+    if len(raw) > 30 * 1024 * 1024:
+        return None, "File too large"
+    if not raw.startswith(b"%PDF"):
+        return None, "URL did not return a PDF"
+    return raw, None
 
 
 def _interaction_timeout_seconds() -> int:
-    raw = os.environ.get(
-        "ESSAY_WEB_INTERACTION_TIMEOUT_SECONDS",
-        str(_DEFAULT_INTERACTION_TIMEOUT_SECONDS),
-    ).strip()
-    try:
-        n = int(raw)
-    except ValueError:
-        return _DEFAULT_INTERACTION_TIMEOUT_SECONDS
-    return max(1, n)
-
-
-def _set_job_error(job: Job, message: str) -> None:
-    job.questions = None
-    job.optional_pdf_items = None
-    job.optional_pdf_allowed_ids = None
-    job.status = "error"
-    job.error = message
-    job.finished_at = time.time()
-    _notify_job(job)
-
-
-class _JobInteractionTimeout(Exception):
-    """Raised when a web job waits too long for user interaction."""
+    return web_jobs.interaction_timeout_seconds()
 
 
 def _wait_for_job_signal(
     job: Job,
-    event: threading.Event,
+    event,
     *,
     error_message: str,
     timeout: int | None = None,
 ) -> bool:
-    wait_seconds = _interaction_timeout_seconds() if timeout is None else timeout
-    if event.wait(wait_seconds):
-        return True
-    _set_job_error(job, error_message)
-    return False
+    return web_jobs.wait_for_job_signal(
+        job,
+        event,
+        error_message=error_message,
+        timeout=timeout,
+        interaction_timeout_seconds_fn=_interaction_timeout_seconds,
+    )
 
 
 def _delete_job_artifacts(job_id: str) -> bool:
-    job = _jobs.pop(job_id, None)
-    if job is None:
-        return False
-    shutil.rmtree(job.run_dir, ignore_errors=True)
-    return True
-
-
-def job_ttl_sweep_once(now: float | None = None) -> int:
-    """Remove ``done`` / ``error`` jobs whose ``finished_at`` is older than TTL.
-
-    Returns the number of jobs removed. No-op if ``ESSAY_WEB_JOB_TTL_SECONDS``
-    is ``0`` (disabled).
-    """
-    ttl = _job_ttl_seconds()
-    if ttl <= 0:
-        return 0
-    t = time.time() if now is None else now
-    removed = 0
-    for jid, job in list(_jobs.items()):
-        if job.status not in ("done", "error"):
-            continue
-        if job.finished_at is None:
-            continue
-        if t - job.finished_at <= ttl:
-            continue
-        _jobs.pop(jid, None)
-        shutil.rmtree(job.run_dir, ignore_errors=True)
-        removed += 1
-        logger.info(
-            "TTL cleanup removed job %s (status=%s, age=%.0fs)",
-            jid,
-            job.status,
-            t - job.finished_at,
-        )
-    return removed
-
-
-def _job_ttl_sweeper_loop() -> None:
-    interval = _job_sweep_interval_seconds()
-    while True:
-        time.sleep(interval)
-        try:
-            job_ttl_sweep_once()
-        except Exception:
-            logger.exception("Job TTL sweep failed")
-
-
-def _start_job_ttl_sweeper() -> None:
-    if _job_ttl_seconds() <= 0:
-        logger.info("ESSAY_WEB_JOB_TTL_SECONDS is 0; stale-job sweeper disabled")
-        return
-    t = threading.Thread(
-        target=_job_ttl_sweeper_loop,
-        name="essay-job-ttl-sweeper",
-        daemon=True,
-    )
-    t.start()
-
-
-@asynccontextmanager
-async def _lifespan(app: FastAPI):
-    _start_job_ttl_sweeper()
-    yield
-
-
-app = FastAPI(title="Essay Writer", lifespan=_lifespan)
-
-
-# ---------------------------------------------------------------------------
-# Pipeline thread
-# ---------------------------------------------------------------------------
+    return web_jobs.delete_job_artifacts(job_id)
 
 
 def _run_pipeline_thread(
@@ -326,195 +111,32 @@ def _run_pipeline_thread(
     min_sources: int | None = None,
     user_sources_dir: Path | None = None,
 ) -> None:
-    """Execute the essay pipeline in a background thread."""
-    try:
-        config = load_config()
-
-        # Apply per-job provider override
-        if job.provider:
-            config.models = ModelsConfig(provider=job.provider)
-
-        run_dir = job.run_dir
-        input_dir = run_dir / "input"
-        input_dir.mkdir(parents=True, exist_ok=True)
-
-        if upload_dir and any(upload_dir.iterdir()):
-            input_files = scan(str(upload_dir))
-            extracted_text = build_extracted_text(input_files, extra_prompt=prompt)
-            del input_files
-        elif prompt:
-            extracted_text = f"# Assignment\n\n{prompt}\n"
-        else:
-            job.status = "error"
-            job.error = "Provide at least a prompt or upload files."
-            job.finished_at = time.time()
-            _notify_job(job)
-            return
-
-        (input_dir / "extracted.md").write_text(extracted_text, encoding="utf-8")
-
-        _api_key = job.api_key or None
-        job.api_key = ""  # clear from memory immediately
-        worker = create_client(config.models.worker, api_key=_api_key)
-        async_worker = create_async_client(config.models.worker, api_key=_api_key)
-        writer = create_client(config.models.writer, api_key=_api_key)
-        reviewer = create_client(config.models.reviewer, api_key=_api_key)
-        _api_key = None
-
-        tracker = TokenTracker()
-        job.tracker = tracker
-
-        def _on_questions(questions: list[ValidationQuestion], rd: Path) -> None:
-            # Auto-answer academic level question if user already chose one
-            remaining = questions
-            auto_clarifications: list = []
-            if job.academic_level:
-                remaining = []
-                for q in questions:
-                    if _is_academic_level_question(q):
-                        auto_clarifications.append(
-                            Clarification(
-                                question=q.question,
-                                answer=job.academic_level,
-                            )
-                        )
-                    else:
-                        remaining.append(q)
-
-            # Apply auto-answers immediately
-            if auto_clarifications:
-                brief_path = rd / "brief" / "assignment.json"
-                brief = AssignmentBrief.model_validate_json(
-                    brief_path.read_text(encoding="utf-8")
-                )
-                if brief.clarifications is None:
-                    brief.clarifications = []
-                brief.clarifications.extend(auto_clarifications)
-                if not brief.academic_level:
-                    brief.academic_level = job.academic_level
-                brief_path.write_text(
-                    brief.model_dump_json(indent=2, ensure_ascii=False),
-                    encoding="utf-8",
-                )
-
-            # If no remaining questions, skip user interaction
-            if not remaining:
-                return
-
-            job.questions = [
-                {
-                    "question": q.question,
-                    "options": q.options,
-                    "suggested_option_index": q.suggested_option_index,
-                }
-                for q in remaining
-            ]
-            job.answers_event.clear()
-            job.status = "questions"
-            _notify_job(job)
-            if not _wait_for_job_signal(
-                job,
-                job.answers_event,
-                error_message="Timed out waiting for clarification answers.",
-            ):
-                raise _JobInteractionTimeout()
-
-            if not job.answers:
-                job.questions = None
-                return
-
-            brief_path = rd / "brief" / "assignment.json"
-            brief = AssignmentBrief.model_validate_json(
-                brief_path.read_text(encoding="utf-8")
-            )
-            if brief.clarifications is None:
-                brief.clarifications = []
-            brief.clarifications.extend(
-                _parse_validation_answers(remaining, job.answers)
-            )
-            brief_path.write_text(
-                brief.model_dump_json(indent=2, ensure_ascii=False), encoding="utf-8"
-            )
-            job.questions = None
-
-        def _on_optional_pdfs(rd: Path, items: list[dict]) -> None:
-            if not items:
-                return
-            if job.fast_track:
-                return
-            job.optional_pdf_choices.clear()
-            job.optional_pdf_items = items
-            job.optional_pdf_allowed_ids = frozenset(
-                str(row["source_id"]) for row in items
-            )
-            job.optional_pdf_event.clear()
-            job.status = "optional_pdfs"
-            _notify_job(job)
-            if not _wait_for_job_signal(
-                job,
-                job.optional_pdf_event,
-                error_message="Timed out waiting for optional PDF input.",
-            ):
-                raise _JobInteractionTimeout()
-            job.optional_pdf_items = None
-            job.optional_pdf_allowed_ids = None
-
-        run_pipeline(
-            worker,
-            writer,
-            reviewer,
-            run_dir,
-            config,
-            extra_prompt=prompt,
-            token_tracker=tracker,
-            on_questions=_on_questions
-            if config.writing.interactive_validation
-            else None,
-            on_optional_source_pdfs=_on_optional_pdfs,
-            min_sources=min_sources,
-            user_sources_dir=user_sources_dir,
-            async_worker=async_worker,
-        )
-
-        # Copy docx into run_dir if needed
-        docx_src = Path(config.paths.output_dir) / "essay.docx"
-        docx_dest = run_dir / "essay.docx"
-        if docx_src.exists() and not docx_dest.exists():
-            shutil.copy2(str(docx_src), str(docx_dest))
-
-        tracker.write_report(run_dir)
-        job.status = "done"
-        job.finished_at = time.time()
-        _notify_job(job)
-
-    except _JobInteractionTimeout:
-        return
-    except Exception:
-        logger.exception("Pipeline failed for job %s", job.job_id)
-        _set_job_error(job, "Pipeline failed. Check server logs for details.")
+    return web_jobs.run_pipeline_thread(
+        job,
+        upload_dir,
+        prompt,
+        min_sources,
+        user_sources_dir,
+        load_config_fn=load_config,
+        models_config_cls=ModelsConfig,
+        create_client_fn=create_client,
+        create_async_client_fn=create_async_client,
+        run_pipeline_fn=run_pipeline,
+        scan_fn=scan,
+        build_extracted_text_fn=build_extracted_text,
+        parse_validation_answers_fn=_parse_validation_answers,
+        is_academic_level_question_fn=web_jobs.is_academic_level_question,
+        interaction_timeout_seconds_fn=_interaction_timeout_seconds,
+    )
 
 
-# ---------------------------------------------------------------------------
-# Zip builder
-# ---------------------------------------------------------------------------
+@asynccontextmanager
+async def _lifespan(app: FastAPI):
+    web_jobs.start_job_ttl_sweeper()
+    yield
 
 
-def _build_zip(run_dir: Path) -> BytesIO:
-    """Zip the full run directory tree (same layout as ``.output/run_*`` from the CLI)."""
-    buf = BytesIO()
-    root = run_dir.resolve()
-    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
-        for path in sorted(root.rglob("*")):
-            if path.is_file():
-                arcname = path.relative_to(root).as_posix()
-                zf.write(path, arcname)
-    buf.seek(0)
-    return buf
-
-
-# ---------------------------------------------------------------------------
-# Routes
-# ---------------------------------------------------------------------------
+app = FastAPI(title="Essay Writer", lifespan=_lifespan)
 
 
 @app.get("/health")
@@ -546,54 +168,56 @@ async def submit(
     job_id = uuid.uuid4().hex[:12]
 
     run_dir = Path(tempfile.mkdtemp(prefix=f"essay_{job_id}_"))
-    tw = target_words if target_words is not None and target_words > 0 else None
-    ms = min_sources if min_sources is not None and min_sources > 0 else None
-    prov = provider.strip().lower()
-    if prov and prov not in _PROVIDER_PRESETS:
+    target_words_value = (
+        target_words if target_words is not None and target_words > 0 else None
+    )
+    min_sources_value = (
+        min_sources if min_sources is not None and min_sources > 0 else None
+    )
+    provider_value = provider.strip().lower()
+    if provider_value and provider_value not in _PROVIDER_PRESETS:
         return JSONResponse(
             {
-                "error": f"Unknown provider {prov!r}. Choose from: {', '.join(sorted(_PROVIDER_PRESETS))}."
+                "error": f"Unknown provider {provider_value!r}. Choose from: {', '.join(sorted(_PROVIDER_PRESETS))}."
             },
             status_code=400,
         )
+
     job = Job(
         job_id=job_id,
         run_dir=run_dir,
         academic_level=academic_level.strip(),
         submit_prompt=prompt.strip(),
-        target_words=tw,
-        min_sources=ms,
+        target_words=target_words_value,
+        min_sources=min_sources_value,
         fast_track=bool(
             fast_track and fast_track.strip().lower() in ("1", "on", "true", "yes")
         ),
-        provider=prov,
+        provider=provider_value,
         api_key=api_key.strip(),
     )
     _jobs[job_id] = job
 
-    # Save uploaded files
     upload_dir: Path | None = None
     if files and files[0].filename:
         upload_dir = run_dir / "uploads"
         upload_dir.mkdir(parents=True, exist_ok=True)
-        for f in files:
-            if f.filename:
-                dest = upload_dir / Path(f.filename).name
-                content = await f.read()
-                dest.write_bytes(content)
+        for file in files:
+            if file.filename:
+                destination = upload_dir / Path(file.filename).name
+                destination.write_bytes(await file.read())
 
-    # Save user-provided source files
     user_sources_dir: Path | None = None
     if sources and sources[0].filename:
         user_sources_dir = run_dir / "user_sources"
         user_sources_dir.mkdir(parents=True, exist_ok=True)
-        for i, f in enumerate(sources):
-            if f.filename:
-                dest = user_sources_dir / f"{i:03d}_{Path(f.filename).name}"
-                content = await f.read()
-                dest.write_bytes(content)
+        for index, file in enumerate(sources):
+            if file.filename:
+                destination = (
+                    user_sources_dir / f"{index:03d}_{Path(file.filename).name}"
+                )
+                destination.write_bytes(await file.read())
 
-    # Build extra_prompt with optional word target and academic level
     extra_prompt = prompt.strip() or None
     if target_words and target_words > 0:
         words_line = f"Target word count: {target_words} words."
@@ -604,7 +228,7 @@ async def submit(
 
     thread = threading.Thread(
         target=_run_pipeline_thread,
-        args=(job, upload_dir, extra_prompt, min_sources, user_sources_dir),
+        args=(job, upload_dir, extra_prompt, min_sources_value, user_sources_dir),
         daemon=True,
     )
     thread.start()
@@ -612,7 +236,7 @@ async def submit(
     return JSONResponse({"job_id": job_id})
 
 
-_SSE_POLL_INTERVAL = 2.0  # seconds between stage-change checks during "running"
+_SSE_POLL_INTERVAL = 2.0
 
 
 @app.get("/stream/{job_id}")
@@ -625,32 +249,26 @@ async def stream(job_id: str):
             yield f"data: {json.dumps({'status': 'gone'})}\n\n"
             return
 
-        last_json: str | None = None
-
-        # Send initial state immediately
+        last_payload_json: str | None = None
         payload = _build_status_payload(job)
-        last_json = json.dumps(payload, ensure_ascii=False)
-        yield f"data: {last_json}\n\n"
+        last_payload_json = json.dumps(payload, ensure_ascii=False)
+        yield f"data: {last_payload_json}\n\n"
 
         if job.status in ("done", "error"):
             return
 
         while True:
-            # Wait for explicit notification or timeout (catches stage changes)
             await asyncio.to_thread(job._sse_event.wait, _SSE_POLL_INTERVAL)
             job._sse_event.clear()
 
-            # Job removed (downloaded or TTL sweep)
             if job_id not in _jobs:
                 yield f"data: {json.dumps({'status': 'gone'})}\n\n"
                 return
 
             payload = _build_status_payload(job)
             payload_json = json.dumps(payload, ensure_ascii=False)
-
-            # Only send when something changed
-            if payload_json != last_json:
-                last_json = payload_json
+            if payload_json != last_payload_json:
+                last_payload_json = payload_json
                 yield f"data: {payload_json}\n\n"
 
             if job.status in ("done", "error"):
@@ -684,67 +302,6 @@ async def answer(job_id: str, answers: str = Form("")):
     return JSONResponse({"status": "ok"})
 
 
-_MAX_OPTIONAL_PDF_BYTES = 30 * 1024 * 1024
-
-
-def _fetch_pdf_bytes_from_url(url: str) -> tuple[bytes | None, str | None]:
-    """Download PDF bytes from http(s) URL. Returns (data, error_message)."""
-    parsed = urlparse(url)
-    if parsed.scheme not in ("http", "https") or not parsed.netloc:
-        return None, "Invalid URL (use http or https)"
-    try:
-        resp = http_get(
-            url,
-            follow_redirects=True,
-            max_retries=2,
-            initial_backoff=1.0,
-            request_name="optional pdf url",
-        )
-    except httpx.HTTPError as exc:
-        logger.warning("Optional PDF URL fetch failed: %s", exc)
-        return None, "Could not download URL"
-    raw = resp.content
-    if len(raw) > _MAX_OPTIONAL_PDF_BYTES:
-        return None, "File too large"
-    if not raw.startswith(b"%PDF"):
-        return None, "URL did not return a PDF"
-    return raw, None
-
-
-def _apply_optional_pdf_bytes(
-    job: Job, job_id: str, sid: str, raw: bytes
-) -> str | None:
-    """Persist extracted text to supplement + registry. Returns error message or None."""
-    if len(raw) > _MAX_OPTIONAL_PDF_BYTES:
-        return "File too large"
-    if not raw.startswith(b"%PDF"):
-        return "Not a valid PDF"
-    try:
-        text = extract_pdf_bytes_to_text(raw)
-    except Exception:
-        logger.exception("PDF extract failed for job %s source %s", job_id, sid)
-        return "Could not read PDF text"
-    if len(text) > 50_000:
-        text = text[:50_000] + "\n\n[... truncated ...]"
-
-    run_dir = job.run_dir
-    supplement = run_dir / "sources" / "supplement"
-    supplement.mkdir(parents=True, exist_ok=True)
-    safe = "".join(c if c.isalnum() or c in "-_" else "_" for c in sid)[:120]
-    txt_path = supplement / f"{safe}.txt"
-    txt_path.write_text(text, encoding="utf-8")
-
-    reg_path = run_dir / "sources" / "registry.json"
-    registry = json.loads(reg_path.read_text(encoding="utf-8"))
-    if sid not in registry:
-        return "Source not in registry"
-    registry[sid]["content_path"] = str(txt_path.resolve())
-    reg_path.write_text(
-        json.dumps(registry, ensure_ascii=False, indent=2), encoding="utf-8"
-    )
-    return None
-
-
 @app.post("/optional-pdf/{job_id}")
 async def optional_pdf_upload(
     job_id: str,
@@ -758,36 +315,39 @@ async def optional_pdf_upload(
         return JSONResponse({"error": "Job not found"}, status_code=404)
     if job.status != "optional_pdfs":
         return JSONResponse({"error": "No optional PDF step active"}, status_code=400)
-    sid = source_id.strip()
+
+    source_id_value = source_id.strip()
     if (
-        not sid
+        not source_id_value
         or job.optional_pdf_allowed_ids is None
-        or sid not in job.optional_pdf_allowed_ids
+        or source_id_value not in job.optional_pdf_allowed_ids
     ):
         return JSONResponse({"error": "Invalid source_id"}, status_code=400)
 
-    url_stripped = pdf_url.strip()
+    pdf_url_value = pdf_url.strip()
     raw: bytes | None = None
-    if url_stripped:
-        raw, err = _fetch_pdf_bytes_from_url(url_stripped)
-        if err:
-            return JSONResponse({"error": err}, status_code=400)
+    if pdf_url_value:
+        raw, error = _fetch_pdf_bytes_from_url(pdf_url_value)
+        if error:
+            return JSONResponse({"error": error}, status_code=400)
     elif file is not None and file.filename:
         if not file.filename.lower().endswith(".pdf"):
             return JSONResponse(
-                {"error": "Only PDF files are accepted"}, status_code=400
+                {"error": "Only PDF files are accepted"},
+                status_code=400,
             )
         raw = await file.read()
     else:
         return JSONResponse(
-            {"error": "Provide a PDF file or a PDF URL"}, status_code=400
+            {"error": "Provide a PDF file or a PDF URL"},
+            status_code=400,
         )
 
-    err = _apply_optional_pdf_bytes(job, job_id, sid, raw)
-    if err:
-        return JSONResponse({"error": err}, status_code=400)
-    job.optional_pdf_choices[sid] = "url" if url_stripped else "file"
-    return JSONResponse({"status": "ok", "source_id": sid})
+    error = web_jobs.apply_optional_pdf_bytes(job, job_id, source_id_value, raw)
+    if error:
+        return JSONResponse({"error": error}, status_code=400)
+    job.optional_pdf_choices[source_id_value] = "url" if pdf_url_value else "file"
+    return JSONResponse({"status": "ok", "source_id": source_id_value})
 
 
 @app.post("/optional-pdf/{job_id}/done")
@@ -815,15 +375,14 @@ async def download(job_id: str):
     if job.status != "done":
         return JSONResponse({"error": "Job not ready"}, status_code=400)
 
-    run_dir = job.run_dir
-    buf = _build_zip(run_dir)
+    buffer = web_jobs.build_zip(job.run_dir)
 
     def _iter_zip():
         try:
-            while chunk := buf.read(64 * 1024):
+            while chunk := buffer.read(64 * 1024):
                 yield chunk
         finally:
-            buf.close()
+            buffer.close()
 
     return StreamingResponse(
         _iter_zip(),
