@@ -817,13 +817,16 @@ async def download(job_id: str):
 
     run_dir = job.run_dir
     buf = _build_zip(run_dir)
-    try:
-        data = buf.getvalue()
-    finally:
-        buf.close()
 
-    return Response(
-        content=data,
+    def _iter_zip():
+        try:
+            while chunk := buf.read(64 * 1024):
+                yield chunk
+        finally:
+            buf.close()
+
+    return StreamingResponse(
+        _iter_zip(),
         media_type="application/zip",
         headers={"Content-Disposition": f"attachment; filename=essay_{job_id}.zip"},
     )

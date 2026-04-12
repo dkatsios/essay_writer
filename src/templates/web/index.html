@@ -918,7 +918,15 @@
         a.click();
         a.remove();
         URL.revokeObjectURL(url);
-        await fetch(`/download/${currentJobId}/cleanup`, { method: 'POST' });
+        const cleanupRes = await fetch(`/download/${currentJobId}/cleanup`, { method: 'POST' });
+        if (!cleanupRes.ok) {
+          statusArea.innerHTML =
+            clarificationsHistoryHtml +
+            '<p>✅ Download ready.</p>' +
+            '<p class="hint">Server cleanup did not complete. The job may remain available until automatic cleanup runs.</p>';
+          submitBtn.disabled = false;
+          return;
+        }
         statusArea.innerHTML =
           clarificationsHistoryHtml +
           '<p>✅ Download ready. You can submit another essay when you are ready.</p>';
