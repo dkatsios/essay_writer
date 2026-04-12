@@ -890,13 +890,14 @@
     async function downloadZip() {
       if (!jobId || downloadInProgress) return;
       downloadInProgress = true;
+      const currentJobId = jobId;
       const btn = document.getElementById('download-btn');
       if (btn) {
         btn.disabled = true;
         btn.textContent = 'Preparing…';
       }
       try {
-        const res = await fetch(`/download/${jobId}`);
+        const res = await fetch(`/download/${currentJobId}`);
         if (res.status === 404) {
           showJobGone(
             'Download is no longer available. The job may have expired or was already downloaded.'
@@ -911,15 +912,16 @@
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
         a.href = url;
-        a.download = 'essay_' + jobId + '.zip';
+        a.download = 'essay_' + currentJobId + '.zip';
         a.rel = 'noopener';
         document.body.appendChild(a);
         a.click();
         a.remove();
         URL.revokeObjectURL(url);
+        await fetch(`/download/${currentJobId}/cleanup`, { method: 'POST' });
         statusArea.innerHTML =
           clarificationsHistoryHtml +
-          '<p>✅ Download started. You can submit another essay when you are ready.</p>';
+          '<p>✅ Download ready. You can submit another essay when you are ready.</p>';
         setActiveJobId(null);
         submitBtn.disabled = false;
       } catch (err) {

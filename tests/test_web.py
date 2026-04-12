@@ -1,13 +1,23 @@
 """Smoke tests for the FastAPI web app."""
 
 import json
+import threading
 import time
 from pathlib import Path
 from unittest.mock import MagicMock
 
 from fastapi.testclient import TestClient
 
-from src.web import Job, _jobs, app, job_ttl_sweep_once, _notify_job
+from config.schemas import EssayWriterConfig
+from src.web import (
+    Job,
+    _jobs,
+    _notify_job,
+    _run_pipeline_thread,
+    _wait_for_job_signal,
+    app,
+    job_ttl_sweep_once,
+)
 
 client = TestClient(app)
 
@@ -18,7 +28,7 @@ def test_health():
     assert response.json() == {"status": "ok"}
 
 
-def test_download_removes_job_and_run_dir(tmp_path):
+def test_download_keeps_job_until_cleanup(tmp_path):
     run_dir = Path(tmp_path) / "run"
     run_dir.mkdir(parents=True)
     (run_dir / "hello.txt").write_text("hello", encoding="utf-8")
@@ -28,6 +38,12 @@ def test_download_removes_job_and_run_dir(tmp_path):
     response = client.get(f"/download/{job_id}")
     assert response.status_code == 200
     assert response.content[:2] == b"PK"  # zip
+
+    assert job_id in _jobs
+    assert run_dir.exists()
+
+    cleanup = client.post(f"/download/{job_id}/cleanup")
+    assert cleanup.status_code == 200
 
     assert job_id not in _jobs
     assert not run_dir.exists()
@@ -79,6 +95,42 @@ def test_job_ttl_zero_disables_sweep(tmp_path, monkeypatch):
     )
     assert job_ttl_sweep_once() == 0
     assert jid in _jobs
+
+
+def test_wait_for_job_signal_times_out_and_marks_error(tmp_path):
+    job = Job(job_id="waittimeout01", run_dir=Path(tmp_path), status="questions")
+
+    ok = _wait_for_job_signal(
+        job,
+        threading.Event(),
+        error_message="Timed out waiting for clarification answers.",
+        timeout=0,
+    )
+
+    assert ok is False
+    assert job.status == "error"
+    assert job.error == "Timed out waiting for clarification answers."
+    assert job.finished_at is not None
+
+
+def test_pipeline_thread_respects_interactive_validation_setting(tmp_path, monkeypatch):
+    job = Job(job_id="cfgjob000001", run_dir=Path(tmp_path), status="running")
+    captured = {}
+
+    config = EssayWriterConfig()
+    config.writing.interactive_validation = False
+
+    monkeypatch.setattr("src.web.load_config", lambda: config)
+    monkeypatch.setattr("src.web.create_client", lambda *args, **kwargs: object())
+
+    def fake_run_pipeline(*args, **kwargs):
+        captured.update(kwargs)
+
+    monkeypatch.setattr("src.web.run_pipeline", fake_run_pipeline)
+
+    _run_pipeline_thread(job, upload_dir=None, prompt="Test prompt")
+
+    assert captured["on_questions"] is None
 
 
 def test_optional_pdf_upload_updates_registry(tmp_path):

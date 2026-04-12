@@ -26,7 +26,7 @@ uv run python -m src.runner /path/to/files/ --config my_config.yaml
 
 # Run the web UI
 uv run uvicorn src.web:app --reload
-# Web: optional ESSAY_WEB_JOB_TTL_SECONDS (default 86400, 0=disable stale-job sweeps), ESSAY_WEB_JOB_SWEEP_INTERVAL_SECONDS
+# Web: optional ESSAY_WEB_JOB_TTL_SECONDS (default 86400, 0=disable stale-job sweeps), ESSAY_WEB_JOB_SWEEP_INTERVAL_SECONDS, ESSAY_WEB_INTERACTION_TIMEOUT_SECONDS (default 1800)
 # Optional PDF prompt: ESSAY_WRITER_SEARCH__OPTIONAL_PDF_PROMPT_TOP_N (default 5, 0=off), ESSAY_WRITER_SEARCH__OPTIONAL_PDF_MIN_BODY_WORDS
 
 # Docker

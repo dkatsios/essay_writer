@@ -22,7 +22,7 @@ from urllib.parse import urlparse
 import httpx
 from dotenv import load_dotenv
 from fastapi import FastAPI, Form, UploadFile
-from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
+from fastapi.responses import HTMLResponse, JSONResponse, Response, StreamingResponse
 from jinja2 import Environment, FileSystemLoader
 
 load_dotenv()
@@ -33,7 +33,7 @@ from src.intake import build_extracted_text, scan  # noqa: E402
 from src.pipeline import run_pipeline  # noqa: E402
 from src.tools._http import http_get  # noqa: E402
 from src.tools.web_fetcher import extract_pdf_bytes_to_text  # noqa: E402
-from src.runner import TokenTracker, _StepTimer  # noqa: E402
+from src.runner import TokenTracker  # noqa: E402
 from src.runner import _parse_validation_answers  # noqa: E402
 from src.schemas import AssignmentBrief, Clarification, ValidationQuestion  # noqa: E402
 
@@ -42,6 +42,7 @@ logger = logging.getLogger(__name__)
 # Remove completed/failed web jobs (and temp dirs) if never downloaded.
 _DEFAULT_JOB_TTL_SECONDS = 86_400
 _DEFAULT_SWEEP_INTERVAL_SECONDS = 300
+_DEFAULT_INTERACTION_TIMEOUT_SECONDS = 1_800
 
 _jinja_env = Environment(
     loader=FileSystemLoader(Path(__file__).parent / "templates" / "web"),
@@ -204,6 +205,51 @@ def _job_sweep_interval_seconds() -> int:
     return max(60, n)
 
 
+def _interaction_timeout_seconds() -> int:
+    raw = os.environ.get(
+        "ESSAY_WEB_INTERACTION_TIMEOUT_SECONDS",
+        str(_DEFAULT_INTERACTION_TIMEOUT_SECONDS),
+    ).strip()
+    try:
+        n = int(raw)
+    except ValueError:
+        return _DEFAULT_INTERACTION_TIMEOUT_SECONDS
+    return max(1, n)
+
+
+def _set_job_error(job: Job, message: str) -> None:
+    job.questions = None
+    job.optional_pdf_items = None
+    job.optional_pdf_allowed_ids = None
+    job.status = "error"
+    job.error = message
+    job.finished_at = time.time()
+    _notify_job(job)
+
+
+def _wait_for_job_signal(
+    job: Job,
+    event: threading.Event,
+    *,
+    error_message: str,
+    timeout: int | None = None,
+) -> bool:
+    event.clear()
+    wait_seconds = _interaction_timeout_seconds() if timeout is None else timeout
+    if event.wait(wait_seconds):
+        return True
+    _set_job_error(job, error_message)
+    return False
+
+
+def _delete_job_artifacts(job_id: str) -> bool:
+    job = _jobs.pop(job_id, None)
+    if job is None:
+        return False
+    shutil.rmtree(job.run_dir, ignore_errors=True)
+    return True
+
+
 def job_ttl_sweep_once(now: float | None = None) -> int:
     """Remove ``done`` / ``error`` jobs whose ``finished_at`` is older than TTL.
 
@@ -310,7 +356,6 @@ def _run_pipeline_thread(
         writer = create_client(config.models.writer, api_key=_api_key)
         reviewer = create_client(config.models.reviewer, api_key=_api_key)
 
-        timer = _StepTimer()
         tracker = TokenTracker()
         job.tracker = tracker
 
@@ -361,11 +406,15 @@ def _run_pipeline_thread(
             ]
             job.status = "questions"
             _notify_job(job)
-            job.answers_event.clear()
-            # Block until web user submits answers
-            job.answers_event.wait()
+            if not _wait_for_job_signal(
+                job,
+                job.answers_event,
+                error_message="Timed out waiting for clarification answers.",
+            ):
+                return
 
             if not job.answers:
+                job.questions = None
                 return
 
             brief_path = rd / "brief" / "assignment.json"
@@ -380,6 +429,7 @@ def _run_pipeline_thread(
             brief_path.write_text(
                 brief.model_dump_json(indent=2, ensure_ascii=False), encoding="utf-8"
             )
+            job.questions = None
 
         def _on_optional_pdfs(rd: Path, items: list[dict]) -> None:
             if not items:
@@ -393,8 +443,12 @@ def _run_pipeline_thread(
             )
             job.status = "optional_pdfs"
             _notify_job(job)
-            job.optional_pdf_event.clear()
-            job.optional_pdf_event.wait()
+            if not _wait_for_job_signal(
+                job,
+                job.optional_pdf_event,
+                error_message="Timed out waiting for optional PDF input.",
+            ):
+                return
             job.optional_pdf_items = None
             job.optional_pdf_allowed_ids = None
 
@@ -406,7 +460,9 @@ def _run_pipeline_thread(
             config,
             extra_prompt=prompt,
             token_tracker=tracker,
-            on_questions=_on_questions,
+            on_questions=_on_questions
+            if config.writing.interactive_validation
+            else None,
             on_optional_source_pdfs=_on_optional_pdfs,
             min_sources=min_sources,
             user_sources_dir=user_sources_dir,
@@ -425,10 +481,7 @@ def _run_pipeline_thread(
 
     except Exception:
         logger.exception("Pipeline failed for job %s", job.job_id)
-        job.status = "error"
-        job.error = "Pipeline failed. Check server logs for details."
-        job.finished_at = time.time()
-        _notify_job(job)
+        _set_job_error(job, "Pipeline failed. Check server logs for details.")
 
 
 # ---------------------------------------------------------------------------
@@ -745,7 +798,7 @@ async def optional_pdf_done(job_id: str):
 
 @app.get("/download/{job_id}")
 async def download(job_id: str):
-    """Return the result zip, then remove the job's run directory and job record."""
+    """Return the result zip without deleting it so failed transfers can retry."""
     job = _jobs.get(job_id)
     if not job:
         return JSONResponse({"error": "Job not found"}, status_code=404)
@@ -754,24 +807,25 @@ async def download(job_id: str):
 
     run_dir = job.run_dir
     buf = _build_zip(run_dir)
-    chunk_size = 64 * 1024
+    try:
+        data = buf.getvalue()
+    finally:
+        buf.close()
 
-    def iter_zip():
-        try:
-            while True:
-                chunk = buf.read(chunk_size)
-                if not chunk:
-                    break
-                yield chunk
-        finally:
-            buf.close()
-            try:
-                shutil.rmtree(run_dir, ignore_errors=True)
-            finally:
-                _jobs.pop(job_id, None)
-
-    return StreamingResponse(
-        iter_zip(),
+    return Response(
+        content=data,
         media_type="application/zip",
         headers={"Content-Disposition": f"attachment; filename=essay_{job_id}.zip"},
     )
+
+
+@app.post("/download/{job_id}/cleanup")
+async def cleanup_download(job_id: str):
+    """Delete a completed job after the client has received the ZIP."""
+    job = _jobs.get(job_id)
+    if not job:
+        return JSONResponse({"error": "Job not found"}, status_code=404)
+    if job.status != "done":
+        return JSONResponse({"error": "Job not ready"}, status_code=400)
+    _delete_job_artifacts(job_id)
+    return JSONResponse({"status": "ok"})

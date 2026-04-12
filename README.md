@@ -12,7 +12,7 @@ AI-powered academic essay generator for Greek university students. Uses a determ
 - Preserves explicit user-provided essay structure and headings more strongly when they appear in the prompt or assignment materials
 - Deterministic academic source research via Semantic Scholar, OpenAlex, and Crossref
 - Selects the best source subset and uses that selection during essay generation
-- Bounds source reading to the top ranked candidates instead of LLM-reading every fetched result
+- Reads the full fetched/user-provided source pool, then selects the best subset for writing
 - Long essays use bounded section-local context instead of repeatedly sending the whole draft during section review
 - Input extraction writes a single `input/extracted.md` artifact directly into each run directory
 - Search and fetch requests share one HTTP transport with pooled connections and centralized retry behavior
@@ -57,7 +57,7 @@ uv run uvicorn src.web:app --reload
 
 Open http://localhost:8000. Upload assignment files, optionally upload your own reference sources, enter a prompt, set a target word count, and download the result as a ZIP.
 
-Completed jobs are deleted from the server right after a successful download. Jobs that are never downloaded are removed after **24 hours** by default (temp directory and in-memory job record). Override with `ESSAY_WEB_JOB_TTL_SECONDS` (seconds; set to `0` to disable only this automatic cleanup). Sweeps run every **300** seconds by default (`ESSAY_WEB_JOB_SWEEP_INTERVAL_SECONDS`, not below **60**).
+The browser UI downloads the ZIP first and then asks the server to clean up that completed job, which keeps failed or interrupted transfers retryable. Jobs that are never cleaned up are removed after **24 hours** by default (temp directory and in-memory job record). Override with `ESSAY_WEB_JOB_TTL_SECONDS` (seconds; set to `0` to disable only this automatic cleanup). Sweeps run every **300** seconds by default (`ESSAY_WEB_JOB_SWEEP_INTERVAL_SECONDS`, not below **60**). If a job is waiting on clarification answers or optional PDF input, it times out after **1800** seconds by default (`ESSAY_WEB_INTERACTION_TIMEOUT_SECONDS`).
 
 **Docker:**
 
