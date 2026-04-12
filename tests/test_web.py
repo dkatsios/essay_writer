@@ -123,6 +123,7 @@ def test_pipeline_thread_respects_interactive_validation_setting(tmp_path, monke
 
     monkeypatch.setattr("src.web.load_config", lambda: config)
     monkeypatch.setattr("src.web.create_client", lambda *args, **kwargs: object())
+    monkeypatch.setattr("src.web.create_async_client", lambda *args, **kwargs: object())
 
     def fake_run_pipeline(*args, **kwargs):
         captured.update(kwargs)
@@ -142,6 +143,7 @@ def test_pipeline_thread_stops_after_question_timeout(tmp_path, monkeypatch):
 
     monkeypatch.setattr("src.web.load_config", lambda: config)
     monkeypatch.setattr("src.web.create_client", lambda *args, **kwargs: object())
+    monkeypatch.setattr("src.web.create_async_client", lambda *args, **kwargs: object())
     monkeypatch.setattr("src.web._interaction_timeout_seconds", lambda: 0)
 
     class _Question:
@@ -161,6 +163,49 @@ def test_pipeline_thread_stops_after_question_timeout(tmp_path, monkeypatch):
     assert job.status == "error"
     assert job.error == "Timed out waiting for clarification answers."
     assert job.finished_at is not None
+
+
+def test_pipeline_thread_passes_async_worker_without_storing_api_key(
+    tmp_path, monkeypatch
+):
+    job = Job(
+        job_id="apikeyjob001",
+        run_dir=Path(tmp_path),
+        status="running",
+        api_key="secret-key",
+    )
+    captured = {}
+
+    config = EssayWriterConfig()
+
+    class _SyncClient:
+        def __init__(self):
+            self.client = object()
+            self.model = "worker-model"
+            self.model_spec = "openai:gpt-5.4"
+
+    async_client = object()
+
+    monkeypatch.setattr("src.web.load_config", lambda: config)
+    monkeypatch.setattr("src.web.create_client", lambda *args, **kwargs: _SyncClient())
+
+    def fake_create_async_client(*args, **kwargs):
+        captured["async_api_key"] = kwargs.get("api_key")
+        return async_client
+
+    monkeypatch.setattr("src.web.create_async_client", fake_create_async_client)
+
+    def fake_run_pipeline(*args, **kwargs):
+        captured["async_worker"] = kwargs.get("async_worker")
+        captured["job_api_key"] = job.api_key
+
+    monkeypatch.setattr("src.web.run_pipeline", fake_run_pipeline)
+
+    _run_pipeline_thread(job, upload_dir=None, prompt="Test prompt")
+
+    assert captured["async_api_key"] == "secret-key"
+    assert captured["async_worker"] is async_client
+    assert captured["job_api_key"] == ""
 
 
 def test_optional_pdf_upload_updates_registry(tmp_path):

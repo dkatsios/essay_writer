@@ -199,10 +199,9 @@ class ModelClient:
     client: Any
     model: str
     model_spec: str
-    api_key: str | None = None
 
     def to_async(self) -> AsyncModelClient:
-        return create_async_client(self.model_spec, api_key=self.api_key)
+        return create_async_client(self.model_spec)
 
 
 @dataclass
@@ -212,7 +211,6 @@ class AsyncModelClient:
     client: Any
     model: str
     model_spec: str
-    api_key: str | None = None
 
 
 def create_client(model_spec: str, *, api_key: str | None = None) -> ModelClient:
@@ -223,7 +221,6 @@ def create_client(model_spec: str, *, api_key: str | None = None) -> ModelClient
         client=client,
         model=normalized_model.split("/", 1)[1],
         model_spec=model_spec,
-        api_key=api_key,
     )
 
 
@@ -239,5 +236,4 @@ def create_async_client(
         client=client,
         model=normalized_model.split("/", 1)[1],
         model_spec=model_spec,
-        api_key=api_key,
     )

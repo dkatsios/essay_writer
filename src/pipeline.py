@@ -264,6 +264,7 @@ class PipelineContext:
     """Shared state passed to every step."""
 
     worker: ModelClient
+    async_worker: AsyncModelClient | None
     writer: ModelClient
     reviewer: ModelClient
     run_dir: Path
@@ -1159,7 +1160,7 @@ def _make_read_sources(
 
         domain_tracker = _DomainFailureTracker()
         semaphore = asyncio.Semaphore(_SOURCE_READ_CONCURRENCY)
-        async_worker = c.worker.to_async()
+        async_worker = c.async_worker or c.worker.to_async()
 
         async def read_one(
             sid: str,
@@ -1857,6 +1858,7 @@ def run_pipeline(
     run_dir: Path,
     config: EssayWriterConfig,
     *,
+    async_worker: AsyncModelClient | None = None,
     extra_prompt: str | None = None,
     token_tracker=None,
     on_questions: Callable[[list[ValidationQuestion], Path], None] | None = None,
@@ -1871,6 +1873,7 @@ def run_pipeline(
     """
     ctx = PipelineContext(
         worker=worker,
+        async_worker=async_worker,
         writer=writer,
         reviewer=reviewer,
         run_dir=run_dir,

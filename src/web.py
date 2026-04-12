@@ -28,7 +28,7 @@ from jinja2 import Environment, FileSystemLoader
 load_dotenv()
 
 from config.schemas import ModelsConfig, _PROVIDER_PRESETS, load_config  # noqa: E402
-from src.agent import create_client  # noqa: E402
+from src.agent import create_async_client, create_client  # noqa: E402
 from src.intake import build_extracted_text, scan  # noqa: E402
 from src.pipeline import run_pipeline  # noqa: E402
 from src.tools._http import http_get  # noqa: E402
@@ -356,8 +356,10 @@ def _run_pipeline_thread(
         _api_key = job.api_key or None
         job.api_key = ""  # clear from memory immediately
         worker = create_client(config.models.worker, api_key=_api_key)
+        async_worker = create_async_client(config.models.worker, api_key=_api_key)
         writer = create_client(config.models.writer, api_key=_api_key)
         reviewer = create_client(config.models.reviewer, api_key=_api_key)
+        _api_key = None
 
         tracker = TokenTracker()
         job.tracker = tracker
@@ -471,6 +473,7 @@ def _run_pipeline_thread(
             on_optional_source_pdfs=_on_optional_pdfs,
             min_sources=min_sources,
             user_sources_dir=user_sources_dir,
+            async_worker=async_worker,
         )
 
         # Copy docx into run_dir if needed

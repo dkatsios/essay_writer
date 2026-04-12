@@ -72,7 +72,7 @@ class TestRetryWithBackoff:
             src.agent.time.sleep = original_sleep
 
 
-def test_model_client_to_async_preserves_api_key(monkeypatch):
+def test_model_client_to_async_does_not_store_api_key(monkeypatch):
     from src.agent import ModelClient
 
     captured = {}
@@ -88,7 +88,6 @@ def test_model_client_to_async_preserves_api_key(monkeypatch):
         client=object(),
         model="gpt-5.4",
         model_spec="openai:gpt-5.4",
-        api_key="secret-key",
     )
 
     result = client.to_async()
@@ -96,7 +95,7 @@ def test_model_client_to_async_preserves_api_key(monkeypatch):
     assert result == "async-client"
     assert captured == {
         "model_spec": "openai:gpt-5.4",
-        "api_key": "secret-key",
+        "api_key": None,
     }
 
 
