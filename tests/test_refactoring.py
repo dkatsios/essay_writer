@@ -49,6 +49,93 @@ class TestRetryWithBackoff:
         finally:
             src.agent.time.sleep = original_sleep
 
+
+class TestGoogleProviderNormalization:
+    def test_google_classic_api_key_stays_on_google_provider(self, monkeypatch):
+        from src.agent import _normalize_model_spec
+
+        monkeypatch.delenv("AI_BASE_URL", raising=False)
+        monkeypatch.setenv("GOOGLE_API_KEY", "AIza-classic-key")
+        monkeypatch.delenv("GOOGLE_CLOUD_PROJECT", raising=False)
+        monkeypatch.delenv("GOOGLE_CLOUD_LOCATION", raising=False)
+
+        model, kwargs = _normalize_model_spec("google_genai:gemini-2.5-flash")
+
+        assert model == "google/gemini-2.5-flash"
+        assert kwargs == {"api_key": "AIza-classic-key"}
+
+    def test_google_vertex_api_key_routes_to_vertex_provider(self, monkeypatch):
+        from src.agent import _normalize_model_spec
+
+        monkeypatch.delenv("AI_BASE_URL", raising=False)
+        monkeypatch.setenv("GOOGLE_CLOUD_PROJECT", "demo-project")
+        monkeypatch.setenv("GOOGLE_CLOUD_LOCATION", "us-central1")
+
+        model, kwargs = _normalize_model_spec(
+            "google_genai:gemini-2.5-flash",
+            api_key="AQ.vertex-key",
+        )
+
+        assert model == "vertexai/gemini-2.5-flash"
+        assert kwargs == {
+            "api_key": "AQ.vertex-key",
+            "project": "demo-project",
+            "location": "us-central1",
+        }
+
+    def test_google_vertex_api_key_requires_project_and_location(self, monkeypatch):
+        from src.agent import _normalize_model_spec
+
+        monkeypatch.delenv("AI_BASE_URL", raising=False)
+        monkeypatch.delenv("GOOGLE_CLOUD_PROJECT", raising=False)
+        monkeypatch.delenv("GOOGLE_CLOUD_LOCATION", raising=False)
+
+        with pytest.raises(
+            ValueError,
+            match="GOOGLE_CLOUD_PROJECT and GOOGLE_CLOUD_LOCATION",
+        ):
+            _normalize_model_spec(
+                "google_genai:gemini-2.5-flash",
+                api_key="AQ.vertex-key",
+            )
+
+    def test_explicit_google_vertexai_provider_uses_vertex_metadata(self, monkeypatch):
+        from src.agent import _normalize_model_spec
+
+        monkeypatch.delenv("AI_BASE_URL", raising=False)
+        monkeypatch.setenv("GOOGLE_CLOUD_PROJECT", "demo-project")
+        monkeypatch.setenv("GOOGLE_CLOUD_LOCATION", "europe-west4")
+        monkeypatch.setenv("GOOGLE_API_KEY", "AQ.vertex-key")
+
+        model, kwargs = _normalize_model_spec("google_vertexai:gemini-2.5-flash")
+
+        assert model == "vertexai/gemini-2.5-flash"
+        assert kwargs == {
+            "api_key": "AQ.vertex-key",
+            "project": "demo-project",
+            "location": "europe-west4",
+        }
+
+    def test_gateway_mode_warns_when_vertex_google_key_is_present(
+        self, monkeypatch, caplog
+    ):
+        from src.agent import _normalize_model_spec
+
+        monkeypatch.setenv("AI_BASE_URL", "https://gateway.example.com")
+        monkeypatch.setenv("AI_API_KEY", "gateway-key")
+        monkeypatch.setenv("GOOGLE_API_KEY", "AQ.vertex-key")
+        monkeypatch.delenv("AI_MODEL", raising=False)
+
+        with caplog.at_level(logging.WARNING):
+            model, kwargs = _normalize_model_spec("google_genai:gemini-2.5-flash")
+
+        assert model == "openai/vertex_ai.gemini-2.5-flash"
+        assert kwargs == {
+            "base_url": "https://gateway.example.com",
+            "api_key": "gateway-key",
+        }
+        assert "direct Google Vertex API key autodetection is skipped" in caplog.text
+
     def test_retries_on_timeout(self):
         from src.agent import _retry_with_backoff
 

@@ -74,10 +74,12 @@ The repo includes a `render.yaml` Blueprint for one-click deployment to [Render]
 
 1. Connect this repo in the Render dashboard.
 2. Apply the Blueprint (or create a Web Service pointing at the Dockerfile).
-3. Set the required environment variables (`GOOGLE_API_KEY`, and optionally `SEMANTIC_SCHOLAR_API_KEY`).
+3. Set the required environment variables. For direct Google provider usage, `GOOGLE_API_KEY` can be either a classic Gemini Developer API key or a Vertex AI `AQ.` key. Vertex AI keys also require `GOOGLE_CLOUD_PROJECT` and `GOOGLE_CLOUD_LOCATION`. Optionally set `SEMANTIC_SCHOLAR_API_KEY`.
 
 The service exposes the web UI on the port assigned by Render. Optional: set `ESSAY_WEB_JOB_TTL_SECONDS` / `ESSAY_WEB_JOB_SWEEP_INTERVAL_SECONDS` if you need different retention for undownloaded jobs.
 
 ## Configuration
 
 Default settings are defined in `config/schemas.py`. Override with `--config path/to/custom.yaml` or environment variables (prefix `ESSAY_WRITER_`).
+
+When the direct Google provider path is used, the runtime auto-detects `GOOGLE_API_KEY` format. Classic keys stay on the Gemini Developer API path, while `AQ.` keys are routed through Vertex AI. If `AI_BASE_URL` is set, the runtime uses the gateway credentials instead and does not auto-switch based on `GOOGLE_API_KEY`.

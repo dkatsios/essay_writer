@@ -24,6 +24,7 @@ logger = logging.getLogger(__name__)
 _RETRY_MAX = 5
 _RETRY_INITIAL_DELAY = 10.0
 _RETRY_MAX_DELAY = 120.0
+_GOOGLE_VERTEX_API_KEY_PREFIX = "AQ."
 
 _PROVIDER_ALIASES: dict[str, str] = {
     "google_genai": "google",
@@ -45,6 +46,32 @@ _GATEWAY_PROVIDER_MAP: dict[str, str] = {
     "openai": "openai.",
     "anthropic": "vertex_ai.anthropic.",
 }
+
+
+def _resolve_api_key(provider: str, api_key: str | None) -> str | None:
+    """Resolve the effective provider API key from args or environment."""
+    if api_key:
+        return api_key
+    key_env = _PROVIDER_KEY_ENV.get(provider, "OPENAI_API_KEY")
+    value = os.environ.get(key_env)
+    return value or None
+
+
+def _is_google_vertex_api_key(api_key: str | None) -> bool:
+    """Return True when the key is a Vertex AI API key."""
+    return bool(api_key and api_key.startswith(_GOOGLE_VERTEX_API_KEY_PREFIX))
+
+
+def _require_vertex_project_and_location() -> tuple[str, str]:
+    """Return Vertex routing metadata or raise a configuration error."""
+    project = os.environ.get("GOOGLE_CLOUD_PROJECT")
+    location = os.environ.get("GOOGLE_CLOUD_LOCATION")
+    if project and location:
+        return project, location
+    raise ValueError(
+        "Vertex AI Google API keys require GOOGLE_CLOUD_PROJECT and "
+        "GOOGLE_CLOUD_LOCATION when using the direct Google provider."
+    )
 
 
 def _is_retryable(exc: Exception) -> bool:
@@ -175,9 +202,20 @@ def _normalize_model_spec(
     """Convert config model specs into Instructor provider strings and kwargs."""
     provider, _, bare_name = model_spec.partition(":")
     bare_name = bare_name or model_spec
+    effective_api_key = _resolve_api_key(provider, api_key)
 
     base_url = os.environ.get("AI_BASE_URL")
     if base_url:
+        if provider in {
+            "google_genai",
+            "google_vertexai",
+        } and _is_google_vertex_api_key(
+            effective_api_key or os.environ.get("GOOGLE_API_KEY")
+        ):
+            logger.warning(
+                "AI_BASE_URL is set; direct Google Vertex API key autodetection is "
+                "skipped and gateway credentials are used instead."
+            )
         gateway_prefix = _GATEWAY_PROVIDER_MAP.get(provider, "")
         model_name = os.environ.get("AI_MODEL") or f"{gateway_prefix}{bare_name}"
         return f"openai/{model_name}", {
@@ -185,11 +223,17 @@ def _normalize_model_spec(
             "api_key": api_key or os.environ.get("AI_API_KEY", "not-set"),
         }
 
-    alias = _PROVIDER_ALIASES.get(provider, provider)
-    key_env = _PROVIDER_KEY_ENV.get(provider, "OPENAI_API_KEY")
-    return f"{alias}/{bare_name}", {
-        "api_key": api_key or os.environ.get(key_env, "not-set")
-    }
+    resolved_provider = provider
+    if provider == "google_genai" and _is_google_vertex_api_key(effective_api_key):
+        resolved_provider = "google_vertexai"
+
+    alias = _PROVIDER_ALIASES.get(resolved_provider, resolved_provider)
+    kwargs: dict[str, Any] = {"api_key": effective_api_key or "not-set"}
+    if resolved_provider == "google_vertexai":
+        project, location = _require_vertex_project_and_location()
+        kwargs["project"] = project
+        kwargs["location"] = location
+    return f"{alias}/{bare_name}", kwargs
 
 
 @dataclass
