@@ -19,6 +19,9 @@ Usage (via uv):
 
     # Save run outputs to .output/run_<timestamp>/ when using --dump-run
     uv run python -m src.runner /path/to/files/ --dump-run
+
+    # Resume a previous run from its output directory
+    uv run python -m src.runner --resume .output/run_<timestamp>/
 """
 
 from __future__ import annotations
@@ -208,6 +211,59 @@ def run_prompt(
     )
 
 
+def resume_run(
+    run_dir_path: str,
+    *,
+    config_path: str | None = None,
+) -> None:
+    """Resume a previous pipeline run from its output directory."""
+    run_dir = Path(run_dir_path)
+    if not run_dir.is_dir():
+        print(f"Error: {run_dir} is not a directory.", file=sys.stderr)
+        sys.exit(1)
+
+    extracted_path = run_dir / "input" / "extracted.md"
+    if not extracted_path.exists():
+        print(
+            f"Error: {extracted_path} not found — not a valid run directory.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    config = load_config(config_path)
+    log_handler = _setup_file_logging(run_dir)
+
+    worker = create_client(config.models.worker)
+    writer = create_client(config.models.writer)
+    reviewer = create_client(config.models.reviewer)
+
+    tracker = TokenTracker()
+
+    try:
+        run_pipeline(
+            worker,
+            writer,
+            reviewer,
+            run_dir,
+            config,
+            extra_prompt=None,
+            token_tracker=tracker,
+            on_questions=_handle_questions
+            if config.writing.interactive_validation
+            else None,
+            resume=True,
+        )
+    finally:
+        logging.getLogger().removeHandler(log_handler)
+        log_handler.close()
+
+    cost = tracker.cost_summary()
+    print(cost, file=sys.stderr)
+    logger.info("Run summary:\n%s", cost)
+
+    tracker.write_report(run_dir)
+
+
 def main() -> None:
     """CLI entry point."""
     parser = argparse.ArgumentParser(
@@ -240,12 +296,12 @@ def main() -> None:
         default=False,
         help="Save run outputs to a timestamped directory under .output/.",
     )
+    parser.add_argument(
+        "--resume",
+        default=None,
+        help="Resume a previous run from the given output directory.",
+    )
     args = parser.parse_args()
-
-    output_dir = None
-    if args.dump_run:
-        timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
-        output_dir = Path(".output") / f"run_{timestamp}"
 
     logging.basicConfig(
         level=logging.INFO,
@@ -255,6 +311,15 @@ def main() -> None:
     logging.getLogger("httpx").setLevel(logging.WARNING)
     logging.getLogger("httpcore").setLevel(logging.WARNING)
     logging.getLogger("openai").setLevel(logging.WARNING)
+
+    if args.resume:
+        resume_run(args.resume, config_path=args.config)
+        return
+
+    output_dir = None
+    if args.dump_run:
+        timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+        output_dir = Path(".output") / f"run_{timestamp}"
 
     sources_dir = Path(args.sources) if args.sources else None
 

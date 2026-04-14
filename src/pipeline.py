@@ -27,6 +27,7 @@ from src.pipeline_support import (
     _execute,
     _get_brief_language,
     _get_target_words,
+    _load_checkpoint,
     _load_selected_source_notes,
     _parse_sections,
     _read_text,
@@ -152,8 +153,13 @@ def run_pipeline(
     on_optional_source_pdfs: Callable[[Path, list[dict]], None] | None = None,
     min_sources: int | None = None,
     user_sources_dir: Path | None = None,
+    resume: bool = False,
 ) -> None:
     """Execute the essay writing pipeline."""
+    checkpoint = _load_checkpoint(run_dir) if resume else set()
+    if checkpoint:
+        logger.info("Resuming — completed steps: %s", ", ".join(sorted(checkpoint)))
+
     ctx = PipelineContext(
         worker=worker,
         async_worker=async_worker,
@@ -170,7 +176,7 @@ def run_pipeline(
     for subdir in ("brief", "plan", "sources", "essay"):
         (run_dir / subdir).mkdir(parents=True, exist_ok=True)
 
-    _execute([PipelineStep("intake", _do_intake)], ctx)
+    _execute([PipelineStep("intake", _do_intake)], ctx, checkpoint=checkpoint)
 
     # Apply user-supplied min_sources to the brief before validation.
     brief_path = run_dir / "brief" / "assignment.json"
@@ -184,13 +190,15 @@ def run_pipeline(
             encoding="utf-8",
         )
 
-    _execute([PipelineStep("validate", _do_validate)], ctx)
+    _execute([PipelineStep("validate", _do_validate)], ctx, checkpoint=checkpoint)
 
-    validation = _read_validation(run_dir)
-    if validation and validation.questions and not validation.is_pass and on_questions:
-        on_questions(validation.questions, run_dir)
+    # Skip Q&A callback if plan already exists (implies Q&A was handled).
+    if "plan" not in checkpoint:
+        validation = _read_validation(run_dir)
+        if validation and validation.questions and not validation.is_pass and on_questions:
+            on_questions(validation.questions, run_dir)
 
-    _execute([PipelineStep("plan", _do_plan)], ctx)
+    _execute([PipelineStep("plan", _do_plan)], ctx, checkpoint=checkpoint)
 
     target_words = _get_target_words(run_dir)
     threshold = config.writing.long_essay_threshold
@@ -245,4 +253,5 @@ def run_pipeline(
             citation_min_sources,
         ),
         ctx,
+        checkpoint=checkpoint,
     )

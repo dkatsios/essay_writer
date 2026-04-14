@@ -27,6 +27,9 @@ uv run python -m src.runner /path/to/files/ --config my_config.yaml
 # Save run outputs to .output/run_<timestamp>/
 uv run python -m src.runner /path/to/files/ --dump-run
 
+# Resume a crashed/interrupted run from its output directory
+uv run python -m src.runner --resume .output/run_<timestamp>/
+
 # Run the web UI
 uv run uvicorn src.web:app --reload
 # Web: optional ESSAY_WEB_JOB_TTL_SECONDS (default 86400, 0=disable stale-job sweeps), ESSAY_WEB_JOB_SWEEP_INTERVAL_SECONDS, ESSAY_WEB_INTERACTION_TIMEOUT_SECONDS (default 1800)

@@ -72,9 +72,43 @@ class PipelineStep:
     fn: Callable[[PipelineContext], None]
 
 
-def _execute(steps: list[PipelineStep], ctx: PipelineContext) -> None:
-    """Run a list of pipeline steps with timing and tracking."""
+def _load_checkpoint(run_dir: Path) -> set[str]:
+    """Load completed step names from the checkpoint file."""
+    path = run_dir / "checkpoint.json"
+    if not path.exists():
+        return set()
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        return set(data.get("completed", []))
+    except (json.JSONDecodeError, OSError):
+        return set()
+
+
+def _save_checkpoint(run_dir: Path, step_name: str) -> None:
+    """Append a completed step to the checkpoint file."""
+    path = run_dir / "checkpoint.json"
+    completed = list(_load_checkpoint(run_dir))
+    if step_name not in completed:
+        completed.append(step_name)
+    path.write_text(
+        json.dumps({"completed": completed}, indent=2),
+        encoding="utf-8",
+    )
+
+
+def _execute(
+    steps: list[PipelineStep],
+    ctx: PipelineContext,
+    *,
+    checkpoint: set[str] | None = None,
+) -> None:
+    """Run a list of pipeline steps with timing, tracking, and checkpointing."""
     for step in steps:
+        if checkpoint is not None and step.name in checkpoint:
+            print(f"\n{'=' * 50}", file=sys.stderr)
+            print(f"  Step: {step.name} (skipped — already completed)", file=sys.stderr)
+            continue
+
         print(f"\n{'=' * 50}", file=sys.stderr)
         print(f"  Step: {step.name}", file=sys.stderr)
         if ctx.tracker is not None:
@@ -92,6 +126,7 @@ def _execute(steps: list[PipelineStep], ctx: PipelineContext) -> None:
             raise
         if ctx.tracker is not None:
             ctx.tracker.record_duration(step.name, duration)
+        _save_checkpoint(ctx.run_dir, step.name)
 
 
 def _record_usage(tracker: object | None, response) -> None:
