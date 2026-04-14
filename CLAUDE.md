@@ -24,6 +24,9 @@ uv run python -m src.runner /path/to/files/ --sources /path/to/my/papers/
 # Custom config
 uv run python -m src.runner /path/to/files/ --config my_config.yaml
 
+# Save run outputs to .output/run_<timestamp>/
+uv run python -m src.runner /path/to/files/ --dump-run
+
 # Run the web UI
 uv run uvicorn src.web:app --reload
 # Web: optional ESSAY_WEB_JOB_TTL_SECONDS (default 86400, 0=disable stale-job sweeps), ESSAY_WEB_JOB_SWEEP_INTERVAL_SECONDS, ESSAY_WEB_INTERACTION_TIMEOUT_SECONDS (default 1800)
@@ -33,8 +36,15 @@ uv run uvicorn src.web:app --reload
 docker build -t essay-writer .
 docker run -p 8000:8000 --env-file .env essay-writer
 
+# Lint
+uv run ruff check src/ tests/
+
 # Run tests
 uv run python -m pytest tests/ -v
+
+# E2E tests (requires API keys)
+./scripts/run_e2e.sh              # all scenarios
+./scripts/run_e2e.sh e2e_short    # single scenario
 
 # Import check
 uv run python -c "from src.agent import create_client, _retry_with_backoff"
