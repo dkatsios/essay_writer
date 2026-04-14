@@ -430,11 +430,6 @@ def run_pipeline_thread(
             async_worker=async_worker,
         )
 
-        docx_src = Path(config.paths.output_dir) / "essay.docx"
-        docx_dest = run_dir / "essay.docx"
-        if docx_src.exists() and not docx_dest.exists():
-            shutil.copy2(str(docx_src), str(docx_dest))
-
         tracker.write_report(run_dir)
         job.status = "done"
         job.finished_at = time.time()

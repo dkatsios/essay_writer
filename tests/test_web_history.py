@@ -6,12 +6,15 @@ from pathlib import Path
 
 from fastapi.testclient import TestClient
 
+from src.runtime import parse_validation_answers
 from src.web import (
     Job,
-    _append_clarification_round_for_ui,
-    _append_optional_pdf_round_for_ui,
-    _build_status_payload,
     _jobs,
+)
+from src.web_jobs import (
+    append_clarification_round_for_ui,
+    append_optional_pdf_round_for_ui,
+    build_status_payload,
 )
 
 
@@ -20,7 +23,9 @@ def test_append_clarification_round_resolves_letter_to_option_text() -> None:
     job.questions = [
         {"question": "Pick one?", "options": ["Apple", "Banana"]},
     ]
-    _append_clarification_round_for_ui(job, "1. a")
+    append_clarification_round_for_ui(
+        job, "1. a", parse_validation_answers_fn=parse_validation_answers
+    )
     assert len(job.clarification_rounds) == 1
     assert job.clarification_rounds[0]["items"][0]["question"] == "Pick one?"
     assert job.clarification_rounds[0]["items"][0]["answer"] == "Apple"
@@ -29,7 +34,9 @@ def test_append_clarification_round_resolves_letter_to_option_text() -> None:
 def test_append_clarification_round_skip_shows_em_dash() -> None:
     job = Job(job_id="abc123456789", run_dir=Path("/tmp"))
     job.questions = [{"question": "Q?", "options": ["x"]}]
-    _append_clarification_round_for_ui(job, "")
+    append_clarification_round_for_ui(
+        job, "", parse_validation_answers_fn=parse_validation_answers
+    )
     assert job.clarification_rounds[0]["items"][0]["answer"] == "—"
 
 
@@ -45,7 +52,7 @@ def test_status_payload_includes_submit_snapshot() -> None:
     )
     _jobs[jid] = job
     try:
-        body = _build_status_payload(job)
+        body = build_status_payload(job)
         assert body["submit"]["academic_level"] == "undergraduate"
         assert body["submit"]["prompt"] == "Topic line"
         assert body["submit"]["target_words"] == 3000
@@ -61,7 +68,7 @@ def test_append_optional_pdf_round_from_choices() -> None:
         {"source_id": "s2", "title": "Paper B"},
     ]
     job.optional_pdf_choices["s1"] = "file"
-    _append_optional_pdf_round_for_ui(job)
+    append_optional_pdf_round_for_ui(job)
     assert len(job.optional_pdf_rounds) == 1
     items = job.optional_pdf_rounds[0]["items"]
     assert items[0]["answer"] == "PDF from file"

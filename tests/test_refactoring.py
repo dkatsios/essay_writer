@@ -449,7 +449,7 @@ class TestStructuredCallRepair:
 
     def test_structured_call_uses_instructor(self, monkeypatch):
         """Verify _structured_call delegates to Instructor's create()."""
-        from src.pipeline import _structured_call
+        from src.pipeline_support import _structured_call
         from src.schemas import EssayPlan
         from src.agent import ModelClient
 
@@ -477,7 +477,9 @@ class TestStructuredCallRepair:
         )
 
         # Patch _retry_with_backoff to just call the fn
-        monkeypatch.setattr("src.pipeline._retry_with_backoff", lambda fn, **kw: fn())
+        monkeypatch.setattr(
+            "src.pipeline_support._retry_with_backoff", lambda fn, **kw: fn()
+        )
 
         result = _structured_call(client, "Plan prompt", EssayPlan)
 
@@ -489,7 +491,7 @@ class TestStructuredCallRepair:
 
     def test_async_structured_call_uses_instructor(self, monkeypatch):
         """Verify _async_structured_call delegates to async Instructor."""
-        from src.pipeline import _async_structured_call
+        from src.pipeline_support import _async_structured_call
         from src.schemas import EssayPlan
         from src.agent import AsyncModelClient
 
@@ -524,7 +526,9 @@ class TestStructuredCallRepair:
         async def fake_retry(fn, *, is_async=False):
             return await fn()
 
-        monkeypatch.setattr("src.pipeline._retry_with_backoff", fake_retry)
+        monkeypatch.setattr(
+            "src.pipeline_support._retry_with_backoff", fake_retry
+        )
 
         result = asyncio.run(_async_structured_call(client, "Plan prompt", EssayPlan))
 

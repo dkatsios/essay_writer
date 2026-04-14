@@ -6,7 +6,6 @@ import logging
 from collections.abc import Callable
 from pathlib import Path
 
-from src.agent import _retry_with_backoff
 from src.rendering import render_prompt
 from src.schemas import AssignmentBrief, EssayPlan, ValidationQuestion, ValidationResult
 from src.pipeline_sources import (
@@ -22,7 +21,6 @@ from src.pipeline_support import (
     PipelineContext,
     PipelineStep,
     Section,
-    _async_structured_call as _support_async_structured_call,
     _build_prior_sections_context,
     _build_review_context,
     _compute_max_sources,
@@ -32,7 +30,7 @@ from src.pipeline_support import (
     _load_selected_source_notes,
     _parse_sections,
     _read_text,
-    _structured_call as _support_structured_call,
+    _structured_call,
     _suggested_sources,
     _write_json,
 )
@@ -47,52 +45,6 @@ from src.pipeline_writing import (
 logger = logging.getLogger(__name__)
 
 
-def _structured_call(client, prompt, schema, tracker=None, retries=2):
-    def _do_call():
-        return client.client.chat.completions.create(
-            model=client.model,
-            response_model=schema,
-            max_retries=retries,
-            messages=[{"role": "user", "content": prompt}],
-        )
-
-    result = _retry_with_backoff(_do_call)
-    raw = getattr(result, "_raw_response", None)
-    if raw and tracker is not None:
-        usage = getattr(raw, "usage", None)
-        if usage is not None:
-            tracker.record(
-                getattr(raw, "model", ""),
-                getattr(usage, "prompt_tokens", 0) or 0,
-                getattr(usage, "completion_tokens", 0) or 0,
-                0,
-            )
-    return result
-
-
-async def _async_structured_call(client, prompt, schema, tracker=None, retries=2):
-    async def _do_call():
-        return await client.client.chat.completions.create(
-            model=client.model,
-            response_model=schema,
-            max_retries=retries,
-            messages=[{"role": "user", "content": prompt}],
-        )
-
-    result = await _retry_with_backoff(_do_call, is_async=True)
-    raw = getattr(result, "_raw_response", None)
-    if raw and tracker is not None:
-        usage = getattr(raw, "usage", None)
-        if usage is not None:
-            tracker.record(
-                getattr(raw, "model", ""),
-                getattr(usage, "prompt_tokens", 0) or 0,
-                getattr(usage, "completion_tokens", 0) or 0,
-                0,
-            )
-    return result
-
-
 def _do_intake(ctx: PipelineContext) -> None:
     extracted_path = ctx.run_dir / "input" / "extracted.md"
     extracted_text = _read_text(extracted_path) if extracted_path.exists() else ""
@@ -101,7 +53,7 @@ def _do_intake(ctx: PipelineContext) -> None:
         extracted_text=extracted_text,
         extra_prompt=ctx.extra_prompt,
     )
-    brief = _support_structured_call(ctx.worker, prompt, AssignmentBrief, ctx.tracker)
+    brief = _structured_call(ctx.worker, prompt, AssignmentBrief, ctx.tracker)
     _write_json(ctx.run_dir / "brief" / "assignment.json", brief)
 
 
@@ -112,7 +64,7 @@ def _do_validate(ctx: PipelineContext) -> None:
         brief_json=brief_json,
         language=_get_brief_language(ctx.run_dir),
     )
-    result = _support_structured_call(ctx.worker, prompt, ValidationResult, ctx.tracker)
+    result = _structured_call(ctx.worker, prompt, ValidationResult, ctx.tracker)
     _write_json(ctx.run_dir / "brief" / "validation.json", result)
 
 
@@ -123,7 +75,7 @@ def _do_plan(ctx: PipelineContext) -> None:
         brief_json=brief_json,
         language=_get_brief_language(ctx.run_dir),
     )
-    plan = _support_structured_call(ctx.worker, prompt, EssayPlan, ctx.tracker)
+    plan = _structured_call(ctx.worker, prompt, EssayPlan, ctx.tracker)
     _write_json(ctx.run_dir / "plan" / "plan.json", plan)
 
 
@@ -220,17 +172,17 @@ def run_pipeline(
 
     _execute([PipelineStep("intake", _do_intake)], ctx)
 
-    if min_sources is not None:
-        brief_path = run_dir / "brief" / "assignment.json"
-        if brief_path.exists():
-            brief = AssignmentBrief.model_validate_json(
-                brief_path.read_text(encoding="utf-8")
-            )
-            brief.min_sources = min_sources
-            brief_path.write_text(
-                brief.model_dump_json(indent=2, ensure_ascii=False),
-                encoding="utf-8",
-            )
+    # Apply user-supplied min_sources to the brief before validation.
+    brief_path = run_dir / "brief" / "assignment.json"
+    if min_sources is not None and brief_path.exists():
+        brief = AssignmentBrief.model_validate_json(
+            brief_path.read_text(encoding="utf-8")
+        )
+        brief.min_sources = min_sources
+        brief_path.write_text(
+            brief.model_dump_json(indent=2, ensure_ascii=False),
+            encoding="utf-8",
+        )
 
     _execute([PipelineStep("validate", _do_validate)], ctx)
 
@@ -249,14 +201,13 @@ def run_pipeline(
         "long" if target_words > threshold else "short",
     )
 
+    # Compute source counts once, read the brief once, write once.
     user_min_sources = min_sources
-    if user_min_sources is None:
-        brief_path = run_dir / "brief" / "assignment.json"
-        if brief_path.exists():
-            brief = AssignmentBrief.model_validate_json(
-                brief_path.read_text(encoding="utf-8")
-            )
-            user_min_sources = brief.min_sources
+    if user_min_sources is None and brief_path.exists():
+        brief = AssignmentBrief.model_validate_json(
+            brief_path.read_text(encoding="utf-8")
+        )
+        user_min_sources = brief.min_sources
 
     target_sources, fetch_sources = _compute_max_sources(
         target_words,
@@ -268,7 +219,6 @@ def run_pipeline(
         user_min_sources if user_min_sources is not None else 0,
     )
 
-    brief_path = run_dir / "brief" / "assignment.json"
     if brief_path.exists():
         brief = AssignmentBrief.model_validate_json(
             brief_path.read_text(encoding="utf-8")

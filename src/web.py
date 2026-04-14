@@ -26,7 +26,6 @@ from src.pipeline import run_pipeline  # noqa: E402
 from src.runtime import parse_validation_answers  # noqa: E402
 
 logger = logging.getLogger(__name__)
-http_get = web_jobs.http_get
 
 _jinja_env = Environment(
     loader=FileSystemLoader(Path(__file__).parent / "templates" / "web"),
@@ -39,69 +38,6 @@ _jobs = web_jobs.jobs
 _notify_job = web_jobs.notify_job
 _build_status_payload = web_jobs.build_status_payload
 job_ttl_sweep_once = web_jobs.job_ttl_sweep_once
-
-
-def _parse_validation_answers(*args, **kwargs):
-    return parse_validation_answers(*args, **kwargs)
-
-
-def _append_clarification_round_for_ui(job: Job, answers: str) -> None:
-    web_jobs.append_clarification_round_for_ui(
-        job,
-        answers,
-        parse_validation_answers_fn=_parse_validation_answers,
-    )
-
-
-def _append_optional_pdf_round_for_ui(job: Job) -> None:
-    web_jobs.append_optional_pdf_round_for_ui(job)
-
-
-def _fetch_pdf_bytes_from_url(url: str):
-    parsed = web_jobs.urlparse(url)
-    if parsed.scheme not in ("http", "https") or not parsed.netloc:
-        return None, "Invalid URL (use http or https)"
-    try:
-        response = http_get(
-            url,
-            follow_redirects=True,
-            max_retries=2,
-            initial_backoff=1.0,
-            request_name="optional pdf url",
-        )
-    except web_jobs.httpx.HTTPError as exc:
-        logger.warning("Optional PDF URL fetch failed: %s", exc)
-        return None, "Could not download URL"
-    raw = response.content
-    if len(raw) > 30 * 1024 * 1024:
-        return None, "File too large"
-    if not raw.startswith(b"%PDF"):
-        return None, "URL did not return a PDF"
-    return raw, None
-
-
-def _interaction_timeout_seconds() -> int:
-    return web_jobs.interaction_timeout_seconds()
-
-
-def _wait_for_job_signal(
-    job: Job,
-    event,
-    *,
-    error_message: str,
-    timeout: int | None = None,
-) -> bool:
-    return web_jobs.wait_for_job_signal(
-        job,
-        event,
-        error_message=error_message,
-        timeout=timeout,
-        interaction_timeout_seconds_fn=_interaction_timeout_seconds,
-    )
-
-
-def _delete_job_artifacts(job_id: str) -> bool:
-    return web_jobs.delete_job_artifacts(job_id)
 
 
 def _run_pipeline_thread(
@@ -124,9 +60,9 @@ def _run_pipeline_thread(
         run_pipeline_fn=run_pipeline,
         scan_fn=scan,
         build_extracted_text_fn=build_extracted_text,
-        parse_validation_answers_fn=_parse_validation_answers,
+        parse_validation_answers_fn=parse_validation_answers,
         is_academic_level_question_fn=web_jobs.is_academic_level_question,
-        interaction_timeout_seconds_fn=_interaction_timeout_seconds,
+        interaction_timeout_seconds_fn=web_jobs.interaction_timeout_seconds,
     )
 
 
@@ -295,7 +231,9 @@ async def answer(job_id: str, answers: str = Form("")):
         return JSONResponse({"error": "No pending questions"}, status_code=400)
 
     job.answers = answers
-    _append_clarification_round_for_ui(job, answers)
+    web_jobs.append_clarification_round_for_ui(
+        job, answers, parse_validation_answers_fn=parse_validation_answers
+    )
     job.status = "running"
     _notify_job(job)
     job.answers_event.set()
@@ -327,7 +265,7 @@ async def optional_pdf_upload(
     pdf_url_value = pdf_url.strip()
     raw: bytes | None = None
     if pdf_url_value:
-        raw, error = _fetch_pdf_bytes_from_url(pdf_url_value)
+        raw, error = web_jobs.fetch_pdf_bytes_from_url(pdf_url_value)
         if error:
             return JSONResponse({"error": error}, status_code=400)
     elif file is not None and file.filename:
@@ -359,7 +297,7 @@ async def optional_pdf_done(job_id: str):
     if job.status != "optional_pdfs":
         return JSONResponse({"error": "No optional PDF step active"}, status_code=400)
 
-    _append_optional_pdf_round_for_ui(job)
+    web_jobs.append_optional_pdf_round_for_ui(job)
     job.status = "running"
     _notify_job(job)
     job.optional_pdf_event.set()
@@ -399,5 +337,5 @@ async def cleanup_download(job_id: str):
         return JSONResponse({"error": "Job not found"}, status_code=404)
     if job.status != "done":
         return JSONResponse({"error": "Job not ready"}, status_code=400)
-    _delete_job_artifacts(job_id)
+    web_jobs.delete_job_artifacts(job_id)
     return JSONResponse({"status": "ok"})

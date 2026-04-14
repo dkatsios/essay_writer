@@ -456,14 +456,18 @@ def do_export(ctx: PipelineContext) -> None:
             doc_config["date"] = f"{month_names[today.month]} {today.year}"
 
     document = build_document(essay_text, doc_config, sources)
-    output_path = Path(ctx.config.paths.output_dir) / "essay.docx"
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    document.save(str(output_path))
-    logger.info("essay.docx saved to %s", output_path)
-    print(f"  essay.docx -> {output_path}", file=sys.stderr)
 
+    # Write to run_dir first (per-job, safe under concurrency).
     run_docx = ctx.run_dir / "essay.docx"
-    if run_docx.resolve() != output_path.resolve():
+    run_docx.parent.mkdir(parents=True, exist_ok=True)
+    document.save(str(run_docx))
+    logger.info("essay.docx saved to %s", run_docx)
+    print(f"  essay.docx -> {run_docx}", file=sys.stderr)
+
+    # Also copy to the shared output_dir for CLI convenience.
+    output_path = Path(ctx.config.paths.output_dir) / "essay.docx"
+    if output_path.resolve() != run_docx.resolve():
         import shutil
 
-        shutil.copy2(str(output_path), str(run_docx))
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(str(run_docx), str(output_path))

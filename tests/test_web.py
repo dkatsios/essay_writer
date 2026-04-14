@@ -3,6 +3,8 @@
 import json
 import threading
 import time
+import zipfile
+from io import BytesIO
 from pathlib import Path
 from unittest.mock import MagicMock
 
@@ -15,10 +17,10 @@ from src.web import (
     _jobs,
     _notify_job,
     _run_pipeline_thread,
-    _wait_for_job_signal,
     app,
     job_ttl_sweep_once,
 )
+from src.web_jobs import wait_for_job_signal as _wait_for_job_signal
 
 client = TestClient(app)
 
@@ -48,6 +50,32 @@ def test_download_keeps_job_until_cleanup(tmp_path):
 
     assert job_id not in _jobs
     assert not run_dir.exists()
+
+
+def test_download_includes_full_run_contents(tmp_path):
+    run_dir = Path(tmp_path) / "run"
+    (run_dir / "sources" / "notes").mkdir(parents=True)
+    (run_dir / "sources" / "registry.json").write_text("{}", encoding="utf-8")
+    (run_dir / "sources" / "notes" / "source_a.json").write_text(
+        '{"id": "source_a"}', encoding="utf-8"
+    )
+    (run_dir / "essay.docx").write_bytes(b"docx")
+
+    job_id = "zipcontents01"
+    _jobs[job_id] = Job(job_id=job_id, run_dir=run_dir, status="done")
+
+    try:
+        response = client.get(f"/download/{job_id}")
+        assert response.status_code == 200
+
+        with zipfile.ZipFile(BytesIO(response.content)) as archive:
+            names = set(archive.namelist())
+
+        assert "essay.docx" in names
+        assert "sources/registry.json" in names
+        assert "sources/notes/source_a.json" in names
+    finally:
+        _jobs.pop(job_id, None)
 
 
 def test_job_ttl_sweep_removes_stale_done(tmp_path, monkeypatch):
@@ -144,7 +172,7 @@ def test_pipeline_thread_stops_after_question_timeout(tmp_path, monkeypatch):
     monkeypatch.setattr("src.web.load_config", lambda: config)
     monkeypatch.setattr("src.web.create_client", lambda *args, **kwargs: object())
     monkeypatch.setattr("src.web.create_async_client", lambda *args, **kwargs: object())
-    monkeypatch.setattr("src.web._interaction_timeout_seconds", lambda: 0)
+    monkeypatch.setattr("src.web_jobs.interaction_timeout_seconds", lambda: 0)
 
     class _Question:
         question = "Need clarification?"
@@ -265,7 +293,7 @@ def test_optional_pdf_url_updates_registry(tmp_path, monkeypatch):
         assert url.startswith("http")
         return mock_resp
 
-    monkeypatch.setattr("src.web.http_get", _fake_http_get)
+    monkeypatch.setattr("src.web_jobs.http_get", _fake_http_get)
 
     data = {"source_id": "src_a", "pdf_url": "https://example.org/paper.pdf"}
     r = client.post(f"/optional-pdf/{jid}", data=data)

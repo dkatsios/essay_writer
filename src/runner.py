@@ -26,12 +26,9 @@ from __future__ import annotations
 import argparse
 import json
 import logging
-import shutil
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
-from time import monotonic
-
 from dotenv import load_dotenv
 
 logger = logging.getLogger(__name__)
@@ -50,74 +47,6 @@ from src.runtime import (  # noqa: E402
 )
 from src.scratch_dir import SCRATCH_RUN_DIR  # noqa: E402
 from src.schemas import Clarification, ValidationQuestion  # noqa: E402
-
-
-# ---------------------------------------------------------------------------
-# Step timer — prints elapsed time for each tool call
-# ---------------------------------------------------------------------------
-
-
-class _StepTimer:
-    """Callback handler that prints elapsed time for tool calls."""
-
-    def __init__(self) -> None:
-        self._t0 = monotonic()
-        self._tool_starts: dict[str, tuple[float, str]] = {}
-        self._steps: list[tuple[str, float]] = []
-
-    def _elapsed(self) -> str:
-        secs = monotonic() - self._t0
-        m, s = divmod(int(secs), 60)
-        return f"{m:02d}:{s:02d}"
-
-    def on_tool_start(self, tool_name: str, run_id: str) -> None:
-        self._tool_starts[run_id] = (monotonic(), tool_name)
-        print(f"  [{self._elapsed()}] ▶ {tool_name}", file=sys.stderr)
-
-    def on_tool_end(self, tool_name: str, run_id: str) -> None:
-        start_info = self._tool_starts.pop(run_id, None)
-        if start_info:
-            start_time, name = start_info
-            dur = monotonic() - start_time
-            self._steps.append((name, dur))
-            print(f"  [{self._elapsed()}] ✓ {name} ({dur:.1f}s)", file=sys.stderr)
-        else:
-            print(f"  [{self._elapsed()}] ✓ {tool_name}", file=sys.stderr)
-
-    def on_tool_error(self, tool_name: str, run_id: str) -> None:
-        start_info = self._tool_starts.pop(run_id, None)
-        if start_info:
-            start_time, name = start_info
-            dur = monotonic() - start_time
-            self._steps.append((f"{name} [ERR]", dur))
-            print(f"  [{self._elapsed()}] ✗ {name} ({dur:.1f}s)", file=sys.stderr)
-        else:
-            print(f"  [{self._elapsed()}] ✗ {tool_name}", file=sys.stderr)
-
-    def summary(self, min_duration: float = 1.0) -> str:
-        total = monotonic() - self._t0
-        if not self._steps:
-            return f"\nTotal wall-clock: {total:.1f}s"
-        significant = [(n, d) for n, d in self._steps if d >= min_duration]
-        skipped = len(self._steps) - len(significant)
-        lines = [
-            "",
-            "── Step Timing ─────────────────────────────────",
-            f"{'#':<4} {'Tool':<25} {'Duration':>10}",
-            "─" * 48,
-        ]
-        for i, (name, dur) in enumerate(significant, 1):
-            lines.append(f"{i:<4} {name:<25} {dur:>9.1f}s")
-        lines.append("─" * 48)
-        if skipped:
-            lines.append(f"     ({skipped} steps under {min_duration}s omitted)")
-        sum_tools = sum(d for _, d in self._steps)
-        overhead = total - sum_tools
-        lines.append(f"{'':4} {'Tool time':<25} {sum_tools:>9.1f}s")
-        lines.append(f"{'':4} {'Pipeline overhead':<25} {overhead:>9.1f}s")
-        m, s = divmod(int(total), 60)
-        lines.append(f"{'':4} {'Total':<25} {m}m {s}s")
-        return "\n".join(lines)
 
 
 def _setup_file_logging(output_dir: Path) -> logging.FileHandler:
@@ -184,25 +113,17 @@ def _handle_questions(questions: list[ValidationQuestion], run_dir: Path) -> Non
 # ---------------------------------------------------------------------------
 
 
-def run(
-    input_path: str,
+def _execute_pipeline(
+    extracted_text: str,
     *,
     prompt: str | None = None,
     config_path: str | None = None,
     output_dir: Path | None = None,
     user_sources_dir: Path | None = None,
 ) -> None:
-    """Run the essay pipeline with files (and optional prompt)."""
+    """Shared pipeline execution for both file-based and prompt-only modes."""
     config = load_config(config_path)
 
-    # Scan and extract
-    input_files = scan(input_path)
-    for f in input_files:
-        status = f.category if not f.warning else f"SKIPPED ({f.warning})"
-        print(f"  [{status}] {f.path.name}", file=sys.stderr)
-    extracted_text = build_extracted_text(input_files, extra_prompt=prompt)
-
-    # Setup run directory
     if output_dir:
         output_dir.mkdir(parents=True, exist_ok=True)
     run_dir = output_dir or SCRATCH_RUN_DIR
@@ -210,17 +131,14 @@ def run(
 
     log_handler = _setup_file_logging(run_dir) if output_dir else None
 
-    # Write extracted text for intake
     input_dir = run_dir / "input"
     input_dir.mkdir(parents=True, exist_ok=True)
     (input_dir / "extracted.md").write_text(extracted_text, encoding="utf-8")
 
-    # Create models
     worker = create_client(config.models.worker)
     writer = create_client(config.models.writer)
     reviewer = create_client(config.models.reviewer)
 
-    timer = _StepTimer()
     tracker = TokenTracker()
 
     try:
@@ -242,18 +160,35 @@ def run(
             logging.getLogger().removeHandler(log_handler)
             log_handler.close()
 
-    # Copy docx to run dir
-    docx_src = Path(config.paths.output_dir) / "essay.docx"
-    if output_dir and docx_src.exists():
-        shutil.copy2(str(docx_src), str(output_dir / "essay.docx"))
-
-    summary = timer.summary()
     cost = tracker.cost_summary()
-    print(summary, file=sys.stderr)
     print(cost, file=sys.stderr)
-    logger.info("Run summary:\n%s\n%s", summary, cost)
+    logger.info("Run summary:\n%s", cost)
 
     tracker.write_report(run_dir)
+
+
+def run(
+    input_path: str,
+    *,
+    prompt: str | None = None,
+    config_path: str | None = None,
+    output_dir: Path | None = None,
+    user_sources_dir: Path | None = None,
+) -> None:
+    """Run the essay pipeline with files (and optional prompt)."""
+    input_files = scan(input_path)
+    for f in input_files:
+        status = f.category if not f.warning else f"SKIPPED ({f.warning})"
+        print(f"  [{status}] {f.path.name}", file=sys.stderr)
+    extracted_text = build_extracted_text(input_files, extra_prompt=prompt)
+
+    _execute_pipeline(
+        extracted_text,
+        prompt=prompt,
+        config_path=config_path,
+        output_dir=output_dir,
+        user_sources_dir=user_sources_dir,
+    )
 
 
 def run_prompt(
@@ -264,56 +199,13 @@ def run_prompt(
     user_sources_dir: Path | None = None,
 ) -> None:
     """Run the essay pipeline with a plain text prompt (no files)."""
-    config = load_config(config_path)
-
-    run_dir = output_dir or SCRATCH_RUN_DIR
-    run_dir.mkdir(parents=True, exist_ok=True)
-
-    log_handler = _setup_file_logging(run_dir) if output_dir else None
-
-    # Write prompt as extracted content
-    input_dir = run_dir / "input"
-    input_dir.mkdir(parents=True, exist_ok=True)
-    (input_dir / "extracted.md").write_text(
-        f"# Assignment\n\n{prompt}\n", encoding="utf-8"
+    _execute_pipeline(
+        f"# Assignment\n\n{prompt}\n",
+        prompt=prompt,
+        config_path=config_path,
+        output_dir=output_dir,
+        user_sources_dir=user_sources_dir,
     )
-
-    worker = create_client(config.models.worker)
-    writer = create_client(config.models.writer)
-    reviewer = create_client(config.models.reviewer)
-
-    timer = _StepTimer()
-    tracker = TokenTracker()
-
-    try:
-        run_pipeline(
-            worker,
-            writer,
-            reviewer,
-            run_dir,
-            config,
-            token_tracker=tracker,
-            on_questions=_handle_questions
-            if config.writing.interactive_validation
-            else None,
-            user_sources_dir=user_sources_dir,
-        )
-    finally:
-        if log_handler:
-            logging.getLogger().removeHandler(log_handler)
-            log_handler.close()
-
-    docx_src = Path(config.paths.output_dir) / "essay.docx"
-    if output_dir and docx_src.exists():
-        shutil.copy2(str(docx_src), str(output_dir / "essay.docx"))
-
-    summary = timer.summary()
-    cost = tracker.cost_summary()
-    print(summary, file=sys.stderr)
-    print(cost, file=sys.stderr)
-    logger.info("Run summary:\n%s\n%s", summary, cost)
-
-    tracker.write_report(run_dir)
 
 
 def main() -> None:
