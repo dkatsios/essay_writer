@@ -13,7 +13,6 @@ from fastapi.testclient import TestClient
 from config.schemas import EssayWriterConfig
 from src.web import (
     Job,
-    _JobInteractionTimeout,
     _jobs,
     _notify_job,
     _run_pipeline_thread,
@@ -317,7 +316,7 @@ def test_stream_sse_returns_done_event(tmp_path):
         for line in resp.iter_lines():
             lines.append(line)
     # SSE format: "data: {json}"
-    data_lines = [l for l in lines if l.startswith("data: ")]
+    data_lines = [line for line in lines if line.startswith("data: ")]
     assert len(data_lines) >= 1
     payload = json.loads(data_lines[0].removeprefix("data: "))
     assert payload["status"] == "done"
@@ -332,7 +331,7 @@ def test_stream_sse_gone_for_missing_job():
     with client.stream("GET", f"/stream/{jid}") as resp:
         assert resp.status_code == 200
         lines = list(resp.iter_lines())
-    data_lines = [l for l in lines if l.startswith("data: ")]
+    data_lines = [line for line in lines if line.startswith("data: ")]
     assert len(data_lines) == 1
     payload = json.loads(data_lines[0].removeprefix("data: "))
     assert payload["status"] == "gone"

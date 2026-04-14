@@ -8,8 +8,6 @@ from html.parser import HTMLParser
 from pathlib import Path
 from urllib.parse import urlparse
 
-import httpx
-
 from src.tools._http import http_get
 
 logger = logging.getLogger(__name__)

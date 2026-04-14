@@ -27,7 +27,6 @@ Usage (via uv):
 from __future__ import annotations
 
 import argparse
-import json
 import logging
 import sys
 from datetime import datetime, timezone
@@ -43,7 +42,6 @@ from src.agent import create_client  # noqa: E402
 from src.intake import build_extracted_text, scan  # noqa: E402
 from src.pipeline import run_pipeline  # noqa: E402
 from src.runtime import (  # noqa: E402
-    _calc_cost,
     TokenTracker,
     format_validation_questions,
     parse_validation_answers,

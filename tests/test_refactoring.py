@@ -526,9 +526,7 @@ class TestStructuredCallRepair:
         async def fake_retry(fn, *, is_async=False):
             return await fn()
 
-        monkeypatch.setattr(
-            "src.pipeline_support._retry_with_backoff", fake_retry
-        )
+        monkeypatch.setattr("src.pipeline_support._retry_with_backoff", fake_retry)
 
         result = asyncio.run(_async_structured_call(client, "Plan prompt", EssayPlan))
 
@@ -762,7 +760,7 @@ class TestConfigBackedBehavior:
 
     def test_rendered_review_prompt_uses_configured_tolerance(self):
         from src.rendering import render_prompt
-        from src.pipeline import Section
+        from src.pipeline_support import Section
 
         prompt = render_prompt(
             "section_review.j2",
@@ -876,7 +874,7 @@ class TestValidationClarifications:
 
 class TestPricing:
     def test_calc_cost_known_model(self):
-        from src.runner import _calc_cost
+        from src.runtime import _calc_cost
 
         cost = _calc_cost(
             "gemini-2.5-flash", input_tokens=1_000_000, output_tokens=1_000_000
@@ -884,13 +882,13 @@ class TestPricing:
         assert cost > 0
 
     def test_calc_cost_unknown_model_returns_zero(self):
-        from src.runner import _calc_cost
+        from src.runtime import _calc_cost
 
         cost = _calc_cost("nonexistent-model-xyz", input_tokens=1000, output_tokens=100)
         assert cost == 0.0
 
     def test_calc_cost_includes_thinking(self):
-        from src.runner import _calc_cost
+        from src.runtime import _calc_cost
 
         cost_no_think = _calc_cost("gpt-4o", input_tokens=1000, output_tokens=100)
         cost_with_think = _calc_cost(
@@ -1017,7 +1015,7 @@ class TestRendering:
 
 class TestSelectedSourceNotes:
     def test_uses_selected_accessible_notes_when_available(self, tmp_path):
-        from src.pipeline import _load_selected_source_notes
+        from src.pipeline_support import _load_selected_source_notes
         from src.schemas import SourceNote
 
         notes_dir = tmp_path / "sources" / "notes"
@@ -1042,7 +1040,7 @@ class TestSelectedSourceNotes:
     def test_falls_back_to_all_accessible_notes_when_selection_is_unusable(
         self, tmp_path, caplog
     ):
-        from src.pipeline import _load_selected_source_notes
+        from src.pipeline_support import _load_selected_source_notes
         from src.schemas import SourceNote
 
         notes_dir = tmp_path / "sources" / "notes"
@@ -1068,7 +1066,7 @@ class TestSelectedSourceNotes:
         assert "Selected sources had no accessible notes" in caplog.text
 
     def test_source_read_candidates_includes_all_api_sources(self):
-        from src.pipeline import _source_read_candidates
+        from src.pipeline_sources import _source_read_candidates
 
         registry = {
             f"s{i}": {"title": f"Source {i}", "url": f"https://example.com/{i}"}
@@ -1086,7 +1084,7 @@ class TestSelectedSourceNotes:
 class TestSourceTargetScaling:
     def test_compute_max_sources_log_scaling(self):
         from config.schemas import EssayWriterConfig
-        from src.pipeline import _compute_max_sources, _suggested_sources
+        from src.pipeline_support import _compute_max_sources, _suggested_sources
 
         cfg = EssayWriterConfig()
         target, fetch = _compute_max_sources(24000, cfg, None)
@@ -1099,7 +1097,7 @@ class TestSourceTargetScaling:
 
     def test_suggested_sources_values(self):
         """Spot-check the log-based formula at key word counts."""
-        from src.pipeline import _suggested_sources
+        from src.pipeline_support import _suggested_sources
 
         assert _suggested_sources(0) == 0
         assert 22 <= _suggested_sources(2000) <= 26
@@ -1110,7 +1108,7 @@ class TestSourceTargetScaling:
 
     def test_compute_max_sources_respects_user_floor_above_raw(self):
         from config.schemas import EssayWriterConfig
-        from src.pipeline import _compute_max_sources
+        from src.pipeline_support import _compute_max_sources
 
         cfg = EssayWriterConfig()
         target, fetch = _compute_max_sources(24000, cfg, 130)
@@ -1120,7 +1118,7 @@ class TestSourceTargetScaling:
     def test_compute_max_sources_explicit_user_above_raw(self):
         """User min (e.g. 90) above log-based suggestion (~65 for 24k) wins."""
         from config.schemas import EssayWriterConfig
-        from src.pipeline import _compute_max_sources
+        from src.pipeline_support import _compute_max_sources
 
         cfg = EssayWriterConfig()
         target, fetch = _compute_max_sources(24000, cfg, 90)
@@ -1130,7 +1128,7 @@ class TestSourceTargetScaling:
     def test_compute_max_sources_explicit_user_below_raw(self):
         """User min below the log-based suggestion still uses user value."""
         from config.schemas import EssayWriterConfig
-        from src.pipeline import _compute_max_sources
+        from src.pipeline_support import _compute_max_sources
 
         cfg = EssayWriterConfig()
         target, fetch = _compute_max_sources(24000, cfg, 30)
@@ -1140,7 +1138,7 @@ class TestSourceTargetScaling:
 
 class TestLongEssayContextHelpers:
     def test_prior_section_context_uses_recent_sections_only(self):
-        from src.pipeline import Section, _build_prior_sections_context
+        from src.pipeline_support import Section, _build_prior_sections_context
 
         sections = [
             (Section(number=1, title="One", heading="One", word_target=100), "intro"),
@@ -1158,7 +1156,7 @@ class TestLongEssayContextHelpers:
         assert "body b" in context
 
     def test_review_context_uses_only_adjacent_sections(self):
-        from src.pipeline import Section, _build_review_context
+        from src.pipeline_support import Section, _build_review_context
 
         sections = [
             Section(number=1, title="One", heading="One", word_target=100),

@@ -9,10 +9,6 @@ from pathlib import Path
 from src.rendering import render_prompt
 from src.schemas import AssignmentBrief, EssayPlan, ValidationQuestion, ValidationResult
 from src.pipeline_sources import (
-    _build_optional_pdf_prompt_payload,
-    _lexical_relevance_score,
-    _optional_pdf_corpus_tokens,
-    _source_read_candidates,
     do_assign_sources,
     do_research,
     make_read_sources,
@@ -20,19 +16,14 @@ from src.pipeline_sources import (
 from src.pipeline_support import (
     PipelineContext,
     PipelineStep,
-    Section,
-    _build_prior_sections_context,
-    _build_review_context,
     _compute_max_sources,
     _execute,
     _get_brief_language,
     _get_target_words,
     _load_checkpoint,
-    _load_selected_source_notes,
     _parse_sections,
     _read_text,
     _structured_call,
-    _suggested_sources,
     _write_json,
 )
 from src.pipeline_writing import (
@@ -195,7 +186,12 @@ def run_pipeline(
     # Skip Q&A callback if plan already exists (implies Q&A was handled).
     if "plan" not in checkpoint:
         validation = _read_validation(run_dir)
-        if validation and validation.questions and not validation.is_pass and on_questions:
+        if (
+            validation
+            and validation.questions
+            and not validation.is_pass
+            and on_questions
+        ):
             on_questions(validation.questions, run_dir)
 
     _execute([PipelineStep("plan", _do_plan)], ctx, checkpoint=checkpoint)

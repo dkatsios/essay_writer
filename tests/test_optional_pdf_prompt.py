@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from src.pipeline import (
+from src.pipeline_sources import (
     _build_optional_pdf_prompt_payload,
     _lexical_relevance_score,
     _optional_pdf_corpus_tokens,

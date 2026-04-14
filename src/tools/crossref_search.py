@@ -61,9 +61,7 @@ def search_crossref(query: str, max_results: int = 5) -> tuple[list[dict], dict]
             if a.get("name"):
                 name = str(a.get("name", "")).strip()
                 authors.append(name)
-                author_families.append(
-                    surname_from_author_string(name) if name else ""
-                )
+                author_families.append(surname_from_author_string(name) if name else "")
                 continue
             given = (a.get("given") or "").strip()
             family = (a.get("family") or "").strip()
