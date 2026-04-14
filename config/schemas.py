@@ -19,8 +19,10 @@ class ProviderModels(BaseModel):
 
 class GoogleModels(ProviderModels):
     worker: str = "google_genai:gemini-2.5-flash"
-    writer: str = "google_genai:gemini-3.1-pro-preview"
-    reviewer: str = "google_genai:gemini-3.1-pro-preview"
+    writer: str = "google_genai:gemini-2.5-pro"
+    reviewer: str = "google_genai:gemini-2.5-pro"
+    # writer: str = "google_genai:gemini-3.1-pro-preview"
+    # reviewer: str = "google_genai:gemini-3.1-pro-preview"
 
 
 class OpenAIModels(ProviderModels):
