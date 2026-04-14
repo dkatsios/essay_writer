@@ -386,7 +386,6 @@
     let jobId = null;
     /** Avoid overwriting the form after the user edits post-job; one restore per job per page load. */
     let submitSnapshotAppliedForJob = null;
-    let pollTimer = null;
     let eventSource = null;
     let downloadInProgress = false;
     /** Read-only HTML for submitted Q&A rounds; kept visible while the pipeline runs. */
@@ -526,8 +525,6 @@
     }
 
     function stopSSE() {
-      clearInterval(pollTimer);
-      pollTimer = null;
       if (eventSource) {
         eventSource.close();
         eventSource = null;
