@@ -11,6 +11,7 @@ the OpenAI-compatible gateway when ``AI_BASE_URL`` is set.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
 import time
@@ -25,6 +26,7 @@ _RETRY_MAX = 5
 _RETRY_INITIAL_DELAY = 10.0
 _RETRY_MAX_DELAY = 120.0
 _GOOGLE_VERTEX_API_KEY_PREFIX = "AQ."
+_GOOGLE_CLOUD_PLATFORM_SCOPE = "https://www.googleapis.com/auth/cloud-platform"
 
 _PROVIDER_ALIASES: dict[str, str] = {
     "google_genai": "google",
@@ -48,6 +50,16 @@ _GATEWAY_PROVIDER_MAP: dict[str, str] = {
 }
 
 
+@dataclass(frozen=True)
+class GoogleCredential:
+    """Normalized Google credential input for direct provider routing."""
+
+    kind: str
+    raw_value: str | None = None
+    service_account_info: dict[str, Any] | None = None
+    project_id: str | None = None
+
+
 def _resolve_api_key(provider: str, api_key: str | None) -> str | None:
     """Resolve the effective provider API key from args or environment."""
     if api_key:
@@ -62,15 +74,140 @@ def _is_google_vertex_api_key(api_key: str | None) -> bool:
     return bool(api_key and api_key.startswith(_GOOGLE_VERTEX_API_KEY_PREFIX))
 
 
-def _require_vertex_project_and_location() -> tuple[str, str]:
+def _parse_google_service_account_info(
+    raw_value: str | None,
+) -> dict[str, Any] | None:
+    """Parse pasted service-account JSON or return None for non-JSON values."""
+    if raw_value is None:
+        return None
+    text = raw_value.strip()
+    if not text or not text.startswith("{"):
+        return None
+    try:
+        parsed = json.loads(text)
+    except json.JSONDecodeError as exc:
+        raise ValueError(
+            "Google credential looks like JSON but could not be parsed. "
+            "Paste the full service-account JSON document."
+        ) from exc
+    if not isinstance(parsed, dict):
+        raise ValueError("Google credential JSON must be an object.")
+    if parsed.get("type") != "service_account":
+        raise ValueError("Google credential JSON must be a service-account document.")
+    missing = [
+        field
+        for field in ("client_email", "private_key", "token_uri")
+        if not parsed.get(field)
+    ]
+    if missing:
+        raise ValueError(
+            "Google service-account JSON is missing required fields: "
+            f"{', '.join(missing)}"
+        )
+    return parsed
+
+
+def _classify_google_credential(raw_value: str | None) -> GoogleCredential:
+    """Classify Google credentials as classic API key, AQ key, or service account."""
+    if raw_value is None:
+        return GoogleCredential(kind="missing")
+    text = raw_value.strip()
+    if not text:
+        return GoogleCredential(kind="missing")
+    if _is_google_vertex_api_key(text):
+        return GoogleCredential(kind="vertex_api_key", raw_value=text)
+    service_account_info = _parse_google_service_account_info(text)
+    if service_account_info is None:
+        return GoogleCredential(kind="api_key", raw_value=text)
+    project_id = service_account_info.get("project_id") or None
+    if project_id is not None and not isinstance(project_id, str):
+        project_id = str(project_id)
+    return GoogleCredential(
+        kind="service_account",
+        raw_value=text,
+        service_account_info=service_account_info,
+        project_id=project_id,
+    )
+
+
+def _require_vertex_project_and_location(
+    *,
+    project_fallback: str | None = None,
+    credential_kind: str = "api_key",
+) -> tuple[str, str]:
     """Return Vertex routing metadata or raise a configuration error."""
-    project = os.environ.get("GOOGLE_CLOUD_PROJECT")
+    project = os.environ.get("GOOGLE_CLOUD_PROJECT") or project_fallback
     location = os.environ.get("GOOGLE_CLOUD_LOCATION")
     if project and location:
         return project, location
+    if credential_kind == "service_account":
+        raise ValueError(
+            "Vertex AI service-account credentials require GOOGLE_CLOUD_LOCATION "
+            "and either GOOGLE_CLOUD_PROJECT or a service-account JSON project_id "
+            "when using the direct Google provider."
+        )
     raise ValueError(
         "Vertex AI Google API keys require GOOGLE_CLOUD_PROJECT and "
         "GOOGLE_CLOUD_LOCATION when using the direct Google provider."
+    )
+
+
+def _normalize_google_model(
+    provider: str,
+    bare_name: str,
+    credential: GoogleCredential,
+) -> tuple[str, dict[str, Any]]:
+    """Normalize Google model specs across classic, Vertex key, and service account."""
+    resolved_provider = provider
+    if provider == "google_genai" and credential.kind in {
+        "vertex_api_key",
+        "service_account",
+    }:
+        resolved_provider = "google_vertexai"
+
+    alias = _PROVIDER_ALIASES.get(resolved_provider, resolved_provider)
+    kwargs: dict[str, Any] = {}
+    if credential.kind != "service_account":
+        kwargs["api_key"] = credential.raw_value or "not-set"
+    if resolved_provider == "google_vertexai":
+        project, location = _require_vertex_project_and_location(
+            project_fallback=credential.project_id,
+            credential_kind=credential.kind,
+        )
+        kwargs["project"] = project
+        kwargs["location"] = location
+    return f"{alias}/{bare_name}", kwargs
+
+
+def _build_google_service_account_client(
+    *,
+    normalized_model: str,
+    model_spec: str,
+    service_account_info: dict[str, Any],
+    project: str,
+    location: str,
+    use_async: bool,
+) -> ModelClient | AsyncModelClient:
+    """Build an Instructor-wrapped Google GenAI client from pasted service-account JSON."""
+    from google import genai
+    from google.oauth2 import service_account
+
+    credentials = service_account.Credentials.from_service_account_info(
+        service_account_info,
+        scopes=[_GOOGLE_CLOUD_PLATFORM_SCOPE],
+    )
+    raw_client = genai.Client(
+        vertexai=True,
+        credentials=credentials,
+        project=project,
+        location=location,
+    )
+    client = instructor.from_genai(raw_client, use_async=use_async)
+    wrapper_cls = AsyncModelClient if use_async else ModelClient
+    return wrapper_cls(
+        client=client,
+        model=normalized_model.split("/", 1)[1],
+        model_spec=model_spec,
     )
 
 
@@ -203,37 +340,36 @@ def _normalize_model_spec(
     provider, _, bare_name = model_spec.partition(":")
     bare_name = bare_name or model_spec
     effective_api_key = _resolve_api_key(provider, api_key)
+    google_credential = (
+        _classify_google_credential(effective_api_key)
+        if provider in {"google_genai", "google_vertexai"}
+        else None
+    )
 
     base_url = os.environ.get("AI_BASE_URL")
     if base_url:
-        if provider in {
-            "google_genai",
-            "google_vertexai",
-        } and _is_google_vertex_api_key(
-            effective_api_key or os.environ.get("GOOGLE_API_KEY")
-        ):
+        gateway_api_key = api_key or os.environ.get("AI_API_KEY", "not-set")
+        if google_credential is not None and google_credential.kind in {
+            "vertex_api_key",
+            "service_account",
+        }:
             logger.warning(
-                "AI_BASE_URL is set; direct Google Vertex API key autodetection is "
-                "skipped and gateway credentials are used instead."
+                "AI_BASE_URL is set; direct Google Vertex credentials are skipped "
+                "and gateway credentials are used instead."
             )
+            gateway_api_key = os.environ.get("AI_API_KEY", "not-set")
         gateway_prefix = _GATEWAY_PROVIDER_MAP.get(provider, "")
         model_name = os.environ.get("AI_MODEL") or f"{gateway_prefix}{bare_name}"
         return f"openai/{model_name}", {
             "base_url": base_url,
-            "api_key": api_key or os.environ.get("AI_API_KEY", "not-set"),
+            "api_key": gateway_api_key,
         }
 
-    resolved_provider = provider
-    if provider == "google_genai" and _is_google_vertex_api_key(effective_api_key):
-        resolved_provider = "google_vertexai"
+    if google_credential is not None:
+        return _normalize_google_model(provider, bare_name, google_credential)
 
-    alias = _PROVIDER_ALIASES.get(resolved_provider, resolved_provider)
-    kwargs: dict[str, Any] = {"api_key": effective_api_key or "not-set"}
-    if resolved_provider == "google_vertexai":
-        project, location = _require_vertex_project_and_location()
-        kwargs["project"] = project
-        kwargs["location"] = location
-    return f"{alias}/{bare_name}", kwargs
+    alias = _PROVIDER_ALIASES.get(provider, provider)
+    return f"{alias}/{bare_name}", {"api_key": effective_api_key or "not-set"}
 
 
 @dataclass
@@ -260,6 +396,20 @@ class AsyncModelClient:
 def create_client(model_spec: str, *, api_key: str | None = None) -> ModelClient:
     """Build the sync Instructor client for the selected provider."""
     normalized_model, kwargs = _normalize_model_spec(model_spec, api_key=api_key)
+    provider, _, _bare_name = model_spec.partition(":")
+    if provider in {"google_genai", "google_vertexai"} and "api_key" not in kwargs:
+        google_credential = _classify_google_credential(
+            _resolve_api_key(provider, api_key)
+        )
+        if google_credential.service_account_info is not None:
+            return _build_google_service_account_client(
+                normalized_model=normalized_model,
+                model_spec=model_spec,
+                service_account_info=google_credential.service_account_info,
+                project=kwargs["project"],
+                location=kwargs["location"],
+                use_async=False,
+            )
     client = instructor.from_provider(normalized_model, **kwargs)
     return ModelClient(
         client=client,
@@ -275,6 +425,20 @@ def create_async_client(
 ) -> AsyncModelClient:
     """Build the async Instructor client for the selected provider."""
     normalized_model, kwargs = _normalize_model_spec(model_spec, api_key=api_key)
+    provider, _, _bare_name = model_spec.partition(":")
+    if provider in {"google_genai", "google_vertexai"} and "api_key" not in kwargs:
+        google_credential = _classify_google_credential(
+            _resolve_api_key(provider, api_key)
+        )
+        if google_credential.service_account_info is not None:
+            return _build_google_service_account_client(
+                normalized_model=normalized_model,
+                model_spec=model_spec,
+                service_account_info=google_credential.service_account_info,
+                project=kwargs["project"],
+                location=kwargs["location"],
+                use_async=True,
+            )
     client = instructor.from_provider(normalized_model, async_client=True, **kwargs)
     return AsyncModelClient(
         client=client,

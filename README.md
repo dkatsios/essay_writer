@@ -82,4 +82,4 @@ The service exposes the web UI on the port assigned by Render. Optional: set `ES
 
 Default settings are defined in `config/schemas.py`. Override with `--config path/to/custom.yaml` or environment variables (prefix `ESSAY_WRITER_`).
 
-When the direct Google provider path is used, the runtime auto-detects `GOOGLE_API_KEY` format. Classic keys stay on the Gemini Developer API path, while `AQ.` keys are routed through Vertex AI. If `AI_BASE_URL` is set, the runtime uses the gateway credentials instead and does not auto-switch based on `GOOGLE_API_KEY`.
+When the direct Google provider path is used, the runtime auto-detects the credential format. Classic `GOOGLE_API_KEY` values stay on the Gemini Developer API path, while `AQ.` keys are routed through Vertex AI. In the web UI, the same credential field also accepts pasted Vertex service-account JSON; when that JSON includes `project_id`, it is used if `GOOGLE_CLOUD_PROJECT` is unset. `GOOGLE_CLOUD_LOCATION` is still required for all direct Vertex paths. If `AI_BASE_URL` is set, the runtime uses the gateway credentials instead and ignores direct Google Vertex credentials.

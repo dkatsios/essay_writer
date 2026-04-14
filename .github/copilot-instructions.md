@@ -124,7 +124,7 @@ No `default.yaml` exists; field defaults in `schemas.py` are canonical.
 
 **Provider presets** — `_PROVIDER_PRESETS` in `config/schemas.py` maps `google`, `openai`, `anthropic` to default (worker, writer, reviewer) model specs. When `models.provider` is set, roles not explicitly overridden get the preset values. Explicit role settings always win.
 
-**Google credentials** — for the direct Google provider path, `GOOGLE_API_KEY` may be either a classic Gemini Developer API key or a Vertex AI `AQ.` API key. `AQ.` keys must also have `GOOGLE_CLOUD_PROJECT` and `GOOGLE_CLOUD_LOCATION` set so `src/agent.py` can route the request through the Vertex provider alias. When `AI_BASE_URL` is set, model calls use the gateway credentials instead of direct Google credential autodetection.
+**Google credentials** — for the direct Google provider path, `GOOGLE_API_KEY` may be either a classic Gemini Developer API key or a Vertex AI `AQ.` API key. The web UI's explicit credential field also accepts pasted Vertex service-account JSON. `AQ.` keys must have `GOOGLE_CLOUD_PROJECT` and `GOOGLE_CLOUD_LOCATION` set so `src/agent.py` can route the request through the Vertex provider alias. For pasted service-account JSON, `src/agent.py` may use the JSON `project_id` when `GOOGLE_CLOUD_PROJECT` is unset, but `GOOGLE_CLOUD_LOCATION` is still required. When `AI_BASE_URL` is set, model calls use the gateway credentials instead of direct Google credential autodetection.
 
 ### Key Invariants
 
