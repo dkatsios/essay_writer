@@ -42,7 +42,7 @@ from src.pipeline_support import (
 
 logger = logging.getLogger(__name__)
 
-_WRITE_CONCURRENCY = 4
+_WRITE_CONCURRENCY = 8
 _REVIEW_CONCURRENCY = 4
 
 
