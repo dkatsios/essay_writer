@@ -101,18 +101,27 @@ def _execute(
     ctx: PipelineContext,
     *,
     checkpoint: set[str] | None = None,
+    step_offset: int = 0,
+    total_steps: int | None = None,
 ) -> None:
     """Run a list of pipeline steps with timing, tracking, and checkpointing."""
+    running_idx = 0
     for step in steps:
         if checkpoint is not None and step.name in checkpoint:
             print(f"\n{'=' * 50}", file=sys.stderr)
             print(f"  Step: {step.name} (skipped — already completed)", file=sys.stderr)
+            running_idx += 1
             continue
 
         print(f"\n{'=' * 50}", file=sys.stderr)
         print(f"  Step: {step.name}", file=sys.stderr)
         if ctx.tracker is not None:
             ctx.tracker.set_current_step(step.name)
+            if total_steps is not None:
+                ctx.tracker.set_step_progress(
+                    step_offset + running_idx, total_steps
+                )
+            ctx.tracker.set_sub_total(0)
         start = monotonic()
         try:
             step.fn(ctx)
@@ -127,6 +136,7 @@ def _execute(
         if ctx.tracker is not None:
             ctx.tracker.record_duration(step.name, duration)
         _save_checkpoint(ctx.run_dir, step.name)
+        running_idx += 1
 
 
 def _record_usage(tracker: object | None, response) -> None:

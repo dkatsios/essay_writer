@@ -219,6 +219,9 @@
     .clarifications-round { margin-bottom: 1rem; }
     .clarifications-round > h3 { font-size: 1.05rem; margin: 0 0 .75rem; color: #334155; }
     .pipeline-status { margin-top: .75rem; padding-top: .75rem; border-top: 1px solid #e2e8f0; }
+    .progress-bar-container { width: 100%; height: 8px; background: #e2e8f0; border-radius: 4px; margin-top: .5rem; overflow: hidden; }
+    .progress-bar-fill { height: 100%; background: var(--accent); border-radius: 4px; transition: width .3s ease; }
+    .step-counter { color: var(--text-muted); font-size: .85rem; margin-left: .25rem; }
     .clarification-pending .question-block label {
       display: flex;
       align-items: flex-start;
@@ -545,7 +548,7 @@
 
       if (data.status === 'running') {
         const pipelineEl = statusArea.querySelector('.pipeline-status');
-        const line = runningStatusHtml(data.stage);
+        const line = runningStatusHtml(data);
         if (pipelineEl) {
           pipelineEl.innerHTML = line;
         } else if (!clarificationsHistoryHtml) {
@@ -947,28 +950,57 @@
     }
 
     /** Map server pipeline step id to a short UI label. */
-    function formatStage(raw) {
+    function formatStage(raw, data) {
       if (!raw || raw === 'unknown') return 'Working';
+      var label;
       const w = /^write:(\d+)$/.exec(raw);
-      if (w) return 'Writing (section ' + w[1] + ')';
-      const r = /^review:(\d+)$/.exec(raw);
-      if (r) return 'Reviewing (section ' + r[1] + ')';
-      const labels = {
-        intake: 'Intake',
-        validate: 'Validation',
-        plan: 'Planning',
-        research: 'Research',
-        read_sources: 'Reading sources',
-        write: 'Writing',
-        review: 'Reviewing',
-        export: 'Exporting',
-      };
-      if (labels[raw]) return labels[raw];
-      return raw.replace(/_/g, ' ');
+      if (w) { label = 'Writing (section ' + w[1] + ')'; }
+      else {
+        const r = /^review:(\d+)$/.exec(raw);
+        if (r) { label = 'Reviewing (section ' + r[1] + ')'; }
+        else {
+          const labels = {
+            intake: 'Intake',
+            validate: 'Validation',
+            plan: 'Planning',
+            research: 'Research',
+            read_sources: 'Reading sources',
+            assign_sources: 'Assigning sources',
+            write: 'Writing',
+            review: 'Reviewing',
+            export: 'Exporting',
+          };
+          label = labels[raw] || raw.replace(/_/g, ' ');
+        }
+      }
+      if (data && data.sub_total > 0) {
+        label += ' (' + (data.sub_done || 0) + '/' + data.sub_total + ')';
+      }
+      return label;
     }
 
-    function runningStatusHtml(stage) {
-      return '<span class="spinner"></span> ' + esc(formatStage(stage)) + '…';
+    function computeProgressPct(data) {
+      if (!data.step_count || data.step_count <= 0) return 0;
+      var stepFraction = 1 / data.step_count;
+      var pct = (data.step_index || 0) * stepFraction;
+      if (data.sub_total > 0) {
+        pct += ((data.sub_done || 0) / data.sub_total) * stepFraction;
+      }
+      return Math.min(Math.round(pct * 100), 99);
+    }
+
+    function runningStatusHtml(data) {
+      var stage = (data && data.stage) || (typeof data === 'string' ? data : '');
+      var html = '<span class="spinner"></span> ' + esc(formatStage(stage, data));
+      if (data && data.step_count > 0) {
+        html += ' <span class="step-counter">&mdash; step ' + ((data.step_index || 0) + 1) + ' of ' + data.step_count + '</span>';
+      }
+      html += '&hellip;';
+      if (data && data.step_count > 1) {
+        var pct = computeProgressPct(data);
+        html += '<div class="progress-bar-container"><div class="progress-bar-fill" style="width:' + pct + '%"></div></div>';
+      }
+      return html;
     }
   </script>
 </body>

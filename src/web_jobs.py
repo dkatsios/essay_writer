@@ -87,6 +87,12 @@ def build_status_payload(job: Job) -> dict:
     payload: dict = {"status": job.status}
     if job.status == "running" and job.tracker is not None:
         payload["stage"] = job.tracker.get_current_step()
+        with job.tracker._lock:
+            payload["step_index"] = job.tracker.step_index
+            payload["step_count"] = job.tracker.step_count
+            if job.tracker.sub_total > 0:
+                payload["sub_done"] = job.tracker.sub_done
+                payload["sub_total"] = job.tracker.sub_total
     if job.status == "questions" and job.questions:
         payload["questions"] = job.questions
     if job.status == "optional_pdfs" and job.optional_pdf_items:
@@ -319,6 +325,7 @@ def run_pipeline_thread(
 
         tracker = TokenTracker()
         job.tracker = tracker
+        tracker.set_on_progress(lambda: notify_job(job))
 
         def _on_questions(questions: list[ValidationQuestion], run_path: Path) -> None:
             remaining = questions

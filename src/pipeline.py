@@ -167,7 +167,16 @@ def run_pipeline(
     for subdir in ("brief", "plan", "sources", "essay"):
         (run_dir / subdir).mkdir(parents=True, exist_ok=True)
 
-    _execute([PipelineStep("intake", _do_intake)], ctx, checkpoint=checkpoint)
+    # Preliminary step count for progress (intake + validate + plan).
+    preliminary_total = 3
+
+    _execute(
+        [PipelineStep("intake", _do_intake)],
+        ctx,
+        checkpoint=checkpoint,
+        step_offset=0,
+        total_steps=preliminary_total,
+    )
 
     # Apply user-supplied min_sources to the brief before validation.
     brief_path = run_dir / "brief" / "assignment.json"
@@ -181,7 +190,13 @@ def run_pipeline(
             encoding="utf-8",
         )
 
-    _execute([PipelineStep("validate", _do_validate)], ctx, checkpoint=checkpoint)
+    _execute(
+        [PipelineStep("validate", _do_validate)],
+        ctx,
+        checkpoint=checkpoint,
+        step_offset=1,
+        total_steps=preliminary_total,
+    )
 
     # Skip Q&A callback if plan already exists (implies Q&A was handled).
     if "plan" not in checkpoint:
@@ -194,7 +209,13 @@ def run_pipeline(
         ):
             on_questions(validation.questions, run_dir)
 
-    _execute([PipelineStep("plan", _do_plan)], ctx, checkpoint=checkpoint)
+    _execute(
+        [PipelineStep("plan", _do_plan)],
+        ctx,
+        checkpoint=checkpoint,
+        step_offset=2,
+        total_steps=preliminary_total,
+    )
 
     target_words = _get_target_words(run_dir)
     threshold = config.writing.long_essay_threshold
@@ -240,14 +261,19 @@ def run_pipeline(
         citation_min_sources,
     )
 
+    execution_steps = _build_execution_steps(
+        ctx,
+        target_words,
+        fetch_sources,
+        target_sources,
+        citation_min_sources,
+    )
+    total_steps = 3 + len(execution_steps)
+
     _execute(
-        _build_execution_steps(
-            ctx,
-            target_words,
-            fetch_sources,
-            target_sources,
-            citation_min_sources,
-        ),
+        execution_steps,
         ctx,
         checkpoint=checkpoint,
+        step_offset=3,
+        total_steps=total_steps,
     )

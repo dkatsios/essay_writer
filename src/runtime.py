@@ -6,6 +6,7 @@ import json
 import logging
 import re
 import sys
+from collections.abc import Callable
 from pathlib import Path
 
 from src.schemas import Clarification, ValidationQuestion
@@ -57,6 +58,11 @@ class TokenTracker:
         self._steps: dict[str, dict] = {}
         self._lock = __import__("threading").Lock()
         self._run_steps: dict[str, str] = {}
+        self.step_index: int = 0
+        self.step_count: int = 0
+        self.sub_done: int = 0
+        self.sub_total: int = 0
+        self._on_progress: Callable[[], None] | None = None
 
     def _ensure_step(self, step: str) -> dict:
         if step not in self._steps:
@@ -89,6 +95,30 @@ class TokenTracker:
     def pop_step(self, run_id: str) -> str:
         with self._lock:
             return self._run_steps.pop(run_id, self.current_step)
+
+    def set_step_progress(self, index: int, count: int) -> None:
+        """Set the pipeline-level step index and count."""
+        with self._lock:
+            self.step_index = index
+            self.step_count = count
+
+    def set_sub_total(self, total: int) -> None:
+        """Set the sub-step total and reset sub_done to 0."""
+        with self._lock:
+            self.sub_total = total
+            self.sub_done = 0
+
+    def increment_sub_done(self) -> None:
+        """Increment the sub-step counter and fire progress callback."""
+        with self._lock:
+            self.sub_done += 1
+        cb = self._on_progress
+        if cb is not None:
+            cb()
+
+    def set_on_progress(self, callback: Callable[[], None] | None) -> None:
+        """Set callback invoked when sub-step progress changes."""
+        self._on_progress = callback
 
     def record(
         self,

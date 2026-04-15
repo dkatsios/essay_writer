@@ -535,6 +535,9 @@ def make_read_sources(target_sources: int) -> Callable[[PipelineContext], None]:
         semaphore = asyncio.Semaphore(_SOURCE_READ_CONCURRENCY)
         async_worker = ctx.async_worker or ctx.worker.to_async()
 
+        if ctx.tracker is not None:
+            ctx.tracker.set_sub_total(len(tasks))
+
         async def read_one(source_id: str, meta: dict) -> tuple[str, SourceNote | None]:
             async with semaphore:
                 try:
@@ -553,6 +556,9 @@ def make_read_sources(target_sources: int) -> Callable[[PipelineContext], None]:
                 except Exception:
                     logger.exception("Failed to read source %s", source_id)
                     return source_id, None
+                finally:
+                    if ctx.tracker is not None:
+                        ctx.tracker.increment_sub_done()
 
         async def read_all(
             pairs: list[tuple[str, dict]],

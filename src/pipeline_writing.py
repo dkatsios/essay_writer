@@ -183,7 +183,11 @@ def make_write_sections(
         section_assignments = _load_source_assignments(ctx.run_dir)
         notes_by_id = {note.source_id: note for note in source_notes}
 
-        for section in _writing_order(sections):
+        ordered = _writing_order(sections)
+        if ctx.tracker is not None:
+            ctx.tracker.set_sub_total(len(ordered))
+
+        for section in ordered:
             prior_context = _build_prior_sections_context(written_sections)
             section_corpus = (
                 f"{section.title} {section.key_points} {section.content_outline or ''}"
@@ -254,6 +258,8 @@ def make_write_sections(
                 file=sys.stderr,
             )
             written_sections.append((section, text))
+            if ctx.tracker is not None:
+                ctx.tracker.increment_sub_done()
 
         draft_parts = []
         for section in sorted(sections, key=lambda item: item.number):
@@ -291,6 +297,9 @@ def make_review_sections(
             section_path = sections_dir / _section_filename(section)
             if section_path.exists():
                 draft_texts[section.number] = section_path.read_text(encoding="utf-8")
+
+        if ctx.tracker is not None:
+            ctx.tracker.set_sub_total(len(plan_order))
 
         def _review_one(section: Section) -> tuple[Section, str, float]:
             if section.number not in draft_texts:
@@ -346,6 +355,8 @@ def make_review_sections(
             }
             for future in as_completed(futures):
                 section, _, duration = future.result()
+                if ctx.tracker is not None:
+                    ctx.tracker.increment_sub_done()
                 if duration > 0:
                     print(
                         f"    section {section.number} ({section.title}) -- {duration:.1f}s",
