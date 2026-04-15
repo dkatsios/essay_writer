@@ -34,6 +34,7 @@ def search_crossref(query: str, max_results: int = 5) -> tuple[list[dict], dict]
     mailto = os.environ.get("CROSSREF_MAILTO", DEFAULT_MAILTO)
     params = {
         "query": query,
+        "filter": "has-abstract:true",
         "rows": max_results,
         "mailto": mailto,
         "select": "title,author,published,abstract,DOI,URL,type,is-referenced-by-count",

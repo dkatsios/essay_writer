@@ -1,5 +1,6 @@
 """Crossref metadata normalisation."""
 
+from src.tools import crossref_search
 from src.tools.crossref_search import _strip_inline_markup
 
 
@@ -19,3 +20,32 @@ def test_strip_inline_markup_plain_text_unchanged() -> None:
 
 def test_strip_inline_markup_empty() -> None:
     assert _strip_inline_markup("") == ""
+
+
+def test_search_crossref_requests_abstract_filter(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    class _Response:
+        def json(self) -> dict:
+            return {"message": {"items": []}}
+
+    def _fake_http_get(url: str, **kwargs):
+        captured["url"] = url
+        captured.update(kwargs)
+        return _Response()
+
+    monkeypatch.setattr(crossref_search, "http_get", _fake_http_get)
+
+    results, raw = crossref_search.search_crossref("climate policy", max_results=7)
+
+    assert results == []
+    assert raw == {"message": {"items": []}}
+    assert captured["url"] == "https://api.crossref.org/works"
+    assert captured["params"] == {
+        "query": "climate policy",
+        "filter": "has-abstract:true",
+        "rows": 7,
+        "mailto": crossref_search.DEFAULT_MAILTO,
+        "select": "title,author,published,abstract,DOI,URL,type,is-referenced-by-count",
+    }
+    assert captured["request_name"] == "Crossref"

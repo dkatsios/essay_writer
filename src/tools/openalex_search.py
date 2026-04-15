@@ -24,6 +24,7 @@ def search_openalex(query: str, max_results: int = 5) -> tuple[list[dict], dict]
     mailto = os.environ.get("OPENALEX_MAILTO", DEFAULT_MAILTO)
     params = {
         "search": query,
+        "filter": "has_abstract:true",
         "per_page": max_results,
         "mailto": mailto,
         "sort": "relevance_score:desc",
