@@ -190,15 +190,11 @@ def _partition_sections_for_writing(
         section for section in sections if section.requires_full_context
     ]
 
-    def _deferred_rank(section: Section) -> tuple[int, int]:
-        # Intro last so it can see the conclusion draft too.
-        if section.is_intro:
-            return (2, section.position)
-        if section.is_conclusion:
-            return (1, section.position)
-        return (0, section.position)
+    def _deferred_sort_key(section: Section) -> tuple[int, int]:
+        order = section.deferred_order if section.deferred_order is not None else 0
+        return (order, section.position)
 
-    return parallel_sections, sorted(deferred_sections, key=_deferred_rank)
+    return parallel_sections, sorted(deferred_sections, key=_deferred_sort_key)
 
 
 def _load_section_drafts(sections_dir: Path, sections: list[Section]) -> dict[int, str]:

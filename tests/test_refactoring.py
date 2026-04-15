@@ -1157,7 +1157,7 @@ class TestLongEssayContextHelpers:
                 heading="Intro",
                 word_target=100,
                 requires_full_context=True,
-                is_intro=True,
+                deferred_order=2,
             ),
             Section(
                 position=2,
@@ -1173,6 +1173,7 @@ class TestLongEssayContextHelpers:
                 heading="Synthesis",
                 word_target=100,
                 requires_full_context=True,
+                deferred_order=0,
             ),
             Section(
                 position=4,
@@ -1181,7 +1182,7 @@ class TestLongEssayContextHelpers:
                 heading="Conclusion",
                 word_target=100,
                 requires_full_context=True,
-                is_conclusion=True,
+                deferred_order=1,
             ),
         ]
 
@@ -1264,7 +1265,7 @@ class TestLongEssayContextHelpers:
         assert "section one" not in context
         assert "section five" not in context
 
-    def test_parse_sections_marks_intro_and_conclusion_for_full_context(self, tmp_path):
+    def test_parse_sections_passes_through_deferred_fields(self, tmp_path):
         from src.pipeline_support import _parse_sections
 
         plan = {
@@ -1276,19 +1277,23 @@ class TestLongEssayContextHelpers:
                     "title": "Introduction",
                     "heading": "Introduction",
                     "word_target": 200,
+                    "requires_full_context": True,
+                    "deferred_order": 2,
                 },
                 {
                     "number": 2,
                     "title": "Body",
                     "heading": "Body",
                     "word_target": 400,
-                    "requires_full_context": True,
+                    "requires_full_context": False,
                 },
                 {
                     "number": 3,
                     "title": "Conclusion",
                     "heading": "Conclusion",
                     "word_target": 200,
+                    "requires_full_context": True,
+                    "deferred_order": 1,
                 },
             ],
             "research_queries": ["test"],
@@ -1301,9 +1306,10 @@ class TestLongEssayContextHelpers:
 
         assert [section.requires_full_context for section in sections] == [
             True,
-            True,
+            False,
             True,
         ]
+        assert [section.deferred_order for section in sections] == [2, None, 1]
 
 
 # ── docx_builder table support ────────────────────────────────────────

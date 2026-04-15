@@ -100,6 +100,18 @@ class PlanSection(BaseModel):
     key_points: str = ""
     content_outline: str = ""
     requires_full_context: bool = False
+    deferred_order: int | None = None
+
+    @model_validator(mode="after")
+    def _validate_deferred_order(self) -> PlanSection:
+        if self.requires_full_context and self.deferred_order is None:
+            raise ValueError(
+                f"section {self.number!r} has requires_full_context=true "
+                "but deferred_order is missing"
+            )
+        if not self.requires_full_context:
+            self.deferred_order = None
+        return self
 
 
 class EssayPlan(BaseModel):

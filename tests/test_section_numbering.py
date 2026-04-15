@@ -24,6 +24,8 @@ def _write_plan(run_dir: Path) -> None:
                 "word_target": 300,
                 "key_points": "Context",
                 "content_outline": "Open the essay",
+                "requires_full_context": True,
+                "deferred_order": 2,
             },
             {
                 "number": 2,

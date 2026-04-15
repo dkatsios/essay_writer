@@ -30,9 +30,9 @@ Each section's `content_outline` should be detailed enough for independent writi
 - How the section relates to the thesis
 - Any specific examples or case studies to include
 
-Each section object must also include `requires_full_context`:
-- Set it to `true` for introduction, conclusion, synthesis, epilogue, methodology wrap-up, or any section whose quality depends on seeing the rest of the drafted essay.
-- Set it to `false` for most regular body sections that can be drafted independently.
+Each section object must also include:
+- `requires_full_context` (boolean): set to `true` for any section whose quality depends on seeing the rest of the drafted essay — for example introduction, conclusion, synthesis, epilogue, methodology wrap-up, or any integrative section. Set to `false` for regular body sections that can be drafted independently.
+- `deferred_order` (integer or null): controls the writing order among deferred sections when `requires_full_context` is `true`. Lower values are written first; higher values are written last and see the most context (all earlier deferred sections plus the full body). For example, a conclusion might get `deferred_order: 1` and an introduction `deferred_order: 2` so the intro is written last and can reference the entire essay including the conclusion. Set to `null` when `requires_full_context` is `false`.
 
 ## Word Allocation Guidelines
 
@@ -47,7 +47,7 @@ Each section object must also include `requires_full_context`:
 - All section titles and thesis in {{ language }}.
 - If the brief includes explicit structure instructions in `description`, `special_instructions`, or `clarifications`, the `sections` array must reflect those instructions directly.
 - Each section `number` must be unique and strictly increasing in plan order. If the outline includes labels like 1.1, 1.2, 2.1, keep those in `heading`, but still assign a distinct sequential integer to each section object.
-- Each section object must include `requires_full_context` as a boolean.
+- Each section object must include `requires_full_context` (boolean) and `deferred_order` (integer or null).
 - When no explicit structure is supplied, a typical academic structure is acceptable.
 {% if language and 'Greek' in language %}
 - **Greek capitalisation (titles and section fields)**: The essay `title`, each section `title`, and each `heading` must use **sentence-style** Greek (only the first word and proper nouns capitalised; common nouns and adjectives lowercase in the rest). Do **not** imitate English Title Case on every important word. After a colon, the following word is lowercase unless it is a proper name. This applies to JSON string values — the writer copies them verbatim into the essay.
