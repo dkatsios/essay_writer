@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import MagicMock, call
+from unittest.mock import MagicMock
 
 from src.pipeline_support import PipelineContext, _parse_sections
 from src.pipeline_writing import make_review_sections, make_write_sections
@@ -108,6 +108,8 @@ def test_write_sections_keeps_duplicate_numbers_distinct(
     sections = _parse_sections(tmp_path)
     tracker = MagicMock()
     captured_assignments: dict[int, list[str]] = {}
+    captured_context_flags: dict[int, bool] = {}
+    captured_context_text: dict[int, str] = {}
 
     monkeypatch.setattr(
         "src.pipeline_writing._load_selected_source_notes", lambda _run_dir: []
@@ -116,6 +118,8 @@ def test_write_sections_keeps_duplicate_numbers_distinct(
     def fake_render_prompt(template: str, **kwargs) -> str:
         section = kwargs["section"]
         captured_assignments[section.position] = list(kwargs["assigned_source_ids"])
+        captured_context_flags[section.position] = kwargs["has_full_context"]
+        captured_context_text[section.position] = kwargs["essay_context"]
         return section.title
 
     monkeypatch.setattr("src.pipeline_writing.render_prompt", fake_render_prompt)
@@ -133,6 +137,15 @@ def test_write_sections_keeps_duplicate_numbers_distinct(
         2: ["body-a-source"],
         3: ["body-b-source"],
     }
+    assert captured_context_flags == {
+        1: True,
+        2: False,
+        3: False,
+    }
+    assert "draft:Body A" in captured_context_text[1]
+    assert "draft:Body B" in captured_context_text[1]
+    assert captured_context_text[2] == ""
+    assert captured_context_text[3] == ""
     assert (tmp_path / "essay" / "sections" / "01.md").read_text(
         encoding="utf-8"
     ) == "draft:Intro"
@@ -145,11 +158,9 @@ def test_write_sections_keeps_duplicate_numbers_distinct(
     assert (tmp_path / "essay" / "draft.md").read_text(encoding="utf-8") == (
         "draft:Intro\n\ndraft:Body A\n\ndraft:Body B"
     )
-    assert tracker.set_current_step.call_args_list == [
-        call("write:2"),
-        call("write:3"),
-        call("write:1"),
-    ]
+    write_steps = [args.args[0] for args in tracker.set_current_step.call_args_list]
+    assert write_steps[-1] == "write:1"
+    assert sorted(write_steps[:-1]) == ["write:2", "write:3"]
 
 
 def test_review_sections_keeps_duplicate_numbers_distinct(
@@ -195,3 +206,88 @@ def test_review_sections_keeps_duplicate_numbers_distinct(
         "review:2",
         "review:3",
     ]
+
+
+def test_review_sections_routes_reconciliation_notes_by_position(
+    tmp_path: Path, monkeypatch
+) -> None:
+    _write_plan(tmp_path)
+    _write_brief(tmp_path)
+    sections = _parse_sections(tmp_path)
+    sections_dir = tmp_path / "essay" / "sections"
+    sections_dir.mkdir(parents=True, exist_ok=True)
+    (sections_dir / "01.md").write_text("draft:Intro", encoding="utf-8")
+    (sections_dir / "02.md").write_text("draft:Body A", encoding="utf-8")
+    (sections_dir / "03.md").write_text("draft:Body B", encoding="utf-8")
+    (tmp_path / "essay").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "essay" / "reconciliation.json").write_text(
+        json.dumps(
+            {
+                "global_notes": [],
+                "sections": [
+                    {
+                        "section_position": 1,
+                        "section_number": 1,
+                        "title": "Intro",
+                        "instructions": [
+                            {
+                                "category": "intro_alignment",
+                                "priority": "high",
+                                "instruction": "Align the introduction with the completed body.",
+                                "related_section_positions": [2, 3],
+                            }
+                        ],
+                    },
+                    {
+                        "section_position": 2,
+                        "section_number": 2,
+                        "title": "Body A",
+                        "instructions": [
+                            {
+                                "category": "transition",
+                                "priority": "medium",
+                                "instruction": "Strengthen the bridge into Body B.",
+                                "related_section_positions": [3],
+                            }
+                        ],
+                    },
+                    {
+                        "section_position": 3,
+                        "section_number": 2,
+                        "title": "Body B",
+                        "instructions": [
+                            {
+                                "category": "overlap",
+                                "priority": "low",
+                                "instruction": "Trim repeated setup already covered in Body A.",
+                                "related_section_positions": [2],
+                            }
+                        ],
+                    },
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    captured_notes: dict[int, list[str]] = {}
+
+    def fake_render_prompt(_template: str, **kwargs) -> str:
+        section = kwargs["section"]
+        captured_notes[section.position] = [
+            item.instruction for item in kwargs["reconciliation_instructions"]
+        ]
+        return section.title
+
+    monkeypatch.setattr("src.pipeline_writing.render_prompt", fake_render_prompt)
+    monkeypatch.setattr(
+        "src.pipeline_writing._text_call",
+        lambda _client, _system, user_prompt, _tracker=None: f"review:{user_prompt}",
+    )
+
+    make_review_sections(sections, target_words=1300)(_make_ctx(tmp_path))
+
+    assert captured_notes == {
+        1: ["Align the introduction with the completed body."],
+        2: ["Strengthen the bridge into Body B."],
+        3: ["Trim repeated setup already covered in Body A."],
+    }

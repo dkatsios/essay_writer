@@ -764,7 +764,13 @@ class TestConfigBackedBehavior:
 
         prompt = render_prompt(
             "section_review.j2",
-            section=Section(number=1, title="Intro", heading="Intro", word_target=100),
+            section=Section(
+                position=1,
+                number=1,
+                title="Intro",
+                heading="Intro",
+                word_target=100,
+            ),
             full_essay="Body",
             section_words=96,
             tolerance_ratio=0.05,
@@ -1137,14 +1143,85 @@ class TestSourceTargetScaling:
 
 
 class TestLongEssayContextHelpers:
+    def test_partition_sections_for_writing_defers_intro_conclusion_and_marked_sections(
+        self,
+    ):
+        from src.pipeline_support import Section
+        from src.pipeline_writing import _partition_sections_for_writing
+
+        sections = [
+            Section(
+                position=1,
+                number=1,
+                title="Intro",
+                heading="Intro",
+                word_target=100,
+                requires_full_context=True,
+                is_intro=True,
+            ),
+            Section(
+                position=2,
+                number=2,
+                title="Body A",
+                heading="Body A",
+                word_target=100,
+            ),
+            Section(
+                position=3,
+                number=3,
+                title="Synthesis",
+                heading="Synthesis",
+                word_target=100,
+                requires_full_context=True,
+            ),
+            Section(
+                position=4,
+                number=4,
+                title="Conclusion",
+                heading="Conclusion",
+                word_target=100,
+                requires_full_context=True,
+                is_conclusion=True,
+            ),
+        ]
+
+        parallel_sections, deferred_sections = _partition_sections_for_writing(sections)
+
+        assert [section.position for section in parallel_sections] == [2]
+        assert [section.position for section in deferred_sections] == [3, 4, 1]
+
     def test_prior_section_context_uses_recent_sections_only(self):
         from src.pipeline_support import Section, _build_prior_sections_context
 
         sections = [
-            (Section(number=1, title="One", heading="One", word_target=100), "intro"),
-            (Section(number=2, title="Two", heading="Two", word_target=100), "body a"),
             (
-                Section(number=3, title="Three", heading="Three", word_target=100),
+                Section(
+                    position=1,
+                    number=1,
+                    title="One",
+                    heading="One",
+                    word_target=100,
+                ),
+                "intro",
+            ),
+            (
+                Section(
+                    position=2,
+                    number=2,
+                    title="Two",
+                    heading="Two",
+                    word_target=100,
+                ),
+                "body a",
+            ),
+            (
+                Section(
+                    position=3,
+                    number=3,
+                    title="Three",
+                    heading="Three",
+                    word_target=100,
+                ),
                 "body b",
             ),
         ]
@@ -1159,11 +1236,17 @@ class TestLongEssayContextHelpers:
         from src.pipeline_support import Section, _build_review_context
 
         sections = [
-            Section(number=1, title="One", heading="One", word_target=100),
-            Section(number=2, title="Two", heading="Two", word_target=100),
-            Section(number=3, title="Three", heading="Three", word_target=100),
-            Section(number=4, title="Four", heading="Four", word_target=100),
-            Section(number=5, title="Five", heading="Five", word_target=100),
+            Section(position=1, number=1, title="One", heading="One", word_target=100),
+            Section(position=2, number=2, title="Two", heading="Two", word_target=100),
+            Section(
+                position=3, number=3, title="Three", heading="Three", word_target=100
+            ),
+            Section(
+                position=4, number=4, title="Four", heading="Four", word_target=100
+            ),
+            Section(
+                position=5, number=5, title="Five", heading="Five", word_target=100
+            ),
         ]
         section_texts = {
             2: "section two",
@@ -1180,6 +1263,47 @@ class TestLongEssayContextHelpers:
         assert "SECTION TO REVIEW: END" in context
         assert "section one" not in context
         assert "section five" not in context
+
+    def test_parse_sections_marks_intro_and_conclusion_for_full_context(self, tmp_path):
+        from src.pipeline_support import _parse_sections
+
+        plan = {
+            "title": "Test essay",
+            "thesis": "Test thesis",
+            "sections": [
+                {
+                    "number": 1,
+                    "title": "Introduction",
+                    "heading": "Introduction",
+                    "word_target": 200,
+                },
+                {
+                    "number": 2,
+                    "title": "Body",
+                    "heading": "Body",
+                    "word_target": 400,
+                    "requires_full_context": True,
+                },
+                {
+                    "number": 3,
+                    "title": "Conclusion",
+                    "heading": "Conclusion",
+                    "word_target": 200,
+                },
+            ],
+            "research_queries": ["test"],
+            "total_word_target": 800,
+        }
+        (tmp_path / "plan").mkdir(parents=True, exist_ok=True)
+        (tmp_path / "plan" / "plan.json").write_text(json.dumps(plan), encoding="utf-8")
+
+        sections = _parse_sections(tmp_path)
+
+        assert [section.requires_full_context for section in sections] == [
+            True,
+            True,
+            True,
+        ]
 
 
 # ── docx_builder table support ────────────────────────────────────────

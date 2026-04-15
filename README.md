@@ -4,7 +4,7 @@ AI-powered academic essay generator for Greek university students. Uses a determ
 
 ## Features
 
-- Deterministic 8-step Python pipeline (intake → validate → plan → research → read → write → review → export)
+- Deterministic Python pipeline for intake, planning, research, writing, review, and export
 - Three model roles: worker (fast model for research/planning), writer (quality model for essay text), and reviewer (highest-quality model for polishing)
 - OpenAI SDK + Instructor for model calls with no orchestration framework or middleware layer
 - Instructor-powered structured output with automatic Pydantic validation and retry
@@ -13,7 +13,7 @@ AI-powered academic essay generator for Greek university students. Uses a determ
 - Deterministic academic source research via Semantic Scholar, OpenAlex, and Crossref
 - Selects the best source subset and uses that selection during essay generation
 - Reads the full fetched/user-provided source pool, then selects the best subset for writing
-- Long essays use bounded section-local context instead of repeatedly sending the whole draft during section review
+- Long essays draft most body sections in parallel, defer introduction/synthesis/conclusion sections until full context is available, then run a reconciliation pass before review
 - Input extraction writes a single `input/extracted.md` artifact directly into each run directory
 - Search and fetch requests share one HTTP transport with pooled connections and centralized retry behavior
 - Research queries run with bounded query-level concurrency while preserving deterministic merge order

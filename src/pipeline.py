@@ -28,6 +28,7 @@ from src.pipeline_support import (
 )
 from src.pipeline_writing import (
     do_export,
+    make_reconcile_sections,
     make_review_full,
     make_review_sections,
     make_write_full,
@@ -120,6 +121,12 @@ def _build_execution_steps(
                 PipelineStep(
                     "write",
                     make_write_sections(sections, target_words, citation_min_sources),
+                )
+            )
+            steps.append(
+                PipelineStep(
+                    "reconcile_sections",
+                    make_reconcile_sections(sections, target_words),
                 )
             )
             steps.append(

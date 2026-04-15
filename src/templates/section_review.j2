@@ -12,6 +12,15 @@ Output ONLY the improved version of the target section — do NOT output adjacen
 
 {{ full_essay }}
 
+{% if reconciliation_instructions %}
+## Reconciliation Notes For This Section
+
+Apply the following targeted fixes while keeping the section within its planned role and evidentiary boundaries:
+{% for item in reconciliation_instructions %}
+- [{{ item.priority }}][{{ item.category }}] {{ item.instruction }}{% if item.related_section_positions %} Related sections: {{ item.related_section_positions | join(', ') }}.{% endif %}{% if item.target_anchor %} Target anchor: "{{ item.target_anchor }}".{% endif %}
+{% endfor %}
+{% endif %}
+
 {% include 'style_common.j2' %}
 
 {% include 'style_review.j2' %}
@@ -30,7 +39,7 @@ Output ONLY the improved version of the target section — do NOT output adjacen
 - All `[[source_id]]` markers — keep them intact, do NOT replace with literal citations.
 - Do NOT rename this section, merge it with another section, or turn it into a generic substitute for some other planned section.
 - Do NOT add a References/Βιβλιογραφία section.
-- Do NOT add new arguments, claims, or elaboration not present in the draft.
+- Do NOT add new arguments, claims, or elaboration not present in the draft unless a reconciliation note explicitly requires a short bridge or boundary fix supported by the existing draft context.
 {% if language and 'Greek' in language %}
 - **Exception**: You **may** rewrite `#` headings (and the section’s title line if present) **only** to fix Greek capitalisation — same meaning, sentence-style Greek. This is not “new content”.
 {% endif %}

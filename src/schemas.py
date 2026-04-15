@@ -99,6 +99,7 @@ class PlanSection(BaseModel):
     word_target: int
     key_points: str = ""
     content_outline: str = ""
+    requires_full_context: bool = False
 
 
 class EssayPlan(BaseModel):
@@ -200,3 +201,56 @@ class SourceAssignmentPlan(BaseModel):
     """Worker output mapping sources to sections — /plan/source_assignments.json."""
 
     assignments: list[SectionSourceAssignment]
+
+
+# -- Reconciliation (long-essay path) --------------------------------------
+
+
+class ReconciliationInstruction(BaseModel):
+    """A single section-scoped revision instruction from the reconciliation pass."""
+
+    category: str
+    priority: str = "medium"
+    instruction: str
+    related_section_positions: list[int] = []
+    target_anchor: str | None = None
+
+    @field_validator("related_section_positions", mode="before")
+    @classmethod
+    def _parse_related_section_positions(cls, v: object) -> object:
+        return _parse_stringified_list_value(v)
+
+
+class SectionReconciliationNotes(BaseModel):
+    """Reconciliation notes for one section — keyed by internal section position."""
+
+    section_position: int
+    section_number: int
+    title: str
+    instructions: list[ReconciliationInstruction] = []
+
+    @field_validator("instructions", mode="before")
+    @classmethod
+    def _parse_instructions(cls, v: object) -> object:
+        return _parse_stringified_list_value(v)
+
+
+class EssayReconciliationPlan(BaseModel):
+    """Cross-section reconciliation output — /essay/reconciliation.json."""
+
+    global_notes: list[str] = []
+    sections: list[SectionReconciliationNotes] = []
+
+    @field_validator("global_notes", "sections", mode="before")
+    @classmethod
+    def _parse_reconciliation_lists(cls, v: object) -> object:
+        return _parse_stringified_list_value(v)
+
+    @model_validator(mode="after")
+    def _validate_section_positions(self) -> EssayReconciliationPlan:
+        positions = [section.section_position for section in self.sections]
+        if len(positions) != len(set(positions)):
+            raise ValueError(
+                "reconciliation sections must have unique section_position values"
+            )
+        return self

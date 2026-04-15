@@ -62,6 +62,7 @@ class Section:
     word_target: int
     key_points: str = ""
     content_outline: str = ""
+    requires_full_context: bool = False
     is_intro: bool = False
     is_conclusion: bool = False
 
@@ -276,6 +277,8 @@ def _parse_sections(run_dir: Path) -> list[Section]:
 
     for position, section in enumerate(plan.sections, start=1):
         title = section.title.lower()
+        is_intro = section.number == 1 or "introduction" in title or "εισαγωγ" in title
+        is_conclusion = "conclusion" in title or "συμπέρασμ" in title
         sections.append(
             Section(
                 position=position,
@@ -285,10 +288,11 @@ def _parse_sections(run_dir: Path) -> list[Section]:
                 word_target=section.word_target,
                 key_points=section.key_points,
                 content_outline=section.content_outline,
-                is_intro=(
-                    section.number == 1 or "introduction" in title or "εισαγωγ" in title
+                requires_full_context=(
+                    section.requires_full_context or is_intro or is_conclusion
                 ),
-                is_conclusion=("conclusion" in title or "συμπέρασμ" in title),
+                is_intro=is_intro,
+                is_conclusion=is_conclusion,
             )
         )
     return sections

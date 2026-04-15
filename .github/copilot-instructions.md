@@ -48,8 +48,9 @@ Deterministic Python pipeline for academic essay writing using the OpenAI SDK + 
 4. **Research** — pure Python: extracts queries from plan, calls `run_research()` → `registry.json`
 5. **Read sources** (worker, parallel) — pipeline fetches URLs via `fetch_url_content()`, then worker extracts `SourceNote` via structured output
 5.5. **Assign sources** (worker, long path only) — assigns selected sources to sections based on content fit → `source_assignments.json`
-6. **Write** (writer) — writes the complete essay via OpenAI SDK `chat.completions.create()` → `draft.md`
-7. **Review** (reviewer) — reviews draft, writes polished version → `reviewed.md`
+6. **Write** (writer) — short path writes a full draft; long path drafts most sections in parallel, then writes full-context sections (for example intro/conclusion) after the rest of the draft exists → `essay/sections/*.md`, `draft.md`
+6.5. **Reconcile sections** (worker, long path only) — inspects all drafted sections and produces per-section correction notes for overlap, transitions, and boundary cleanup → `essay/reconciliation.json`
+7. **Review** (reviewer) — reviews draft, writes polished version; long-path review receives only the current section plus its own reconciliation notes → `reviewed.md`
 8. **Export** — pure Python `build_document()` call → `essay.docx`
 
 ### Three-Model Architecture
@@ -70,7 +71,7 @@ All tool calls (research, URL fetching, PDF reading) are plain Python functions 
 
 ### Templates (per-task Jinja2)
 
-9 templates in `src/templates/`, one per pipeline task. Each template receives specific context variables and renders the complete prompt for that step:
+10 templates in `src/templates/`, one per pipeline task. Each template receives specific context variables and renders the complete prompt for that step:
 
 | Template | Context variables | Output |
 |----------|-------------------|--------|
@@ -81,8 +82,9 @@ All tool calls (research, URL fetching, PDF reading) are plain Python functions 
 | `source_assignment.j2` | `plan_json`, `source_notes`, `min_per_section` | `SourceAssignmentPlan` JSON |
 | `essay_writing.j2` | `brief_json`, `plan_json`, `source_notes`, `target_words` | Essay markdown |
 | `essay_review.j2` | `brief_json`, `plan_json`, `draft_text`, `target_words` | Reviewed markdown |
-| `section_writing.j2` | `plan_json`, `source_notes`, `section`, `prior_sections`, `assigned_source_ids` | Section markdown |
-| `section_review.j2` | `section`, `full_essay` | Reviewed section markdown |
+| `section_writing.j2` | `plan_json`, `source_notes`, `section`, `assigned_source_ids`, `has_full_context`, `essay_context` | Section markdown |
+| `section_reconciliation.j2` | `plan_json`, `drafted_sections`, `language` | `EssayReconciliationPlan` JSON |
+| `section_review.j2` | `section`, `full_essay`, `reconciliation_instructions` | Reviewed section markdown |
 
 ### File Layout (run directory)
 
@@ -90,13 +92,16 @@ Each run uses a directory with these subdirectories:
 
 - `brief/assignment.json` — assignment brief (Pydantic `AssignmentBrief`)
 - `brief/validation.json` — validation result (Pydantic `ValidationResult`); each `ValidationQuestion` includes `suggested_option_index` (0-based default for UI/CLI)
-- `plan/plan.json` — essay plan (Pydantic `EssayPlan`)
+- `plan/plan.json` — essay plan (Pydantic `EssayPlan`); each section may set `requires_full_context` for intro/conclusion/synthesis sections that should be drafted after the rest of the essay
 - `plan/source_assignments.json` — source-to-section assignments (Pydantic `SourceAssignmentPlan`; long-path only)
 - `sources/registry.json` — source metadata (from `run_research()`)
 - `sources/notes/{source_id}.json` — reader notes, one file per source (Pydantic `SourceNote`)
 - `sources/selected.json` — best N sources selected for the essay
 - `sources/user/` — user-provided source files and their extracted text
+- `essay/sections/{position:02d}.md` — long-path section drafts, keyed by internal section position
 - `essay/draft.md` — initial essay draft
+- `essay/reconciliation.json` — long-path per-section reconciliation notes (Pydantic `EssayReconciliationPlan`)
+- `essay/reviewed/{position:02d}.md` — long-path reviewed section files keyed by internal section position
 - `essay/reviewed.md` — reviewed/polished essay (used for export)
 - `input/extracted.md` — pre-extracted document text
 
@@ -130,7 +135,7 @@ No `default.yaml` exists; field defaults in `schemas.py` are canonical.
 
 - **Deterministic pipeline** — `src/pipeline.py` builds and runs the step sequence, while `src/pipeline_support.py`, `src/pipeline_sources.py`, and `src/pipeline_writing.py` hold the shared helpers and phase-specific implementations. No LLM decides the flow. Steps 1–5 use the worker model; step 6 uses the writer model; step 7 uses the reviewer model; step 8 is pure Python.
 - **Direct model calls** — no agent framework. `_structured_call()` uses Instructor `client.chat.completions.create(response_model=Schema)` for JSON steps with auto-retry on validation failure. `_text_call()` uses OpenAI SDK `client.chat.completions.create()` for text steps.
-- **Jinja2 templates** (`src/templates/*.j2`) render prompts. 8 templates, one per pipeline task.
+- **Jinja2 templates** (`src/templates/*.j2`) render prompts. 10 templates, one per pipeline task.
 - **Explicit structure preservation** — when the user provides a concrete outline, named headings, or required section order in the prompt or assignment materials, intake should capture it and planning/writing/review prompts should preserve it rather than normalizing it into a generic essay template.
 - **Plain function tools** — `run_research()`, `fetch_url_content()`, `read_pdf_text()`, `read_docx_text()` are plain Python functions called by the pipeline. No `@tool` decorators.
 - **Retry logic** — `_retry_with_backoff()` in `src/agent.py` handles transient 429/503 API errors and timeouts with exponential backoff. All clients are created with a 300-second request timeout (`_REQUEST_TIMEOUT`) to prevent hung connections. Instructor handles validation retries.
@@ -147,9 +152,12 @@ No `default.yaml` exists; field defaults in `schemas.py` are canonical.
 - **Long-path writer context** — writer prompts include full summaries for a **lexically ranked** subset (`search.section_source_full_detail_max`) plus a **compact catalog** of every selected source (id, authors, year, title). Review steps see essay text only (refiner; no source bodies).
 - **User-provided sources** — users can supply their own reference PDFs/documents via `--sources` (CLI) or the "Your Sources" upload (web UI). These are saved to `sources/user/`, injected into `registry.json` with `user_provided: true` and placeholder metadata. The source-reading step extracts both notes and bibliographic metadata (title, authors, year, DOI) from the content via the LLM, then backfills the registry. User sources are always read first and are prioritized in `_select_best_sources`.
 - **Optional PDF uploads (web)** — after the first source-read pass, API sources with `SourceNote.fetched_fulltext=False` (abstract-only or short fetch) may be offered to the user (up to `search.optional_pdf_prompt_top_n`, lexical relevance from brief/plan + citation count). The UI accepts a local PDF file or an http(s) URL to a PDF; text is saved under `sources/supplement/` and `registry[id].content_path` is set, then those IDs are re-read before `selected.json`. CLI runs print a stderr hint instead of blocking. Config: `optional_pdf_prompt_top_n`, `optional_pdf_min_body_words`.
-- **Short vs long path** — essays ≤ `long_essay_threshold` (default 4000 words) use full-essay write/review. Longer essays use section-by-section write/review with a source-assignment step (5.5) that distributes sources across sections.
+- **Short vs long path** — essays ≤ `long_essay_threshold` (default 4000 words) use full-essay write/review. Longer essays use section-by-section write/review with a source-assignment step (5.5), hybrid section drafting, and a reconciliation step before review.
 - **Source assignment (long path)** — after source reading, the worker assigns each selected source to the sections where it is most relevant (`source_assignment.j2` → `SourceAssignmentPlan`). During section writing, assigned sources are boosted to the top of the detail window so the writer sees their full summaries, and the template requires citing each assigned source at least once.
-- **Bounded long-essay context** — section writing includes only the most recent prior sections, and section review includes only adjacent sections with the current section delimited. This keeps prompt growth roughly linear instead of resending the full essay on every section review.
+- **Hybrid long-essay drafting** — body sections without `requires_full_context` are drafted in parallel. Sections marked `requires_full_context` (plus intro/conclusion fallback heuristics) are drafted afterward in deferred order so they can see the full completed draft context.
+- **Long-essay reconciliation** — after drafting, the worker emits `essay/reconciliation.json` with section-position-keyed notes for overlap, transition, scope, and intro/conclusion alignment fixes. Reviewers receive only the current section’s note bundle.
+- **Long-path identifiers** — use `Section.position` (plan order) as the runtime key for section draft files, review files, and reconciliation routing. `section.number` may repeat in user-visible headings and must not be used as the unique runtime identifier.
+- **Bounded review context** — section review includes only adjacent sections with the current section delimited. Deferred writing may see the full current draft; review remains section-local.
 - **Config-backed word tolerance** — `writing.word_count_tolerance` (default 10%) controls the under-target tolerance in writing and review prompts. `writing.word_count_tolerance_over` (default 20%) controls the over-target tolerance for reviewers only. Reviewers use asymmetric thresholds: they are told to cut only when significantly over the target, and always see a hard floor forbidding output below `target × (1 - word_count_tolerance)`. Writers still use symmetric tolerance.
 - **Custom AI endpoint** — when `AI_BASE_URL` is set in `.env`, all models route through an OpenAI-compatible endpoint using `AI_API_KEY` and `AI_MODEL`.
 - **Deterministic export** — step 8 calls `build_document()` directly from Python. No LLM involved. Prefers `reviewed.md`, falls back to `draft.md`.

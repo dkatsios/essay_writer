@@ -13,12 +13,19 @@ from pathlib import Path
 from time import monotonic
 
 from src.rendering import render_prompt
-from src.schemas import AssignmentBrief, EssayPlan, SourceAssignmentPlan
+from src.schemas import (
+    AssignmentBrief,
+    EssayPlan,
+    EssayReconciliationPlan,
+    SectionReconciliationNotes,
+    SourceAssignmentPlan,
+)
 from src.tools.essay_sanitize import strip_leading_submission_metadata
 from src.pipeline_support import (
     PipelineContext,
     Section,
     _build_prior_sections_context,
+    _structured_call,
     _build_review_context,
     _get_brief_language,
     _load_selected_source_notes,
@@ -29,11 +36,13 @@ from src.pipeline_support import (
     _source_catalog_markdown,
     _split_writer_source_context,
     _text_call,
+    _write_json,
     _write_text,
 )
 
 logger = logging.getLogger(__name__)
 
+_WRITE_CONCURRENCY = 4
 _REVIEW_CONCURRENCY = 4
 
 
@@ -167,19 +176,184 @@ def make_review_full(
     return _do_review_full
 
 
-def _writing_order(sections: list[Section]) -> list[Section]:
-    body = [
-        section
-        for section in sections
-        if not section.is_intro and not section.is_conclusion
-    ]
-    conclusion = [section for section in sections if section.is_conclusion]
-    intro = [section for section in sections if section.is_intro]
-    return body + conclusion + intro
-
-
 def _section_filename(section: Section) -> str:
     return f"{section.position:02d}.md"
+
+
+def _partition_sections_for_writing(
+    sections: list[Section],
+) -> tuple[list[Section], list[Section]]:
+    parallel_sections = [
+        section for section in sections if not section.requires_full_context
+    ]
+    deferred_sections = [
+        section for section in sections if section.requires_full_context
+    ]
+
+    def _deferred_rank(section: Section) -> tuple[int, int]:
+        # Intro last so it can see the conclusion draft too.
+        if section.is_intro:
+            return (2, section.position)
+        if section.is_conclusion:
+            return (1, section.position)
+        return (0, section.position)
+
+    return parallel_sections, sorted(deferred_sections, key=_deferred_rank)
+
+
+def _load_section_drafts(sections_dir: Path, sections: list[Section]) -> dict[int, str]:
+    drafts: dict[int, str] = {}
+    for section in sections:
+        section_path = sections_dir / _section_filename(section)
+        if section_path.exists():
+            drafts[section.position] = section_path.read_text(encoding="utf-8")
+    return drafts
+
+
+def _build_full_draft_context(
+    sections: list[Section],
+    written_sections: list[tuple[Section, str]],
+) -> str:
+    if not written_sections:
+        return ""
+
+    written_by_position = {
+        section.position: text for section, text in written_sections if text
+    }
+    ordered_written = [
+        (section, written_by_position[section.position])
+        for section in sections
+        if section.position in written_by_position
+    ]
+    return _build_prior_sections_context(
+        ordered_written,
+        max_sections=len(ordered_written),
+    )
+
+
+def _load_reconciliation_notes(
+    run_dir: Path,
+) -> dict[int, SectionReconciliationNotes]:
+    path = run_dir / "essay" / "reconciliation.json"
+    if not path.exists():
+        return {}
+
+    try:
+        plan = EssayReconciliationPlan.model_validate_json(
+            path.read_text(encoding="utf-8")
+        )
+    except Exception:
+        logger.warning("Failed to load reconciliation notes")
+        return {}
+
+    return {notes.section_position: notes for notes in plan.sections}
+
+
+def _normalize_reconciliation_plan(
+    sections: list[Section],
+    plan: EssayReconciliationPlan,
+) -> EssayReconciliationPlan:
+    notes_by_position = {
+        notes.section_position: notes
+        for notes in plan.sections
+        if any(section.position == notes.section_position for section in sections)
+    }
+    normalized_sections = [
+        notes_by_position.get(
+            section.position,
+            SectionReconciliationNotes(
+                section_position=section.position,
+                section_number=section.number,
+                title=section.title,
+                instructions=[],
+            ),
+        )
+        for section in sections
+    ]
+    return EssayReconciliationPlan(
+        global_notes=plan.global_notes,
+        sections=normalized_sections,
+    )
+
+
+def _write_section_draft(
+    ctx: PipelineContext,
+    section: Section,
+    *,
+    sections_dir: Path,
+    plan_json: str,
+    source_notes: list,
+    notes_by_id: dict[str, object],
+    section_assignments: dict[int, list[str]],
+    budget: int,
+    language: str,
+    citation_min_sources: int,
+    essay_context: str,
+) -> tuple[Section, str, float]:
+    section_corpus = (
+        f"{section.title} {section.key_points} {section.content_outline or ''}"
+    )
+    assigned_ids = section_assignments.get(section.position, [])
+
+    if assigned_ids:
+        assigned_notes = [
+            notes_by_id[source_id]
+            for source_id in assigned_ids
+            if source_id in notes_by_id
+        ]
+        remaining = [
+            note for note in source_notes if note.source_id not in set(assigned_ids)
+        ]
+        detail_notes = (
+            assigned_notes
+            + _rank_notes_by_corpus(section_corpus, remaining)[
+                : max(0, budget - len(assigned_notes))
+            ]
+        )
+        catalog_md = _source_catalog_markdown(source_notes)
+        total_notes = len(source_notes)
+    else:
+        detail_notes, catalog_md, total_notes = _split_writer_source_context(
+            section_corpus,
+            source_notes,
+            budget,
+        )
+
+    prompt = render_prompt(
+        "section_writing.j2",
+        plan_json=plan_json,
+        source_notes=detail_notes,
+        source_catalog=catalog_md,
+        total_selected_sources=total_notes,
+        section=section,
+        assigned_source_ids=assigned_ids,
+        tolerance_percent=round(ctx.config.writing.word_count_tolerance * 100),
+        min_words=round(
+            section.word_target * (1 - ctx.config.writing.word_count_tolerance)
+        ),
+        language=language,
+        min_sources=citation_min_sources,
+        has_full_context=bool(essay_context),
+        essay_context=essay_context,
+    )
+
+    tracker_step = f"write:{section.position}"
+    if ctx.tracker is not None:
+        ctx.tracker.set_current_step(tracker_step)
+
+    start = monotonic()
+    text = _text_call(
+        ctx.writer,
+        f"You are an expert academic writer producing essays in {language}.",
+        prompt,
+        ctx.tracker,
+    )
+    duration = monotonic() - start
+
+    _write_text(sections_dir / _section_filename(section), text)
+    if ctx.tracker is not None:
+        ctx.tracker.record_duration(tracker_step, duration)
+    return section, text, duration
 
 
 def make_write_sections(
@@ -199,76 +373,56 @@ def make_write_sections(
         section_assignments = _load_source_assignments(ctx.run_dir, sections)
         notes_by_id = {note.source_id: note for note in source_notes}
 
-        ordered = _writing_order(sections)
+        parallel_sections, deferred_sections = _partition_sections_for_writing(sections)
+        ordered = parallel_sections + deferred_sections
         if ctx.tracker is not None:
             ctx.tracker.set_sub_total(len(ordered))
 
-        for section in ordered:
-            prior_context = _build_prior_sections_context(written_sections)
-            section_corpus = (
-                f"{section.title} {section.key_points} {section.content_outline or ''}"
-            )
-            assigned_ids = section_assignments.get(section.position, [])
+        if parallel_sections:
+            max_workers = min(_WRITE_CONCURRENCY, len(parallel_sections))
+            with ThreadPoolExecutor(max_workers=max_workers) as pool:
+                futures = {
+                    pool.submit(
+                        _write_section_draft,
+                        ctx,
+                        section,
+                        sections_dir=sections_dir,
+                        plan_json=plan_json,
+                        source_notes=source_notes,
+                        notes_by_id=notes_by_id,
+                        section_assignments=section_assignments,
+                        budget=budget,
+                        language=language,
+                        citation_min_sources=citation_min_sources,
+                        essay_context="",
+                    ): section
+                    for section in parallel_sections
+                }
+                for future in as_completed(futures):
+                    section, text, duration = future.result()
+                    print(
+                        f"    section {section.number} ({section.title}) -- {duration:.1f}s",
+                        file=sys.stderr,
+                    )
+                    written_sections.append((section, text))
+                    if ctx.tracker is not None:
+                        ctx.tracker.increment_sub_done()
 
-            if assigned_ids:
-                assigned_notes = [
-                    notes_by_id[source_id]
-                    for source_id in assigned_ids
-                    if source_id in notes_by_id
-                ]
-                remaining = [
-                    note
-                    for note in source_notes
-                    if note.source_id not in set(assigned_ids)
-                ]
-                detail_notes = (
-                    assigned_notes
-                    + _rank_notes_by_corpus(section_corpus, remaining)[
-                        : max(0, budget - len(assigned_notes))
-                    ]
-                )
-                catalog_md = _source_catalog_markdown(source_notes)
-                total_notes = len(source_notes)
-            else:
-                detail_notes, catalog_md, total_notes = _split_writer_source_context(
-                    section_corpus,
-                    source_notes,
-                    budget,
-                )
-
-            prompt = render_prompt(
-                "section_writing.j2",
+        for section in deferred_sections:
+            essay_context = _build_full_draft_context(sections, written_sections)
+            section, text, duration = _write_section_draft(
+                ctx,
+                section,
+                sections_dir=sections_dir,
                 plan_json=plan_json,
-                source_notes=detail_notes,
-                source_catalog=catalog_md,
-                total_selected_sources=total_notes,
-                section=section,
-                prior_sections=prior_context,
-                assigned_source_ids=assigned_ids,
-                tolerance_percent=round(ctx.config.writing.word_count_tolerance * 100),
-                min_words=round(
-                    section.word_target * (1 - ctx.config.writing.word_count_tolerance)
-                ),
+                source_notes=source_notes,
+                notes_by_id=notes_by_id,
+                section_assignments=section_assignments,
+                budget=budget,
                 language=language,
-                min_sources=citation_min_sources,
+                citation_min_sources=citation_min_sources,
+                essay_context=essay_context,
             )
-
-            tracker_step = f"write:{section.position}"
-            if ctx.tracker is not None:
-                ctx.tracker.set_current_step(tracker_step)
-
-            start = monotonic()
-            text = _text_call(
-                ctx.writer,
-                f"You are an expert academic writer producing essays in {language}.",
-                prompt,
-                ctx.tracker,
-            )
-            duration = monotonic() - start
-
-            _write_text(sections_dir / _section_filename(section), text)
-            if ctx.tracker is not None:
-                ctx.tracker.record_duration(tracker_step, duration)
             print(
                 f"    section {section.number} ({section.title}) -- {duration:.1f}s",
                 file=sys.stderr,
@@ -299,6 +453,54 @@ def make_write_sections(
     return _do_write_sections
 
 
+def make_reconcile_sections(
+    sections: list[Section],
+    target_words: int,
+) -> Callable[[PipelineContext], None]:
+    def _do_reconcile_sections(ctx: PipelineContext) -> None:
+        sections_dir = ctx.run_dir / "essay" / "sections"
+        plan_json = _read_text(ctx.run_dir / "plan" / "plan.json")
+        language = _get_brief_language(ctx.run_dir)
+        draft_texts = _load_section_drafts(sections_dir, sections)
+
+        drafted_sections = [
+            {
+                "position": section.position,
+                "number": section.number,
+                "title": section.title,
+                "heading": section.heading,
+                "word_target": section.word_target,
+                "requires_full_context": section.requires_full_context,
+                "text": draft_texts.get(section.position, ""),
+            }
+            for section in sections
+            if draft_texts.get(section.position)
+        ]
+        if not drafted_sections:
+            _write_json(
+                ctx.run_dir / "essay" / "reconciliation.json",
+                EssayReconciliationPlan(global_notes=[], sections=[]),
+            )
+            return
+
+        prompt = render_prompt(
+            "section_reconciliation.j2",
+            plan_json=plan_json,
+            drafted_sections=drafted_sections,
+            language=language,
+        )
+        plan = _structured_call(
+            ctx.worker,
+            prompt,
+            EssayReconciliationPlan,
+            ctx.tracker,
+        )
+        normalized = _normalize_reconciliation_plan(sections, plan)
+        _write_json(ctx.run_dir / "essay" / "reconciliation.json", normalized)
+
+    return _do_reconcile_sections
+
+
 def make_review_sections(
     sections: list[Section],
     target_words: int,
@@ -310,12 +512,9 @@ def make_review_sections(
         reviewed_dir.mkdir(parents=True, exist_ok=True)
         plan_order = list(sections)
         language = _get_brief_language(ctx.run_dir)
+        reconciliation_notes = _load_reconciliation_notes(ctx.run_dir)
 
-        draft_texts: dict[int, str] = {}
-        for section in plan_order:
-            section_path = sections_dir / _section_filename(section)
-            if section_path.exists():
-                draft_texts[section.position] = section_path.read_text(encoding="utf-8")
+        draft_texts = _load_section_drafts(sections_dir, plan_order)
 
         if ctx.tracker is not None:
             ctx.tracker.set_sub_total(len(plan_order))
@@ -326,6 +525,7 @@ def make_review_sections(
                 return section, "", 0.0
 
             section_text = draft_texts[section.position]
+            notes = reconciliation_notes.get(section.position)
             full_essay = _build_review_context(
                 section,
                 plan_order,
@@ -348,6 +548,9 @@ def make_review_sections(
                     ctx.config.writing.word_count_tolerance_over * 100
                 ),
                 language=language,
+                reconciliation_instructions=(
+                    notes.instructions if notes is not None else []
+                ),
             )
 
             tracker_step = f"review:{section.position}"

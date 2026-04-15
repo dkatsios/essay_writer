@@ -28,7 +28,11 @@ Every id below is in scope for this essay. Cite any of them with `[[source_id]]`
 
 ## Source coverage
 - Over the **full** essay, cite **every** `source_id` from the catalog at least once where it plausibly supports a claim (skip only if clearly off-topic).
+{% if has_full_context %}
 - In **this** section, prefer sources not yet used heavily in prior sections (see context below), and cite **multiple distinct** ids.
+{% else %}
+- In **this** section, focus on the sources most relevant to this section's scope. Cross-section source balancing will be handled later.
+{% endif %}
 {% if assigned_source_ids %}
 
 ## Assigned sources for this section — CRITICAL
@@ -73,13 +77,20 @@ Write section {{ section.number }}: "{{ section.title }}"
 - Do NOT write a References/Βιβλιογραφία section.
 - Do NOT write literal `(Author, Year)` citations.
 - When data is best presented in tabular form, use standard markdown tables (`| col | col |` with a separator row). Use sparingly — only when tables genuinely improve clarity.
-{% if prior_sections %}
+{% if has_full_context and essay_context %}
 
-## Previously Written Sections (for context, in reading order)
+## Existing Drafted Sections (for context, in reading order)
 
-{{ prior_sections }}
+{{ essay_context }}
 {% endif %}
 
+{% if has_full_context %}
 ## Continuity
 - Ensure smooth transitions from the previous section.
 - Do NOT repeat arguments or examples already covered in prior sections.
+{% else %}
+## Parallel Drafting Mode
+- Write this as a strong standalone draft for its planned role.
+- Focus on section-local coherence and complete argument development.
+- Do NOT assume prior or later sections are visible while drafting; cross-section smoothing will happen in later pipeline steps.
+{% endif %}
