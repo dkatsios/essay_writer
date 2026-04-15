@@ -7,6 +7,7 @@ import logging
 import math
 import re
 import sys
+from collections import Counter
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -54,6 +55,7 @@ class PipelineContext:
 class Section:
     """A single section with computed intro/conclusion flags."""
 
+    position: int
     number: int
     title: str
     heading: str
@@ -118,9 +120,7 @@ def _execute(
         if ctx.tracker is not None:
             ctx.tracker.set_current_step(step.name)
             if total_steps is not None:
-                ctx.tracker.set_step_progress(
-                    step_offset + running_idx, total_steps
-                )
+                ctx.tracker.set_step_progress(step_offset + running_idx, total_steps)
             ctx.tracker.set_sub_total(0)
         start = monotonic()
         try:
@@ -261,10 +261,24 @@ def _parse_sections(run_dir: Path) -> list[Section]:
 
     plan = EssayPlan.model_validate_json(plan_path.read_text(encoding="utf-8"))
     sections: list[Section] = []
-    for section in plan.sections:
+    duplicate_numbers = [
+        number
+        for number, count in Counter(
+            section.number for section in plan.sections
+        ).items()
+        if count > 1
+    ]
+    if duplicate_numbers:
+        logger.warning(
+            "Plan contains duplicate section numbers %s; using plan order for internal section ids",
+            sorted(duplicate_numbers),
+        )
+
+    for position, section in enumerate(plan.sections, start=1):
         title = section.title.lower()
         sections.append(
             Section(
+                position=position,
                 number=section.number,
                 title=section.title,
                 heading=section.heading,
@@ -415,18 +429,18 @@ def _build_prior_sections_context(
     if not written_sections:
         return ""
     recent_sections = sorted(
-        written_sections[-max_sections:], key=lambda item: item[0].number
+        written_sections[-max_sections:], key=lambda item: item[0].position
     )
     return "\n\n---\n\n".join(text for _, text in recent_sections if text)
 
 
 def _section_window(
     sections: list[Section],
-    target_number: int,
+    target_position: int,
     neighbor_count: int = _REVIEW_SECTION_NEIGHBORS,
 ) -> list[Section]:
     for index, section in enumerate(sections):
-        if section.number == target_number:
+        if section.position == target_position:
             start = max(0, index - neighbor_count)
             end = min(len(sections), index + neighbor_count + 1)
             return sections[start:end]
@@ -440,11 +454,11 @@ def _build_review_context(
     neighbor_count: int = _REVIEW_SECTION_NEIGHBORS,
 ) -> str:
     parts: list[str] = []
-    for current in _section_window(sections, section.number, neighbor_count):
-        text = section_texts.get(current.number, "")
+    for current in _section_window(sections, section.position, neighbor_count):
+        text = section_texts.get(current.position, "")
         if not text:
             continue
-        if current.number == section.number:
+        if current.position == section.position:
             text = (
                 "<!-- >>> SECTION TO REVIEW: START >>> -->\n"
                 f"{text}\n"

@@ -6,6 +6,7 @@ import json
 import logging
 import re
 import sys
+from collections import defaultdict, deque
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
@@ -36,7 +37,9 @@ logger = logging.getLogger(__name__)
 _REVIEW_CONCURRENCY = 4
 
 
-def _load_source_assignments(run_dir: Path) -> dict[int, list[str]]:
+def _load_source_assignments(
+    run_dir: Path, sections: list[Section]
+) -> dict[int, list[str]]:
     path = run_dir / "plan" / "source_assignments.json"
     if not path.exists():
         return {}
@@ -44,10 +47,23 @@ def _load_source_assignments(run_dir: Path) -> dict[int, list[str]]:
         plan = SourceAssignmentPlan.model_validate_json(
             path.read_text(encoding="utf-8")
         )
-        return {
-            assignment.section_number: assignment.source_ids
-            for assignment in plan.assignments
-        }
+        buckets: dict[int, deque[list[str]]] = defaultdict(deque)
+        for assignment in plan.assignments:
+            buckets[assignment.section_number].append(assignment.source_ids)
+
+        aligned: dict[int, list[str]] = {}
+        for section in sections:
+            assigned_ids = buckets.get(section.number)
+            if assigned_ids:
+                aligned[section.position] = assigned_ids.popleft()
+
+        unmatched = sum(len(bucket) for bucket in buckets.values())
+        if unmatched:
+            logger.warning(
+                "Ignored %d unmatched source assignment entries after aligning by section order",
+                unmatched,
+            )
+        return aligned
     except Exception:
         logger.warning("Failed to load source assignments")
         return {}
@@ -163,7 +179,7 @@ def _writing_order(sections: list[Section]) -> list[Section]:
 
 
 def _section_filename(section: Section) -> str:
-    return f"{section.number:02d}.md"
+    return f"{section.position:02d}.md"
 
 
 def make_write_sections(
@@ -180,7 +196,7 @@ def make_write_sections(
         language = _get_brief_language(ctx.run_dir)
         budget = ctx.config.search.section_source_full_detail_max
         written_sections: list[tuple[Section, str]] = []
-        section_assignments = _load_source_assignments(ctx.run_dir)
+        section_assignments = _load_source_assignments(ctx.run_dir, sections)
         notes_by_id = {note.source_id: note for note in source_notes}
 
         ordered = _writing_order(sections)
@@ -192,7 +208,7 @@ def make_write_sections(
             section_corpus = (
                 f"{section.title} {section.key_points} {section.content_outline or ''}"
             )
-            assigned_ids = section_assignments.get(section.number, [])
+            assigned_ids = section_assignments.get(section.position, [])
 
             if assigned_ids:
                 assigned_notes = [
@@ -237,7 +253,7 @@ def make_write_sections(
                 min_sources=citation_min_sources,
             )
 
-            tracker_step = f"write:{section.number}"
+            tracker_step = f"write:{section.position}"
             if ctx.tracker is not None:
                 ctx.tracker.set_current_step(tracker_step)
 
@@ -262,13 +278,16 @@ def make_write_sections(
                 ctx.tracker.increment_sub_done()
 
         draft_parts = []
-        for section in sorted(sections, key=lambda item: item.number):
+        for section in sections:
             section_path = sections_dir / _section_filename(section)
             if section_path.exists():
                 draft_parts.append(section_path.read_text(encoding="utf-8"))
             else:
                 logger.warning(
-                    "Section %d file missing: %s", section.number, section_path
+                    "Section %d at position %d file missing: %s",
+                    section.number,
+                    section.position,
+                    section_path,
                 )
 
         _write_text(
@@ -289,31 +308,31 @@ def make_review_sections(
         sections_dir = ctx.run_dir / "essay" / "sections"
         reviewed_dir = ctx.run_dir / "essay" / "reviewed"
         reviewed_dir.mkdir(parents=True, exist_ok=True)
-        plan_order = sorted(sections, key=lambda item: item.number)
+        plan_order = list(sections)
         language = _get_brief_language(ctx.run_dir)
 
         draft_texts: dict[int, str] = {}
         for section in plan_order:
             section_path = sections_dir / _section_filename(section)
             if section_path.exists():
-                draft_texts[section.number] = section_path.read_text(encoding="utf-8")
+                draft_texts[section.position] = section_path.read_text(encoding="utf-8")
 
         if ctx.tracker is not None:
             ctx.tracker.set_sub_total(len(plan_order))
 
         def _review_one(section: Section) -> tuple[Section, str, float]:
-            if section.number not in draft_texts:
+            if section.position not in draft_texts:
                 logger.warning("Section %d missing, skipping review", section.number)
                 return section, "", 0.0
 
-            section_text = draft_texts[section.number]
+            section_text = draft_texts[section.position]
             full_essay = _build_review_context(
                 section,
                 plan_order,
                 {
-                    sibling.number: draft_texts[sibling.number]
-                    for sibling in _section_window(plan_order, section.number)
-                    if sibling.number in draft_texts
+                    sibling.position: draft_texts[sibling.position]
+                    for sibling in _section_window(plan_order, section.position)
+                    if sibling.position in draft_texts
                 },
             )
 
@@ -331,7 +350,7 @@ def make_review_sections(
                 language=language,
             )
 
-            tracker_step = f"review:{section.number}"
+            tracker_step = f"review:{section.position}"
             if ctx.tracker is not None:
                 ctx.tracker.set_current_step(tracker_step)
 
@@ -368,8 +387,8 @@ def make_review_sections(
             reviewed_path = reviewed_dir / _section_filename(section)
             if reviewed_path.exists():
                 reviewed_parts.append(reviewed_path.read_text(encoding="utf-8"))
-            elif section.number in draft_texts:
-                reviewed_parts.append(draft_texts[section.number])
+            elif section.position in draft_texts:
+                reviewed_parts.append(draft_texts[section.position])
 
         _write_text(
             ctx.run_dir / "essay" / "reviewed.md",

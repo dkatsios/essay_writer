@@ -695,25 +695,39 @@ def do_assign_sources(ctx: PipelineContext) -> None:
     missing_ids = [
         note.source_id for note in source_notes if note.source_id not in assigned_ids
     ]
-    if missing_ids and sections:
-        section_corpora = {
-            section.number: _corpus_tokens(
-                f"{section.title} {section.key_points} {section.content_outline or ''}"
+    if missing_ids and sections and result.assignments:
+        section_corpora: list[tuple[object, set[str]]] = []
+        buckets: dict[int, list[object]] = {}
+        for assignment in result.assignments:
+            buckets.setdefault(assignment.section_number, []).append(assignment)
+        for section in sections:
+            matching = buckets.get(section.number)
+            if not matching:
+                continue
+            section_corpora.append(
+                (
+                    matching.pop(0),
+                    _corpus_tokens(
+                        f"{section.title} {section.key_points} {section.content_outline or ''}"
+                    ),
+                )
             )
-            for section in sections
-        }
-        for source_id in missing_ids:
-            note = notes_by_id[source_id]
-            best_section = max(
-                result.assignments,
-                key=lambda assignment: _note_lexical_score(
-                    section_corpora.get(assignment.section_number, set()),
-                    note,
-                ),
+
+        if not section_corpora:
+            logger.warning("Could not align source assignments to planned sections")
+        else:
+            for source_id in missing_ids:
+                note = notes_by_id[source_id]
+                best_section, _ = max(
+                    section_corpora,
+                    key=lambda assignment: _note_lexical_score(
+                        assignment[1],
+                        note,
+                    ),
+                )
+                best_section.source_ids.append(source_id)
+            logger.info(
+                "Patched %d unassigned sources into best-fit sections", len(missing_ids)
             )
-            best_section.source_ids.append(source_id)
-        logger.info(
-            "Patched %d unassigned sources into best-fit sections", len(missing_ids)
-        )
 
     _write_json(ctx.run_dir / "plan" / "source_assignments.json", result)

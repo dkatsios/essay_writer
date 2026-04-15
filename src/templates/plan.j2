@@ -42,6 +42,7 @@ Each section's `content_outline` should be detailed enough for independent writi
 - The `title` field must be a specific, descriptive essay title — not the assignment name or a generic placeholder.
 - All section titles and thesis in {{ language }}.
 - If the brief includes explicit structure instructions in `description`, `special_instructions`, or `clarifications`, the `sections` array must reflect those instructions directly.
+- Each section `number` must be unique and strictly increasing in plan order. If the outline includes labels like 1.1, 1.2, 2.1, keep those in `heading`, but still assign a distinct sequential integer to each section object.
 - When no explicit structure is supplied, a typical academic structure is acceptable.
 {% if language and 'Greek' in language %}
 - **Greek capitalisation (titles and section fields)**: The essay `title`, each section `title`, and each `heading` must use **sentence-style** Greek (only the first word and proper nouns capitalised; common nouns and adjectives lowercase in the rest). Do **not** imitate English Title Case on every important word. After a colon, the following word is lowercase unless it is a proper name. This applies to JSON string values — the writer copies them verbatim into the essay.
