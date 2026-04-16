@@ -49,3 +49,24 @@ def test_search_crossref_requests_abstract_filter(monkeypatch) -> None:
         "select": "title,author,published,abstract,DOI,URL,type,is-referenced-by-count",
     }
     assert captured["request_name"] == "Crossref"
+
+
+def test_search_crossref_can_prefer_fulltext(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    class _Response:
+        def json(self) -> dict:
+            return {"message": {"items": []}}
+
+    def _fake_http_get(url: str, **kwargs):
+        captured["url"] = url
+        captured.update(kwargs)
+        return _Response()
+
+    monkeypatch.setattr(crossref_search, "http_get", _fake_http_get)
+
+    crossref_search.search_crossref(
+        "climate policy", max_results=7, prefer_fulltext=True
+    )
+
+    assert captured["params"]["filter"] == "has-abstract:true,has-full-text:true"

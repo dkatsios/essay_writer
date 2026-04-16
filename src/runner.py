@@ -41,6 +41,7 @@ from config.schemas import load_config  # noqa: E402
 from src.agent import create_client  # noqa: E402
 from src.intake import build_extracted_text, scan  # noqa: E402
 from src.pipeline import run_pipeline  # noqa: E402
+from src.pipeline_sources import SourceShortfallAbort  # noqa: E402
 from src.runtime import (  # noqa: E402
     TokenTracker,
     format_validation_questions,
@@ -109,6 +110,35 @@ def _handle_questions(questions: list[ValidationQuestion], run_dir: Path) -> Non
     )
 
 
+def _handle_source_shortfall(run_dir: Path, summary: dict) -> bool:
+    usable = int(summary.get("usable_sources", 0) or 0)
+    target = int(summary.get("target_sources", 0) or 0)
+    accessible = int(summary.get("accessible_candidates", 0) or 0)
+    total = int(summary.get("total_candidates", 0) or 0)
+    recovered = bool(summary.get("recovery_attempted"))
+
+    print(
+        "\n"
+        + "=" * 50
+        + "\n  Source shortfall detected."
+        + f"\n  Target usable sources: {target}"
+        + f"\n  Available selected usable sources: {usable}"
+        + f"\n  Accessible candidates after reading: {accessible}/{total}",
+        file=sys.stderr,
+    )
+    if recovered:
+        print(
+            "  A recovery search pass already ran with broader/full-text-biased parameters.",
+            file=sys.stderr,
+        )
+    print(
+        "  Continue with the available usable sources instead of the original target? [y/N]",
+        file=sys.stderr,
+    )
+    answer = input("> ").strip().lower()
+    return answer in {"y", "yes"}
+
+
 # ---------------------------------------------------------------------------
 # Run entry points
 # ---------------------------------------------------------------------------
@@ -154,8 +184,12 @@ def _execute_pipeline(
             on_questions=_handle_questions
             if config.writing.interactive_validation
             else None,
+            on_source_shortfall=_handle_source_shortfall,
             user_sources_dir=user_sources_dir,
         )
+    except SourceShortfallAbort as exc:
+        print(f"\nAborted: {exc}", file=sys.stderr)
+        return
     finally:
         if log_handler:
             logging.getLogger().removeHandler(log_handler)
@@ -249,8 +283,12 @@ def resume_run(
             on_questions=_handle_questions
             if config.writing.interactive_validation
             else None,
+            on_source_shortfall=_handle_source_shortfall,
             resume=True,
         )
+    except SourceShortfallAbort as exc:
+        print(f"\nAborted: {exc}", file=sys.stderr)
+        return
     finally:
         logging.getLogger().removeHandler(log_handler)
         log_handler.close()

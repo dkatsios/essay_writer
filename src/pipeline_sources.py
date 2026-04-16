@@ -49,6 +49,10 @@ _OPTIONAL_PDF_STOPWORDS = frozenset(
 )
 
 
+class SourceShortfallAbort(RuntimeError):
+    """Raised when the user declines to proceed after a source shortfall."""
+
+
 def _body_word_count(content: str) -> int:
     return len(content.split())
 
@@ -285,17 +289,33 @@ def _inject_user_sources(user_sources_dir: Path, run_dir: Path) -> None:
         logger.info("Injected %d user-provided sources into registry", added)
 
 
-def do_research(ctx: PipelineContext, fetch_sources: int) -> None:
+def _run_research_pass(
+    ctx: PipelineContext,
+    fetch_sources: int,
+    *,
+    fetch_per_api: int,
+    prefer_fulltext: bool,
+) -> None:
     plan_path = ctx.run_dir / "plan" / "plan.json"
     plan = EssayPlan.model_validate_json(plan_path.read_text(encoding="utf-8"))
     run_research(
         queries=plan.research_queries,
         max_sources=fetch_sources,
         sources_dir=str(ctx.run_dir / "sources"),
-        fetch_per_api=ctx.config.search.fetch_per_api,
+        fetch_per_api=fetch_per_api,
+        prefer_fulltext=prefer_fulltext,
     )
     if ctx.user_sources_dir and ctx.user_sources_dir.exists():
         _inject_user_sources(ctx.user_sources_dir, ctx.run_dir)
+
+
+def do_research(ctx: PipelineContext, fetch_sources: int) -> None:
+    _run_research_pass(
+        ctx,
+        fetch_sources,
+        fetch_per_api=ctx.config.search.fetch_per_api,
+        prefer_fulltext=False,
+    )
 
 
 async def _async_read_one_source(
@@ -495,19 +515,16 @@ def _cli_optional_pdf_hint(run_dir: Path, items: list[dict]) -> None:
         print(f"    id={item['source_id']}", file=sys.stderr)
 
 
-def make_read_sources(target_sources: int) -> Callable[[PipelineContext], None]:
+def make_read_sources(
+    target_sources: int,
+    fetch_sources: int,
+) -> Callable[[PipelineContext], None]:
     def _do_read_sources(ctx: PipelineContext) -> None:
         import asyncio
 
         registry_path = ctx.run_dir / "sources" / "registry.json"
         if not registry_path.exists():
             logger.warning("No registry.json found -- skipping source reading.")
-            return
-
-        registry = json.loads(registry_path.read_text(encoding="utf-8"))
-        tasks = _source_read_candidates(registry, target_sources)
-        if not tasks:
-            logger.info("No sources to read (no URLs and no user-provided files).")
             return
 
         min_body = ctx.config.search.optional_pdf_min_body_words
@@ -525,81 +542,146 @@ def make_read_sources(target_sources: int) -> Callable[[PipelineContext], None]:
             except Exception:
                 pass
 
-        logger.info("Reading %d ranked source candidates in parallel...", len(tasks))
-        domain_tracker = _DomainFailureTracker()
-        semaphore = asyncio.Semaphore(_SOURCE_READ_CONCURRENCY)
         async_worker = ctx.async_worker or ctx.worker.to_async()
-
-        if ctx.tracker is not None:
-            ctx.tracker.set_sub_total(len(tasks))
-
-        async def read_one(source_id: str, meta: dict) -> tuple[str, SourceNote | None]:
-            async with semaphore:
-                try:
-                    note = await _async_read_one_source(
-                        source_id,
-                        meta,
-                        async_worker,
-                        sources_dir,
-                        tracker=ctx.tracker,
-                        domain_tracker=domain_tracker,
-                        essay_topic=essay_topic,
-                        min_body_words=min_body,
-                    )
-                    _write_json(notes_dir / f"{source_id}.json", note)
-                    return source_id, note
-                except Exception:
-                    logger.exception("Failed to read source %s", source_id)
-                    return source_id, None
-                finally:
-                    if ctx.tracker is not None:
-                        ctx.tracker.increment_sub_done()
 
         async def read_all(
             pairs: list[tuple[str, dict]],
         ) -> list[tuple[str, SourceNote | None]]:
+            if ctx.tracker is not None:
+                ctx.tracker.set_sub_total(len(pairs))
+            domain_tracker = _DomainFailureTracker()
+            semaphore = asyncio.Semaphore(_SOURCE_READ_CONCURRENCY)
+
+            async def read_one(
+                source_id: str, meta: dict
+            ) -> tuple[str, SourceNote | None]:
+                async with semaphore:
+                    try:
+                        note = await _async_read_one_source(
+                            source_id,
+                            meta,
+                            async_worker,
+                            sources_dir,
+                            tracker=ctx.tracker,
+                            domain_tracker=domain_tracker,
+                            essay_topic=essay_topic,
+                            min_body_words=min_body,
+                        )
+                        _write_json(notes_dir / f"{source_id}.json", note)
+                        return source_id, note
+                    except Exception:
+                        logger.exception("Failed to read source %s", source_id)
+                        return source_id, None
+                    finally:
+                        if ctx.tracker is not None:
+                            ctx.tracker.increment_sub_done()
+
             return await asyncio.gather(
                 *(read_one(source_id, meta) for source_id, meta in pairs)
             )
 
-        results = asyncio.run(read_all(tasks))
-
-        registry_updated = False
-        for source_id, note in results:
-            if (
-                not note
-                or not registry.get(source_id, {}).get("user_provided")
-                or not note.is_accessible
-            ):
-                continue
-            entry = registry[source_id]
-            if note.title:
-                entry["title"] = note.title
-            if note.authors:
-                entry["authors"] = note.authors
-                clean_authors = [
-                    author for author in note.authors if author and str(author).strip()
-                ]
-                if note.author_families and len(note.author_families) == len(
-                    clean_authors
+        def backfill_registry(
+            registry: dict[str, dict],
+            results: list[tuple[str, SourceNote | None]],
+        ) -> dict[str, dict]:
+            registry_updated = False
+            for source_id, note in results:
+                if (
+                    not note
+                    or not registry.get(source_id, {}).get("user_provided")
+                    or not note.is_accessible
                 ):
-                    entry["author_families"] = list(note.author_families)
-                else:
-                    entry["author_families"] = [
-                        surname_from_author_string(author) for author in clean_authors
+                    continue
+                entry = registry[source_id]
+                if note.title:
+                    entry["title"] = note.title
+                if note.authors:
+                    entry["authors"] = note.authors
+                    clean_authors = [
+                        author
+                        for author in note.authors
+                        if author and str(author).strip()
                     ]
-            if note.year:
-                entry["year"] = note.year
-            if note.doi:
-                entry["doi"] = note.doi
-            registry_updated = True
+                    if note.author_families and len(note.author_families) == len(
+                        clean_authors
+                    ):
+                        entry["author_families"] = list(note.author_families)
+                    else:
+                        entry["author_families"] = [
+                            surname_from_author_string(author)
+                            for author in clean_authors
+                        ]
+                if note.year:
+                    entry["year"] = note.year
+                if note.doi:
+                    entry["doi"] = note.doi
+                registry_updated = True
 
-        if registry_updated:
-            registry_path.write_text(
-                json.dumps(registry, ensure_ascii=False, indent=2),
-                encoding="utf-8",
+            if registry_updated:
+                registry_path.write_text(
+                    json.dumps(registry, ensure_ascii=False, indent=2),
+                    encoding="utf-8",
+                )
+                logger.info("Backfilled registry metadata for user-provided sources")
+            return registry
+
+        def read_registry() -> dict[str, dict]:
+            return json.loads(registry_path.read_text(encoding="utf-8"))
+
+        def read_candidates(registry: dict[str, dict]) -> list[tuple[str, dict]]:
+            tasks = _source_read_candidates(registry, target_sources)
+            if not tasks:
+                logger.info("No sources to read (no URLs and no user-provided files).")
+            return tasks
+
+        recovery_done = False
+        registry = read_registry()
+        tasks = read_candidates(registry)
+        if not tasks:
+            return
+
+        logger.info("Reading %d ranked source candidates in parallel...", len(tasks))
+        results = asyncio.run(read_all(tasks))
+        registry = backfill_registry(registry, results)
+        selected = _select_best_sources(ctx.run_dir, registry, target_sources)
+
+        if len(selected) < target_sources:
+            recovery_fetch_sources = max(
+                fetch_sources + 1,
+                int(fetch_sources * ctx.config.search.recovery_overfetch_multiplier),
             )
-            logger.info("Backfilled registry metadata for user-provided sources")
+            recovery_fetch_per_api = max(
+                ctx.config.search.fetch_per_api + 1,
+                int(
+                    ctx.config.search.fetch_per_api
+                    * ctx.config.search.recovery_fetch_per_api_multiplier
+                ),
+            )
+            logger.info(
+                "Selected usable sources below target (%d/%d) — rerunning research with max_sources=%d fetch_per_api=%d prefer_fulltext=%s",
+                len(selected),
+                target_sources,
+                recovery_fetch_sources,
+                recovery_fetch_per_api,
+                ctx.config.search.recovery_prefer_fulltext,
+            )
+            _run_research_pass(
+                ctx,
+                recovery_fetch_sources,
+                fetch_per_api=recovery_fetch_per_api,
+                prefer_fulltext=ctx.config.search.recovery_prefer_fulltext,
+            )
+            recovery_done = True
+            registry = read_registry()
+            tasks = read_candidates(registry)
+            if not tasks:
+                return
+            logger.info(
+                "Reading %d ranked source candidates after recovery rerun...",
+                len(tasks),
+            )
+            results = asyncio.run(read_all(tasks))
+            registry = backfill_registry(registry, results)
 
         task_ids = {source_id for source_id, _ in tasks}
         corpus = _optional_pdf_corpus_tokens(ctx.run_dir)
@@ -617,7 +699,7 @@ def make_read_sources(target_sources: int) -> Callable[[PipelineContext], None]:
             else:
                 _cli_optional_pdf_hint(ctx.run_dir, items)
 
-            registry = json.loads(registry_path.read_text(encoding="utf-8"))
+            registry = read_registry()
             reread_ids = [
                 source_id
                 for source_id in prompt_ids
@@ -636,7 +718,8 @@ def make_read_sources(target_sources: int) -> Callable[[PipelineContext], None]:
                 merged = dict(results)
                 for source_id, note in reread_results:
                     merged[source_id] = note
-                results = [(source_id, merged[source_id]) for source_id, _ in tasks]
+                results = [(source_id, merged.get(source_id)) for source_id, _ in tasks]
+                registry = backfill_registry(registry, reread_results)
 
         accessible_count = sum(
             1 for _, note in results if note is not None and note.is_accessible
@@ -656,11 +739,26 @@ def make_read_sources(target_sources: int) -> Callable[[PipelineContext], None]:
             inaccessible_count,
         )
 
-        if accessible_count < target_sources:
+        if len(selected) < target_sources:
             print(
-                f"  ⚠ Only {accessible_count} usable sources from {len(tasks)} candidates. Selected {len(selected)} usable sources for writing.",
+                f"  ⚠ Only {len(selected)} usable selected sources after filtering (target {target_sources}; {accessible_count} accessible candidates).",
                 file=sys.stderr,
             )
+            if ctx.on_source_shortfall is not None:
+                proceed = ctx.on_source_shortfall(
+                    ctx.run_dir,
+                    {
+                        "usable_sources": len(selected),
+                        "target_sources": target_sources,
+                        "accessible_candidates": accessible_count,
+                        "total_candidates": len(tasks),
+                        "recovery_attempted": recovery_done,
+                    },
+                )
+                if not proceed:
+                    raise SourceShortfallAbort(
+                        "User declined to proceed after source shortfall"
+                    )
 
     return _do_read_sources
 

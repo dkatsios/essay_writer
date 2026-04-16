@@ -103,6 +103,9 @@ class SearchConfig(BaseModel):
     sources_per_1k_words: int = 5
     min_sources: int = 12
     overfetch_multiplier: float = 3.0
+    recovery_overfetch_multiplier: float = 2.0
+    recovery_fetch_per_api_multiplier: float = 2.0
+    recovery_prefer_fulltext: bool = True
     section_source_full_detail_max: int = 22
     """Per section (long path) or single shot (short path): max sources with full summary/extracts in the writer prompt; all selected sources still appear in a compact catalog."""
     optional_pdf_prompt_top_n: int = 5

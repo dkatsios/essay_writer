@@ -91,7 +91,7 @@ def _build_execution_steps(
         PipelineStep(
             "research", lambda current_ctx: do_research(current_ctx, fetch_sources)
         ),
-        PipelineStep("read_sources", make_read_sources(target_sources)),
+        PipelineStep("read_sources", make_read_sources(target_sources, fetch_sources)),
     ]
 
     if target_words <= threshold:
@@ -149,6 +149,7 @@ def run_pipeline(
     token_tracker=None,
     on_questions: Callable[[list[ValidationQuestion], Path], None] | None = None,
     on_optional_source_pdfs: Callable[[Path, list[dict]], None] | None = None,
+    on_source_shortfall: Callable[[Path, dict], bool] | None = None,
     min_sources: int | None = None,
     user_sources_dir: Path | None = None,
     resume: bool = False,
@@ -169,6 +170,7 @@ def run_pipeline(
         tracker=token_tracker,
         user_sources_dir=user_sources_dir,
         on_optional_source_pdfs=on_optional_source_pdfs,
+        on_source_shortfall=on_source_shortfall,
     )
 
     for subdir in ("brief", "plan", "sources", "essay"):

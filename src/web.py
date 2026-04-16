@@ -304,6 +304,28 @@ async def optional_pdf_done(job_id: str):
     return JSONResponse({"status": "ok"})
 
 
+@app.post("/source-shortfall/{job_id}")
+async def source_shortfall_decision(job_id: str, decision: str = Form("")):
+    """Submit proceed/cancel decision after source recovery still falls short."""
+    job = _jobs.get(job_id)
+    if not job:
+        return JSONResponse({"error": "Job not found"}, status_code=404)
+    if job.status != "source_shortfall":
+        return JSONResponse(
+            {"error": "No source shortfall step active"}, status_code=400
+        )
+
+    choice = decision.strip().lower()
+    if choice not in {"proceed", "cancel"}:
+        return JSONResponse({"error": "Invalid decision"}, status_code=400)
+
+    job.source_shortfall_decision = choice
+    job.status = "running"
+    _notify_job(job)
+    job.source_shortfall_event.set()
+    return JSONResponse({"status": "ok", "decision": choice})
+
+
 @app.get("/download/{job_id}")
 async def download(job_id: str):
     """Return the result zip without deleting it so failed transfers can retry."""

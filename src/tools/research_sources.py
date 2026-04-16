@@ -72,7 +72,10 @@ def _dedup_source_id(source_id: str, existing: set[str]) -> str:
 
 
 def _search_one_query(
-    query: str, max_per_api: int
+    query: str,
+    max_per_api: int,
+    *,
+    prefer_fulltext: bool = False,
 ) -> tuple[list[dict], dict[str, dict]]:
     """Run a single query against all three APIs and return (merged_results, raw_responses)."""
     results: list[dict] = []
@@ -80,8 +83,18 @@ def _search_one_query(
 
     with ThreadPoolExecutor(max_workers=3) as pool:
         futures = {
-            pool.submit(search_openalex, query, max_per_api): "openalex",
-            pool.submit(search_crossref, query, max_per_api): "crossref",
+            pool.submit(
+                search_openalex,
+                query,
+                max_per_api,
+                prefer_fulltext=prefer_fulltext,
+            ): "openalex",
+            pool.submit(
+                search_crossref,
+                query,
+                max_per_api,
+                prefer_fulltext=prefer_fulltext,
+            ): "crossref",
             pool.submit(
                 search_semantic_scholar, query, max_per_api
             ): "semantic_scholar",
@@ -106,7 +119,12 @@ def _query_worker_count(query_count: int) -> int:
     return min(_QUERY_CONCURRENCY, query_count)
 
 
-def _run_queries(queries: list[str], max_per_api: int) -> tuple[list[dict], list[dict]]:
+def _run_queries(
+    queries: list[str],
+    max_per_api: int,
+    *,
+    prefer_fulltext: bool = False,
+) -> tuple[list[dict], list[dict]]:
     """Run multiple queries with bounded concurrency and stable merge order."""
     if not queries:
         return [], []
@@ -114,7 +132,12 @@ def _run_queries(queries: list[str], max_per_api: int) -> tuple[list[dict], list
     collected: dict[int, tuple[str, list[dict], dict[str, dict]]] = {}
     with ThreadPoolExecutor(max_workers=_query_worker_count(len(queries))) as pool:
         futures = {
-            pool.submit(_search_one_query, query, max_per_api): (index, query)
+            pool.submit(
+                _search_one_query,
+                query,
+                max_per_api,
+                prefer_fulltext=prefer_fulltext,
+            ): (index, query)
             for index, query in enumerate(queries)
         }
         for future in as_completed(futures):
@@ -259,6 +282,7 @@ def run_research(
     sources_dir: str | None = None,
     *,
     fetch_per_api: int = 20,
+    prefer_fulltext: bool = False,
 ) -> dict[str, dict]:
     """Search academic databases and build a source registry.
 
@@ -270,7 +294,11 @@ def run_research(
 
     logger.info("run_research: %d queries, max_sources=%d", len(queries), max_sources)
 
-    all_results, all_raw = _run_queries(queries, fetch_per_api)
+    all_results, all_raw = _run_queries(
+        queries,
+        fetch_per_api,
+        prefer_fulltext=prefer_fulltext,
+    )
 
     registry = _build_registry(
         all_results,

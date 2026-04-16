@@ -19,6 +19,7 @@ import httpx
 
 from src.runtime import TokenTracker
 from src.schemas import AssignmentBrief, Clarification, ValidationQuestion
+from src.pipeline_sources import SourceShortfallAbort
 from src.tools._http import http_get
 from src.tools.web_fetcher import extract_pdf_bytes_to_text
 
@@ -59,6 +60,9 @@ class Job:
     optional_pdf_items: list[dict] | None = None
     optional_pdf_allowed_ids: frozenset[str] | None = None
     optional_pdf_event: threading.Event = field(default_factory=threading.Event)
+    source_shortfall: dict | None = None
+    source_shortfall_event: threading.Event = field(default_factory=threading.Event)
+    source_shortfall_decision: str = ""
     error: str = ""
     academic_level: str = ""
     submit_prompt: str = ""
@@ -97,6 +101,8 @@ def build_status_payload(job: Job) -> dict:
         payload["questions"] = job.questions
     if job.status == "optional_pdfs" and job.optional_pdf_items:
         payload["optional_pdf_items"] = job.optional_pdf_items
+    if job.status == "source_shortfall" and job.source_shortfall:
+        payload["source_shortfall"] = job.source_shortfall
     if job.status == "error":
         payload["error"] = job.error
     payload["clarification_rounds"] = job.clarification_rounds
@@ -194,6 +200,8 @@ def set_job_error(job: Job, message: str) -> None:
     job.questions = None
     job.optional_pdf_items = None
     job.optional_pdf_allowed_ids = None
+    job.source_shortfall = None
+    job.source_shortfall_decision = ""
     job.status = "error"
     job.error = message
     job.finished_at = time.time()
@@ -420,6 +428,23 @@ def run_pipeline_thread(
             job.optional_pdf_items = None
             job.optional_pdf_allowed_ids = None
 
+        def _on_source_shortfall(run_path: Path, summary: dict) -> bool:
+            job.source_shortfall = summary
+            job.source_shortfall_decision = ""
+            job.source_shortfall_event.clear()
+            job.status = "source_shortfall"
+            notify_job(job)
+            if not wait_for_job_signal(
+                job,
+                job.source_shortfall_event,
+                error_message="Timed out waiting for source shortfall decision.",
+                interaction_timeout_seconds_fn=interaction_timeout_seconds_fn,
+            ):
+                raise JobInteractionTimeout()
+            decision = job.source_shortfall_decision.strip().lower()
+            job.source_shortfall = None
+            return decision == "proceed"
+
         run_pipeline_fn(
             worker,
             writer,
@@ -432,6 +457,7 @@ def run_pipeline_thread(
             if config.writing.interactive_validation
             else None,
             on_optional_source_pdfs=_on_optional_pdfs,
+            on_source_shortfall=_on_source_shortfall,
             min_sources=min_sources,
             user_sources_dir=user_sources_dir,
             async_worker=async_worker,
@@ -444,6 +470,8 @@ def run_pipeline_thread(
 
     except JobInteractionTimeout:
         return
+    except SourceShortfallAbort as exc:
+        set_job_error(job, str(exc))
     except Exception:
         logger.exception("Pipeline failed for job %s", job.job_id)
         set_job_error(job, "Pipeline failed. Check server logs for details.")

@@ -30,3 +30,24 @@ def test_search_openalex_requests_abstract_filter(monkeypatch) -> None:
         "sort": "relevance_score:desc",
     }
     assert captured["request_name"] == "OpenAlex"
+
+
+def test_search_openalex_can_prefer_fulltext(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    class _Response:
+        def json(self) -> dict:
+            return {"results": []}
+
+    def _fake_http_get(url: str, **kwargs):
+        captured["url"] = url
+        captured.update(kwargs)
+        return _Response()
+
+    monkeypatch.setattr(openalex_search, "http_get", _fake_http_get)
+
+    openalex_search.search_openalex(
+        "climate policy", max_results=7, prefer_fulltext=True
+    )
+
+    assert captured["params"]["filter"] == "has_abstract:true,has_fulltext:true"

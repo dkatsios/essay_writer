@@ -29,12 +29,20 @@ def _strip_inline_markup(text: str) -> str:
     return re.sub(r"<[^>]+>", "", text).strip()
 
 
-def search_crossref(query: str, max_results: int = 5) -> tuple[list[dict], dict]:
+def search_crossref(
+    query: str,
+    max_results: int = 5,
+    *,
+    prefer_fulltext: bool = False,
+) -> tuple[list[dict], dict]:
     """Search Crossref and return (results, raw_api_response)."""
     mailto = os.environ.get("CROSSREF_MAILTO", DEFAULT_MAILTO)
+    filters = ["has-abstract:true"]
+    if prefer_fulltext:
+        filters.append("has-full-text:true")
     params = {
         "query": query,
-        "filter": "has-abstract:true",
+        "filter": ",".join(filters),
         "rows": max_results,
         "mailto": mailto,
         "select": "title,author,published,abstract,DOI,URL,type,is-referenced-by-count",

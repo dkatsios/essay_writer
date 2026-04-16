@@ -49,6 +49,7 @@ class PipelineContext:
     tracker: object | None = None
     user_sources_dir: Path | None = None
     on_optional_source_pdfs: Callable[[Path, list[dict]], None] | None = None
+    on_source_shortfall: Callable[[Path, dict], bool] | None = None
 
 
 @dataclass

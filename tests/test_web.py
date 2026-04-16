@@ -192,6 +192,40 @@ def test_pipeline_thread_stops_after_question_timeout(tmp_path, monkeypatch):
     assert job.finished_at is not None
 
 
+def test_pipeline_thread_stops_after_source_shortfall_timeout(tmp_path, monkeypatch):
+    job = Job(job_id="shortfall001", run_dir=Path(tmp_path), status="running")
+    captured = {"continued": False}
+
+    config = EssayWriterConfig()
+
+    monkeypatch.setattr("src.web.load_config", lambda: config)
+    monkeypatch.setattr("src.web.create_client", lambda *args, **kwargs: object())
+    monkeypatch.setattr("src.web.create_async_client", lambda *args, **kwargs: object())
+    monkeypatch.setattr("src.web_jobs.interaction_timeout_seconds", lambda: 0)
+
+    def fake_run_pipeline(*args, **kwargs):
+        kwargs["on_source_shortfall"](
+            Path(tmp_path),
+            {
+                "usable_sources": 8,
+                "target_sources": 12,
+                "accessible_candidates": 10,
+                "total_candidates": 18,
+                "recovery_attempted": True,
+            },
+        )
+        captured["continued"] = True
+
+    monkeypatch.setattr("src.web.run_pipeline", fake_run_pipeline)
+
+    _run_pipeline_thread(job, upload_dir=None, prompt="Test prompt")
+
+    assert captured["continued"] is False
+    assert job.status == "error"
+    assert job.error == "Timed out waiting for source shortfall decision."
+    assert job.finished_at is not None
+
+
 def test_pipeline_thread_passes_async_worker_without_storing_api_key(
     tmp_path, monkeypatch
 ):
@@ -266,6 +300,34 @@ def test_optional_pdf_done_requires_active_step():
     _jobs[jid] = Job(job_id=jid, run_dir=Path("."), status="running")
     r = client.post(f"/optional-pdf/{jid}/done")
     assert r.status_code == 400
+
+
+def test_source_shortfall_decision_requires_active_step():
+    jid = "shortfall002"
+    _jobs[jid] = Job(job_id=jid, run_dir=Path("."), status="running")
+    r = client.post(f"/source-shortfall/{jid}", data={"decision": "proceed"})
+    assert r.status_code == 400
+
+
+def test_source_shortfall_decision_unblocks_job(tmp_path):
+    jid = "shortfall003"
+    _jobs[jid] = Job(
+        job_id=jid,
+        run_dir=Path(tmp_path),
+        status="source_shortfall",
+        source_shortfall={
+            "usable_sources": 8,
+            "target_sources": 12,
+        },
+    )
+    try:
+        r = client.post(f"/source-shortfall/{jid}", data={"decision": "proceed"})
+        assert r.status_code == 200
+        assert r.json()["decision"] == "proceed"
+        assert _jobs[jid].source_shortfall_decision == "proceed"
+        assert _jobs[jid].status == "running"
+    finally:
+        _jobs.pop(jid, None)
 
 
 def test_optional_pdf_url_updates_registry(tmp_path, monkeypatch):

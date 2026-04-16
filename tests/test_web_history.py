@@ -59,6 +59,20 @@ def test_status_payload_includes_submit_snapshot() -> None:
         _jobs.pop(jid, None)
 
 
+def test_status_payload_includes_source_shortfall() -> None:
+    job = Job(
+        job_id="shortfallpayload",
+        run_dir=Path("/tmp"),
+        status="source_shortfall",
+        source_shortfall={"usable_sources": 8, "target_sources": 12},
+    )
+
+    body = build_status_payload(job)
+
+    assert body["status"] == "source_shortfall"
+    assert body["source_shortfall"] == {"usable_sources": 8, "target_sources": 12}
+
+
 def test_append_optional_pdf_round_from_choices() -> None:
     job = Job(job_id="abc123456789", run_dir=Path("/tmp"))
     job.optional_pdf_items = [

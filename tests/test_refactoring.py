@@ -644,7 +644,7 @@ class TestResearchConcurrency:
         max_active = 0
         lock = threading.Lock()
 
-        def fake_search_one_query(query, max_per_api):
+        def fake_search_one_query(query, max_per_api, *, prefer_fulltext=False):
             nonlocal active, max_active
             with lock:
                 active += 1
@@ -1157,11 +1157,19 @@ class TestSelectedSourceNotes:
         (tmp_path / "brief").mkdir(parents=True)
         (tmp_path / "plan").mkdir(parents=True)
         (tmp_path / "brief" / "assignment.json").write_text(
-            json.dumps({"language": "English", "topic": "Test topic"}),
+            json.dumps(
+                {
+                    "language": "English",
+                    "topic": "Test topic",
+                    "description": "Test description",
+                }
+            ),
             encoding="utf-8",
         )
         (tmp_path / "plan" / "plan.json").write_text(
-            json.dumps({"title": "Test plan", "sections": [], "total_word_target": 1000}),
+            json.dumps(
+                {"title": "Test plan", "sections": [], "total_word_target": 1000}
+            ),
             encoding="utf-8",
         )
 

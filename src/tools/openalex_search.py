@@ -19,12 +19,20 @@ logger = logging.getLogger(__name__)
 _OPENALEX_API = "https://api.openalex.org/works"
 
 
-def search_openalex(query: str, max_results: int = 5) -> tuple[list[dict], dict]:
+def search_openalex(
+    query: str,
+    max_results: int = 5,
+    *,
+    prefer_fulltext: bool = False,
+) -> tuple[list[dict], dict]:
     """Search OpenAlex and return (results, raw_api_response)."""
     mailto = os.environ.get("OPENALEX_MAILTO", DEFAULT_MAILTO)
+    filters = ["has_abstract:true"]
+    if prefer_fulltext:
+        filters.append("has_fulltext:true")
     params = {
         "search": query,
-        "filter": "has_abstract:true",
+        "filter": ",".join(filters),
         "per_page": max_results,
         "mailto": mailto,
         "sort": "relevance_score:desc",
