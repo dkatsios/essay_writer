@@ -13,6 +13,7 @@ import re
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
+from src.run_logging import submit_with_current_context
 from src.tools.academic_search import search_semantic_scholar
 from src.tools.author_names import surname_from_author_string
 from src.tools.crossref_search import search_crossref
@@ -83,20 +84,22 @@ def _search_one_query(
 
     with ThreadPoolExecutor(max_workers=3) as pool:
         futures = {
-            pool.submit(
+            submit_with_current_context(
+                pool,
                 search_openalex,
                 query,
                 max_per_api,
                 prefer_fulltext=prefer_fulltext,
             ): "openalex",
-            pool.submit(
+            submit_with_current_context(
+                pool,
                 search_crossref,
                 query,
                 max_per_api,
                 prefer_fulltext=prefer_fulltext,
             ): "crossref",
-            pool.submit(
-                search_semantic_scholar, query, max_per_api
+            submit_with_current_context(
+                pool, search_semantic_scholar, query, max_per_api
             ): "semantic_scholar",
         }
         for fut in as_completed(futures):
@@ -132,7 +135,8 @@ def _run_queries(
     collected: dict[int, tuple[str, list[dict], dict[str, dict]]] = {}
     with ThreadPoolExecutor(max_workers=_query_worker_count(len(queries))) as pool:
         futures = {
-            pool.submit(
+            submit_with_current_context(
+                pool,
                 _search_one_query,
                 query,
                 max_per_api,

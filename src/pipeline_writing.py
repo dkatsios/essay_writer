@@ -12,6 +12,7 @@ from pathlib import Path
 from time import monotonic
 
 from src.rendering import render_prompt
+from src.run_logging import submit_with_current_context
 from src.schemas import (
     AssignmentBrief,
     EssayPlan,
@@ -385,7 +386,8 @@ def make_write_sections(
             max_workers = min(_WRITE_CONCURRENCY, len(parallel_sections))
             with ThreadPoolExecutor(max_workers=max_workers) as pool:
                 futures = {
-                    pool.submit(
+                    submit_with_current_context(
+                        pool,
                         _write_section_draft,
                         ctx,
                         section,
@@ -581,7 +583,8 @@ def make_review_sections(
 
         with ThreadPoolExecutor(max_workers=_REVIEW_CONCURRENCY) as pool:
             futures = {
-                pool.submit(_review_one, section): section for section in plan_order
+                submit_with_current_context(pool, _review_one, section): section
+                for section in plan_order
             }
             for future in as_completed(futures):
                 section, _, duration = future.result()

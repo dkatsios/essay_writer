@@ -1,34 +1,40 @@
-"""Per-run file logging with thread-based isolation for concurrent jobs."""
+"""Per-run file logging with async-safe context isolation for concurrent jobs."""
 
 from __future__ import annotations
 
 import logging
-import threading
+from contextvars import ContextVar, copy_context
 from pathlib import Path
 
-_run_id_local = threading.local()
+_run_id_var: ContextVar[str | None] = ContextVar("run_id", default=None)
 
 _LOG_FORMAT = "%(asctime)s [%(levelname)s] %(name)s: %(message)s"
 _LOG_DATEFMT = "%Y-%m-%d %H:%M:%S"
 
 
 class _RunFilter(logging.Filter):
-    """Only pass records emitted on the thread that owns *run_id*."""
+    """Only pass records emitted in the current run context."""
 
     def __init__(self, run_id: str) -> None:
         super().__init__()
         self.run_id = run_id
 
     def filter(self, record: logging.LogRecord) -> bool:
-        return getattr(_run_id_local, "run_id", None) == self.run_id
+        return _run_id_var.get() == self.run_id
 
 
 def set_run_id(run_id: str) -> None:
-    _run_id_local.run_id = run_id
+    _run_id_var.set(run_id)
 
 
 def clear_run_id() -> None:
-    _run_id_local.run_id = None
+    _run_id_var.set(None)
+
+
+def submit_with_current_context(executor, fn, /, *args, **kwargs):
+    """Submit work to an executor while preserving current context vars."""
+    ctx = copy_context()
+    return executor.submit(ctx.run, fn, *args, **kwargs)
 
 
 def setup_run_logging(run_dir: Path, run_id: str) -> logging.FileHandler:
