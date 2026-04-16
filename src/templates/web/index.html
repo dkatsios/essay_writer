@@ -734,7 +734,8 @@
     function showSourceShortfallPrompt(summary) {
       const usable = Number(summary.usable_sources || 0);
       const target = Number(summary.target_sources || 0);
-      const accessible = Number(summary.accessible_candidates || 0);
+      const scorable = Number(summary.scorable_candidates || 0);
+      const above = Number(summary.above_threshold || 0);
       const total = Number(summary.total_candidates || 0);
       const recovered = Boolean(summary.recovery_attempted);
 
@@ -743,8 +744,9 @@
       html += '<div class="clarification-pending">';
       html += '<div class="question-block">';
       html += `<p>Target usable sources: ${esc(String(target))}</p>`;
+      html += `<p>Scorable candidates: ${esc(String(scorable))} / ${esc(String(total))}</p>`;
+      html += `<p>Scored above threshold: ${esc(String(above))} / ${esc(String(scorable))}</p>`;
       html += `<p>Available selected usable sources: ${esc(String(usable))}</p>`;
-      html += `<p>Accessible candidates after reading: ${esc(String(accessible))} / ${esc(String(total))}</p>`;
       if (recovered) {
         html += '<p class="hint">A recovery search pass already ran with broader and full-text-biased search parameters.</p>';
       }

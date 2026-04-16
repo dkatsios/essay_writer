@@ -6,30 +6,10 @@ import asyncio
 
 from src.pipeline_sources import (
     _async_fetch_pdf_content,
-    _content_snippet,
     _filter_scorable_sources,
     _select_top_sources,
 )
 from src.schemas import SourceScoreBatch
-
-
-# -- _content_snippet -------------------------------------------------------
-
-
-class TestContentSnippet:
-    def test_short_text_returned_as_is(self):
-        text = "This is a short text."
-        assert _content_snippet(text, max_words=50) == text
-
-    def test_long_text_truncated(self):
-        words = ["word"] * 100
-        result = _content_snippet(" ".join(words), max_words=10)
-        assert result.endswith("…")
-        # 10 words + " …"
-        assert result.count("word") == 10
-
-    def test_empty_string(self):
-        assert _content_snippet("") == ""
 
 
 # -- _filter_scorable_sources -----------------------------------------------
@@ -46,13 +26,12 @@ class TestFilterScorableSources:
                 "doi": "",
             }
         }
-        result = _filter_scorable_sources(registry, {}, min_body_words=50)
+        result = _filter_scorable_sources(registry)
         assert len(result) == 1
         assert result[0]["source_id"] == "s1"
         assert result[0]["abstract"] != ""
-        assert result[0]["content_snippet"] == ""
 
-    def test_keeps_source_with_fulltext_no_abstract(self):
+    def test_drops_source_with_fulltext_but_no_abstract(self):
         registry = {
             "s2": {
                 "title": "Paper B",
@@ -62,12 +41,8 @@ class TestFilterScorableSources:
                 "doi": "",
             }
         }
-        body = " ".join(["content"] * 100)
-        result = _filter_scorable_sources(registry, {"s2": body}, min_body_words=50)
-        assert len(result) == 1
-        assert result[0]["source_id"] == "s2"
-        assert result[0]["content_snippet"] != ""
-        assert result[0]["abstract"] == ""  # abstract was not useful
+        result = _filter_scorable_sources(registry)
+        assert len(result) == 0
 
     def test_drops_source_with_neither(self):
         registry = {
@@ -79,12 +54,11 @@ class TestFilterScorableSources:
                 "doi": "",
             }
         }
-        result = _filter_scorable_sources(registry, {}, min_body_words=50)
+        result = _filter_scorable_sources(registry)
         assert len(result) == 0
 
     def test_keeps_source_with_both(self):
         abstract = " ".join(["abstract"] * 25)
-        body = " ".join(["body"] * 100)
         registry = {
             "s4": {
                 "title": "Paper D",
@@ -94,10 +68,9 @@ class TestFilterScorableSources:
                 "doi": "10.1234/test",
             }
         }
-        result = _filter_scorable_sources(registry, {"s4": body}, min_body_words=50)
+        result = _filter_scorable_sources(registry)
         assert len(result) == 1
         assert result[0]["abstract"] == abstract
-        assert result[0]["content_snippet"] == ""  # abstract is used, no snippet needed
 
 
 # -- _select_top_sources ----------------------------------------------------

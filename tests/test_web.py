@@ -209,7 +209,8 @@ def test_pipeline_thread_stops_after_source_shortfall_timeout(tmp_path, monkeypa
             {
                 "usable_sources": 8,
                 "target_sources": 12,
-                "accessible_candidates": 10,
+                "scorable_candidates": 10,
+                "above_threshold": 9,
                 "total_candidates": 18,
                 "recovery_attempted": True,
             },

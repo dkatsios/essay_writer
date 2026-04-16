@@ -103,17 +103,20 @@ def _handle_questions(questions: list[ValidationQuestion], run_dir: Path) -> Non
 def _handle_source_shortfall(run_dir: Path, summary: dict) -> bool:
     usable = int(summary.get("usable_sources", 0) or 0)
     target = int(summary.get("target_sources", 0) or 0)
-    accessible = int(summary.get("accessible_candidates", 0) or 0)
+    scorable = int(summary.get("scorable_candidates", 0) or 0)
+    above = int(summary.get("above_threshold", 0) or 0)
     total = int(summary.get("total_candidates", 0) or 0)
     recovered = bool(summary.get("recovery_attempted"))
 
     logger.warning(
-        "%s\nSource shortfall detected.\nTarget usable sources: %d\nAvailable selected usable sources: %d\nAccessible candidates after reading: %d/%d",
+        "%s\nSource shortfall detected.\nTarget usable sources: %d\nScorable candidates: %d / %d\nScored above threshold: %d / %d\nAvailable selected usable sources: %d",
         "=" * 50,
         target,
-        usable,
-        accessible,
+        scorable,
         total,
+        above,
+        scorable,
+        usable,
     )
     if recovered:
         logger.warning(

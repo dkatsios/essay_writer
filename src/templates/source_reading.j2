@@ -61,7 +61,12 @@ Rate how relevant this source is to the essay topic above on a 1–5 scale and s
 - Set `is_accessible` to true (metadata-based notes are still useful)
 
 ### When NOTHING useful can be extracted
+{% if user_provided %}
 - Set `is_accessible` to false
 - Include `inaccessible_reason`
+{% else %}
+- Still set `is_accessible` to true (the pipeline has already validated this source)
+- Write a minimal summary from whatever metadata is available
+{% endif %}
 
 Do NOT fabricate content. Only include what is actually in the source.

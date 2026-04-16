@@ -1089,62 +1089,6 @@ class TestSelectedSourceNotes:
 
         assert _load_selected_source_notes(tmp_path) == []
 
-    def test_source_read_candidates_includes_all_api_sources(self):
-        from src.pipeline_sources import _source_read_candidates
-
-        registry = {
-            f"s{i}": {"title": f"Source {i}", "url": f"https://example.com/{i}"}
-            for i in range(1, 21)
-        }
-        # Add one without URL — should be excluded
-        registry["s_no_url"] = {"title": "No URL source"}
-
-        candidates = _source_read_candidates(registry, target_sources=8)
-
-        assert len(candidates) == 20
-        assert all(sid != "s_no_url" for sid, _ in candidates)
-
-    def test_select_best_sources_keeps_only_usable_ranked_sources(self, tmp_path):
-        from src.pipeline_sources import _select_best_sources
-        from src.schemas import SourceNote
-
-        notes_dir = tmp_path / "sources" / "notes"
-        notes_dir.mkdir(parents=True)
-        registry = {
-            "usable2024": {
-                "title": "Usable",
-                "authors": ["A Author"],
-                "citation_count": 5,
-            },
-            "inaccessible2024": {
-                "title": "No body",
-                "authors": ["B Author"],
-                "citation_count": 100,
-            },
-        }
-
-        (notes_dir / "usable2024.json").write_text(
-            SourceNote(
-                source_id="usable2024",
-                is_accessible=True,
-                relevance_score=4,
-                title="Usable",
-            ).model_dump_json(),
-            encoding="utf-8",
-        )
-        (notes_dir / "inaccessible2024.json").write_text(
-            SourceNote(
-                source_id="inaccessible2024",
-                is_accessible=False,
-                title="No body",
-            ).model_dump_json(),
-            encoding="utf-8",
-        )
-
-        selected = _select_best_sources(tmp_path, registry, target_sources=2)
-
-        assert list(selected) == ["usable2024"]
-
     def test_write_full_clamps_min_sources_to_selected_usable_count(
         self, tmp_path, monkeypatch
     ):
