@@ -251,6 +251,25 @@ class TokenTracker:
             pct_str = f" ({final_pct}%)" if target_words else ""
             lines.append(f"| Final words | {reviewed_words:,}{pct_str} |")
 
+        # Build child-to-parent aggregation for summary rows (e.g. write
+        # aggregates write:1, write:2, …).  A row is a parent if it has no
+        # model and at least one child step exists with the "parent:" prefix.
+        step_names = {step for step, _, _ in rows}
+        child_agg: dict[str, dict] = {}
+        for step, data, step_cost in rows:
+            if ":" not in step:
+                continue
+            parent = step.split(":")[0]
+            if parent not in step_names:
+                continue
+            agg = child_agg.setdefault(
+                parent, {"in": 0, "out": 0, "think": 0, "cost": 0.0}
+            )
+            agg["in"] += data["input_tokens"]
+            agg["out"] += data["output_tokens"]
+            agg["think"] += data["thinking_tokens"]
+            agg["cost"] += step_cost
+
         lines += [
             "",
             "## Steps",
@@ -262,11 +281,20 @@ class TokenTracker:
             model = data["model"] or "—"
             dur = data["duration"]
             dur_str = f"{dur:.0f}s" if dur else "—"
-            lines.append(
-                f"| {step} | {model} | {dur_str} "
-                f"| {data['input_tokens']:,} | {data['output_tokens']:,} "
-                f"| {data['thinking_tokens']:,} | ${step_cost:.4f} |"
-            )
+            agg = child_agg.get(step)
+            if agg and not data["model"]:
+                # Summary row: show aggregated totals from child steps
+                lines.append(
+                    f"| **{step}** | {model} | **{dur_str}** "
+                    f"| **{agg['in']:,}** | **{agg['out']:,}** "
+                    f"| **{agg['think']:,}** | **${agg['cost']:.4f}** |"
+                )
+            else:
+                lines.append(
+                    f"| {step} | {model} | {dur_str} "
+                    f"| {data['input_tokens']:,} | {data['output_tokens']:,} "
+                    f"| {data['thinking_tokens']:,} | ${step_cost:.4f} |"
+                )
         lines.append(
             f"| **Total** | | **{m}m {s}s** "
             f"| **{total_in:,}** | **{total_out:,}** "

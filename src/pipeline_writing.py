@@ -291,6 +291,7 @@ def _write_section_draft(
     language: str,
     min_sources: int,
     essay_context: str,
+    tracker_step: str | None = None,
 ) -> tuple[Section, str, float]:
     section_corpus = (
         f"{section.title} {section.key_points} {section.content_outline or ''}"
@@ -339,7 +340,7 @@ def _write_section_draft(
         essay_context=essay_context,
     )
 
-    tracker_step = f"write:{section.position}"
+    tracker_step = tracker_step or f"write:{section.position}"
     if ctx.tracker is not None:
         ctx.tracker.set_current_step(tracker_step)
 
@@ -398,6 +399,7 @@ def make_write_sections(
                         language=language,
                         min_sources=min_sources,
                         essay_context="",
+                        tracker_step="write",
                     ): section
                     for section in parallel_sections
                 }
@@ -558,7 +560,7 @@ def make_review_sections(
 
             tracker_step = f"review:{section.position}"
             if ctx.tracker is not None:
-                ctx.tracker.set_current_step(tracker_step)
+                ctx.tracker.set_current_step("review")
 
             start = monotonic()
             reviewed = _text_call(

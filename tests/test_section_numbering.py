@@ -162,7 +162,7 @@ def test_write_sections_keeps_duplicate_numbers_distinct(
     )
     write_steps = [args.args[0] for args in tracker.set_current_step.call_args_list]
     assert write_steps[-1] == "write:1"
-    assert sorted(write_steps[:-1]) == ["write:2", "write:3"]
+    assert sorted(write_steps[:-1]) == ["write", "write"]
 
 
 def test_review_sections_keeps_duplicate_numbers_distinct(
@@ -204,9 +204,9 @@ def test_review_sections_keeps_duplicate_numbers_distinct(
         "review:Intro\n\nreview:Body A\n\nreview:Body B"
     )
     assert sorted(args.args[0] for args in tracker.set_current_step.call_args_list) == [
-        "review:1",
-        "review:2",
-        "review:3",
+        "review",
+        "review",
+        "review",
     ]
 
 

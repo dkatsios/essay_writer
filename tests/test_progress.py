@@ -172,7 +172,7 @@ class TestBuildStatusPayloadProgress:
 
     def test_includes_sub_progress(self):
         tracker = TokenTracker()
-        tracker.set_current_step("read_sources")
+        tracker.set_current_step("read_sources:fetch")
         tracker.set_step_progress(4, 9)
         tracker.set_sub_total(45)
         for _ in range(12):

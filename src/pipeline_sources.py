@@ -14,7 +14,7 @@ from urllib.parse import urlparse
 import httpx
 
 from src.rendering import render_prompt
-from src.schemas import EssayPlan, SourceAssignmentPlan, SourceNote
+from src.schemas import EssayPlan, SourceAssignmentPlan, SourceNote, SourceScoreBatch
 from src.tools.author_names import surname_from_author_string
 from src.tools.research_sources import run_research
 from src.tools.web_fetcher import fetch_url_content
@@ -328,12 +328,17 @@ async def _async_read_one_source(
     essay_topic: str = "",
     *,
     min_body_words: int = 50,
+    prefetched_content: str | None = None,
 ) -> SourceNote:
     is_user_provided = meta.get("user_provided", False)
     url = meta.get("pdf_url") or meta.get("url", "")
-    content = await _load_source_body_async(
-        meta, sources_dir, domain_tracker, min_body_words
-    )
+
+    if prefetched_content is not None:
+        content = prefetched_content
+    else:
+        content = await _load_source_body_async(
+            meta, sources_dir, domain_tracker, min_body_words
+        )
     had_body = _has_substantive_body(content, min_body_words)
 
     abstract = meta.get("abstract", "")
@@ -462,6 +467,216 @@ def _source_read_candidates(
     return user_sources + api_sources
 
 
+_CONTENT_SNIPPET_WORDS = 200
+
+
+async def _async_fetch_pdf_content(
+    source_id: str,
+    meta: dict,
+    sources_dir: str,
+    domain_tracker: _DomainFailureTracker | None = None,
+    min_body_words: int = 50,
+) -> tuple[str, str]:
+    """Fetch PDF content for a single source (network I/O only, no LLM).
+
+    For user-provided sources, loads content from ``content_path``.
+    For API sources, fetches only when ``pdf_url`` exists; non-PDF URLs are
+    skipped entirely.
+
+    Returns ``(source_id, content_text)``.
+    """
+    import asyncio
+
+    is_user_provided = meta.get("user_provided", False)
+
+    # User-provided: load from content_path
+    if is_user_provided:
+        content_path = meta.get("content_path", "")
+        if content_path and Path(content_path).exists():
+            content = await asyncio.to_thread(
+                Path(content_path).read_text, encoding="utf-8"
+            )
+            if len(content) > 50_000:
+                content = content[:50_000] + "\n\n[... truncated ...]"
+            return source_id, content
+        return source_id, ""
+
+    # API source: only fetch pdf_url
+    pdf_url = meta.get("pdf_url", "")
+    if not pdf_url:
+        return source_id, ""
+
+    if domain_tracker and domain_tracker.should_skip(pdf_url):
+        logger.info("Skipping %s — domain throttled", pdf_url)
+        return source_id, ""
+
+    try:
+        fetched = await asyncio.to_thread(fetch_url_content, pdf_url, sources_dir)
+        if len(fetched) > 50_000:
+            fetched = fetched[:50_000] + "\n\n[... truncated ...]"
+        return source_id, fetched
+    except httpx.HTTPStatusError as exc:
+        logger.warning("Failed to fetch PDF %s: %s", pdf_url, exc)
+        if exc.response.status_code == 429 and domain_tracker:
+            domain_tracker.record_failure(pdf_url)
+    except (httpx.RequestError, Exception) as exc:
+        logger.warning("Failed to fetch PDF %s: %s", pdf_url, exc)
+    return source_id, ""
+
+
+def _content_snippet(content: str, max_words: int = _CONTENT_SNIPPET_WORDS) -> str:
+    """Return the first ``max_words`` words of content as a snippet."""
+    words = content.split()
+    if len(words) <= max_words:
+        return content.strip()
+    return " ".join(words[:max_words]) + " …"
+
+
+def _filter_scorable_sources(
+    registry: dict[str, dict],
+    fetch_results: dict[str, str],
+    min_body_words: int = 50,
+) -> list[dict]:
+    """Keep candidates that have a useful abstract or fetched PDF body.
+
+    Returns a list of dicts ready for the batch-scoring template:
+    ``{source_id, title, authors, year, doi, abstract, content_snippet}``.
+    Candidates with neither signal are dropped.
+    """
+    scorable: list[dict] = []
+    dropped = 0
+    for source_id, meta in registry.items():
+        content = fetch_results.get(source_id, "")
+        abstract = meta.get("abstract", "") or ""
+        has_abstract = _is_useful_abstract(abstract)
+        has_body = _has_substantive_body(content, min_body_words)
+
+        if not has_abstract and not has_body:
+            dropped += 1
+            continue
+
+        snippet = ""
+        if not has_abstract and has_body:
+            snippet = _content_snippet(content)
+
+        authors = meta.get("authors", [])
+        scorable.append(
+            {
+                "source_id": source_id,
+                "title": meta.get("title", ""),
+                "authors": ", ".join(authors)
+                if isinstance(authors, list)
+                else str(authors),
+                "year": meta.get("year", ""),
+                "doi": meta.get("doi", ""),
+                "abstract": abstract if has_abstract else "",
+                "content_snippet": snippet,
+            }
+        )
+
+    if dropped:
+        logger.info("Dropped %d sources with no usable abstract or PDF body", dropped)
+    return scorable
+
+
+async def _async_batch_score_sources(
+    scorable: list[dict],
+    essay_topic: str,
+    thesis: str,
+    async_worker,
+    tracker: object | None = None,
+    batch_size: int = 50,
+) -> dict[str, int]:
+    """Score sources in batches via the LLM.
+
+    Returns ``{source_id: relevance_score}`` for every source in *scorable*.
+    """
+    if not scorable:
+        return {}
+
+    batches = [
+        scorable[i : i + batch_size] for i in range(0, len(scorable), batch_size)
+    ]
+    num_batches = len(batches)
+    if tracker is not None:
+        tracker.set_sub_total(num_batches)
+
+    scores: dict[str, int] = {}
+    for batch in batches:
+        prompt = render_prompt(
+            "source_scoring.j2",
+            essay_topic=essay_topic,
+            thesis=thesis,
+            sources=batch,
+        )
+        try:
+            result = await _async_structured_call(
+                async_worker, prompt, SourceScoreBatch, tracker
+            )
+            for item in result.scores:
+                scores[item.source_id] = item.relevance_score
+        except Exception:
+            logger.warning(
+                "Batch scoring failed for %d sources; assigning score 0",
+                len(batch),
+            )
+            for source in batch:
+                scores[source["source_id"]] = 0
+        finally:
+            if tracker is not None:
+                tracker.increment_sub_done()
+
+    # Fill in any sources the LLM missed with score 0
+    for source in scorable:
+        scores.setdefault(source["source_id"], 0)
+
+    return scores
+
+
+def _select_top_sources(
+    scores: dict[str, int],
+    registry: dict[str, dict],
+    target_sources: int,
+    fetch_results: dict[str, str],
+    min_body_words: int = 50,
+) -> list[str]:
+    """Rank scored sources and return the top *target_sources* IDs.
+
+    Filters out sources with relevance_score < ``_MIN_RELEVANCE_SCORE``.
+    """
+    filtered_low = 0
+    candidates: list[tuple[str, int]] = []
+    for source_id, score in scores.items():
+        if score < _MIN_RELEVANCE_SCORE:
+            filtered_low += 1
+            logger.info("Filtering source %s (relevance_score=%d)", source_id, score)
+            continue
+        candidates.append((source_id, score))
+
+    if filtered_low:
+        logger.info(
+            "Filtered %d low-relevance sources (score < %d)",
+            filtered_low,
+            _MIN_RELEVANCE_SCORE,
+        )
+
+    def _sort_key(item: tuple[str, int]) -> tuple:
+        source_id, score = item
+        meta = registry.get(source_id, {})
+        return (
+            1 if meta.get("user_provided") else 0,
+            score,
+            1 if any(author.strip() for author in meta.get("authors", [])) else 0,
+            int(meta.get("citation_count", 0) or 0),
+            1
+            if _has_substantive_body(fetch_results.get(source_id, ""), min_body_words)
+            else 0,
+        )
+
+    candidates.sort(key=_sort_key, reverse=True)
+    return [source_id for source_id, _ in candidates[:target_sources]]
+
+
 def _build_optional_pdf_prompt_payload(
     results: list[tuple[str, SourceNote | None]],
     registry: dict[str, dict],
@@ -528,6 +743,7 @@ def make_read_sources(
             return
 
         min_body = ctx.config.search.optional_pdf_min_body_words
+        batch_size = ctx.config.search.batch_score_size
         top_n = ctx.config.search.optional_pdf_prompt_top_n
         sources_dir = str(ctx.run_dir / "sources")
         notes_dir = ctx.run_dir / "sources" / "notes"
@@ -535,24 +751,68 @@ def make_read_sources(
 
         brief_path = ctx.run_dir / "brief" / "assignment.json"
         essay_topic = ""
+        thesis = ""
         if brief_path.exists():
             try:
                 brief = json.loads(brief_path.read_text(encoding="utf-8"))
                 essay_topic = brief.get("topic", "")
             except Exception:
                 pass
+        plan_path = ctx.run_dir / "plan" / "plan.json"
+        if plan_path.exists():
+            try:
+                plan_data = json.loads(plan_path.read_text(encoding="utf-8"))
+                thesis = plan_data.get("thesis", "")
+            except Exception:
+                pass
 
         async_worker = ctx.async_worker or ctx.worker.to_async()
 
-        async def read_all(
+        # -- Phase 1: fetch PDF content (network I/O only) -----------------
+
+        async def fetch_all_pdfs(
             pairs: list[tuple[str, dict]],
-        ) -> list[tuple[str, SourceNote | None]]:
+        ) -> dict[str, str]:
+            """Fetch PDF content for all candidates. Returns {source_id: content}."""
             if ctx.tracker is not None:
                 ctx.tracker.set_sub_total(len(pairs))
             domain_tracker = _DomainFailureTracker()
             semaphore = asyncio.Semaphore(_SOURCE_READ_CONCURRENCY)
 
-            async def read_one(
+            async def fetch_one(source_id: str, meta: dict) -> tuple[str, str]:
+                async with semaphore:
+                    try:
+                        return await _async_fetch_pdf_content(
+                            source_id,
+                            meta,
+                            sources_dir,
+                            domain_tracker=domain_tracker,
+                            min_body_words=min_body,
+                        )
+                    except Exception:
+                        logger.exception("Failed to fetch PDF for %s", source_id)
+                        return source_id, ""
+                    finally:
+                        if ctx.tracker is not None:
+                            ctx.tracker.increment_sub_done()
+
+            results = await asyncio.gather(
+                *(fetch_one(sid, meta) for sid, meta in pairs)
+            )
+            return dict(results)
+
+        # -- Phase 5: full extraction on selected sources ------------------
+
+        async def extract_all(
+            pairs: list[tuple[str, dict]],
+            fetch_results: dict[str, str],
+        ) -> list[tuple[str, SourceNote | None]]:
+            """Run full LLM extraction on selected sources with pre-fetched content."""
+            if ctx.tracker is not None:
+                ctx.tracker.set_sub_total(len(pairs))
+            semaphore = asyncio.Semaphore(_SOURCE_READ_CONCURRENCY)
+
+            async def extract_one(
                 source_id: str, meta: dict
             ) -> tuple[str, SourceNote | None]:
                 async with semaphore:
@@ -563,9 +823,9 @@ def make_read_sources(
                             async_worker,
                             sources_dir,
                             tracker=ctx.tracker,
-                            domain_tracker=domain_tracker,
                             essay_topic=essay_topic,
                             min_body_words=min_body,
+                            prefetched_content=fetch_results.get(source_id, ""),
                         )
                         _write_json(notes_dir / f"{source_id}.json", note)
                         return source_id, note
@@ -577,7 +837,7 @@ def make_read_sources(
                             ctx.tracker.increment_sub_done()
 
             return await asyncio.gather(
-                *(read_one(source_id, meta) for source_id, meta in pairs)
+                *(extract_one(sid, meta) for sid, meta in pairs)
             )
 
         def backfill_registry(
@@ -634,18 +894,52 @@ def make_read_sources(
                 logger.info("No sources to read (no URLs and no user-provided files).")
             return tasks
 
+        # -- Orchestration -------------------------------------------------
+
         recovery_done = False
         registry = read_registry()
         tasks = read_candidates(registry)
         if not tasks:
             return
 
-        logger.info("Reading %d ranked source candidates in parallel...", len(tasks))
-        results = asyncio.run(read_all(tasks))
-        registry = backfill_registry(registry, results)
-        selected = _select_best_sources(ctx.run_dir, registry, target_sources)
+        # Phase 1: fetch PDF content
+        if ctx.tracker is not None:
+            ctx.tracker.set_current_step("read_sources:fetch")
+        logger.info("Fetching PDF content for %d source candidates...", len(tasks))
+        fetch_results: dict[str, str] = asyncio.run(fetch_all_pdfs(tasks))
 
-        if len(selected) < target_sources:
+        # Phase 2+3: filter unusable, then batch-score
+        if ctx.tracker is not None:
+            ctx.tracker.set_current_step("read_sources:score")
+        scorable = _filter_scorable_sources(registry, fetch_results, min_body)
+        logger.info(
+            "Batch-scoring %d scorable sources (batch_size=%d)...",
+            len(scorable),
+            batch_size,
+        )
+        scores: dict[str, int] = asyncio.run(
+            _async_batch_score_sources(
+                scorable,
+                essay_topic,
+                thesis,
+                async_worker,
+                tracker=ctx.tracker,
+                batch_size=batch_size,
+            )
+        )
+
+        # Phase 4: select top T
+        selected_ids = _select_top_sources(
+            scores, registry, target_sources, fetch_results, min_body
+        )
+        logger.info(
+            "Selected %d sources from %d scored candidates",
+            len(selected_ids),
+            len(scorable),
+        )
+
+        # Recovery pass if below target
+        if len(selected_ids) < target_sources:
             recovery_fetch_sources = max(
                 fetch_sources + 1,
                 int(fetch_sources * ctx.config.search.recovery_overfetch_multiplier),
@@ -659,7 +953,7 @@ def make_read_sources(
             )
             logger.info(
                 "Selected usable sources below target (%d/%d) — rerunning research with max_sources=%d fetch_per_api=%d prefer_fulltext=%s",
-                len(selected),
+                len(selected_ids),
                 target_sources,
                 recovery_fetch_sources,
                 recovery_fetch_per_api,
@@ -676,17 +970,84 @@ def make_read_sources(
             tasks = read_candidates(registry)
             if not tasks:
                 return
-            logger.info(
-                "Reading %d ranked source candidates after recovery rerun...",
-                len(tasks),
+
+            # Fetch PDFs for new candidates only
+            new_pairs = [(sid, meta) for sid, meta in tasks if sid not in fetch_results]
+            if new_pairs:
+                if ctx.tracker is not None:
+                    ctx.tracker.set_current_step("read_sources:fetch")
+                logger.info(
+                    "Fetching PDF content for %d new candidates after recovery...",
+                    len(new_pairs),
+                )
+                new_fetches = asyncio.run(fetch_all_pdfs(new_pairs))
+                fetch_results.update(new_fetches)
+
+            # Re-score new candidates, merge, re-select
+            new_registry = {
+                sid: meta for sid, meta in registry.items() if sid not in scores
+            }
+            if new_registry:
+                new_scorable = _filter_scorable_sources(
+                    new_registry, fetch_results, min_body
+                )
+                if new_scorable:
+                    if ctx.tracker is not None:
+                        ctx.tracker.set_current_step("read_sources:score")
+                    logger.info(
+                        "Batch-scoring %d new sources after recovery...",
+                        len(new_scorable),
+                    )
+                    new_scores = asyncio.run(
+                        _async_batch_score_sources(
+                            new_scorable,
+                            essay_topic,
+                            thesis,
+                            async_worker,
+                            tracker=ctx.tracker,
+                            batch_size=batch_size,
+                        )
+                    )
+                    scores.update(new_scores)
+
+            selected_ids = _select_top_sources(
+                scores, registry, target_sources, fetch_results, min_body
             )
-            results = asyncio.run(read_all(tasks))
+
+        # Phase 5: full extraction on selected sources only
+        if ctx.tracker is not None:
+            ctx.tracker.set_current_step("read_sources:extract")
+        selected_pairs = [
+            (sid, registry[sid]) for sid in selected_ids if sid in registry
+        ]
+        if selected_pairs:
+            logger.info(
+                "Running full LLM extraction on %d selected sources...",
+                len(selected_pairs),
+            )
+            results = asyncio.run(extract_all(selected_pairs, fetch_results))
             registry = backfill_registry(registry, results)
 
-        task_ids = {source_id for source_id, _ in tasks}
+            # Drop any source that turned out inaccessible after full extraction
+            selected_ids = [
+                sid for sid, note in results if note is not None and note.is_accessible
+            ]
+
+        # Optional PDF prompt for selected sources without fulltext
+        task_ids = set(selected_ids)
         corpus = _optional_pdf_corpus_tokens(ctx.run_dir)
+        results_for_optional = [
+            (
+                sid,
+                SourceNote.model_validate_json(
+                    (notes_dir / f"{sid}.json").read_text(encoding="utf-8")
+                ),
+            )
+            for sid in selected_ids
+            if (notes_dir / f"{sid}.json").exists()
+        ]
         items, prompt_ids = _build_optional_pdf_prompt_payload(
-            results, registry, task_ids, corpus, top_n
+            results_for_optional, registry, task_ids, corpus, top_n
         )
 
         if items and top_n > 0:
@@ -714,43 +1075,47 @@ def make_read_sources(
                 reread_pairs = [
                     (source_id, registry[source_id]) for source_id in reread_ids
                 ]
-                reread_results = asyncio.run(read_all(reread_pairs))
-                merged = dict(results)
-                for source_id, note in reread_results:
-                    merged[source_id] = note
-                results = [(source_id, merged.get(source_id)) for source_id, _ in tasks]
+                # Re-fetch content for uploaded sources
+                reread_fetch = asyncio.run(fetch_all_pdfs(reread_pairs))
+                fetch_results.update(reread_fetch)
+                reread_results = asyncio.run(extract_all(reread_pairs, fetch_results))
                 registry = backfill_registry(registry, reread_results)
 
-        accessible_count = sum(
-            1 for _, note in results if note is not None and note.is_accessible
-        )
-        inaccessible_count = len(tasks) - accessible_count
+                # Update selected_ids: add any newly accessible sources
+                for sid, note in reread_results:
+                    if (
+                        note is not None
+                        and note.is_accessible
+                        and sid not in selected_ids
+                    ):
+                        selected_ids.append(sid)
 
-        selected = _select_best_sources(ctx.run_dir, registry, target_sources)
+        # Build selected registry subset and save
+        selected_registry = {
+            sid: registry[sid] for sid in selected_ids if sid in registry
+        }
         (ctx.run_dir / "sources" / "selected.json").write_text(
-            json.dumps(selected, ensure_ascii=False, indent=2),
+            json.dumps(selected_registry, ensure_ascii=False, indent=2),
             encoding="utf-8",
         )
         logger.info(
-            "Selected %d usable sources from %d candidates (%d accessible, %d inaccessible)",
-            len(selected),
-            len(tasks),
-            accessible_count,
-            inaccessible_count,
+            "Selected %d usable sources (target %d)",
+            len(selected_registry),
+            target_sources,
         )
 
-        if len(selected) < target_sources:
+        if len(selected_registry) < target_sources:
             print(
-                f"  ⚠ Only {len(selected)} usable selected sources after filtering (target {target_sources}; {accessible_count} accessible candidates).",
+                f"  ⚠ Only {len(selected_registry)} usable selected sources after filtering (target {target_sources}).",
                 file=sys.stderr,
             )
             if ctx.on_source_shortfall is not None:
                 proceed = ctx.on_source_shortfall(
                     ctx.run_dir,
                     {
-                        "usable_sources": len(selected),
+                        "usable_sources": len(selected_registry),
                         "target_sources": target_sources,
-                        "accessible_candidates": accessible_count,
+                        "accessible_candidates": len(scorable),
                         "total_candidates": len(tasks),
                         "recovery_attempted": recovery_done,
                     },

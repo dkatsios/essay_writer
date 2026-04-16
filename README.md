@@ -11,7 +11,7 @@ AI-powered academic essay generator for Greek university students. Uses a determ
 - Interactive validation: catches incomplete assignments and prompts for missing info before proceeding
 - Preserves explicit user-provided essay structure and headings more strongly when they appear in the prompt or assignment materials
 - Deterministic academic source research via Semantic Scholar, OpenAlex, and Crossref
-- Reads the full fetched/user-provided source pool, marks which sources are actually usable, then writes from a usable selected subset
+- Two-phase source reading: fetches PDFs, batch-scores candidates for relevance, selects the best sources, then runs full LLM extraction on the selected set only
 - If usable selected sources fall below the target, runs one broader recovery search pass before asking whether to continue with fewer sources
 - Long essays draft most body sections in parallel, defer introduction/synthesis/conclusion sections until full context is available, then run a reconciliation pass before review
 - Input extraction writes a single `input/extracted.md` artifact directly into each run directory

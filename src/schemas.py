@@ -199,6 +199,27 @@ class SourceNote(BaseModel):
         return count
 
 
+# -- Source batch scoring ---------------------------------------------------
+
+
+class SourceScoreItem(BaseModel):
+    """Relevance score for a single source — used in batch scoring."""
+
+    source_id: str
+    relevance_score: int
+
+
+class SourceScoreBatch(BaseModel):
+    """Batch scoring result — list of per-source relevance scores."""
+
+    scores: list[SourceScoreItem]
+
+    @field_validator("scores", mode="before")
+    @classmethod
+    def _parse_stringified_scores(cls, v: object) -> object:
+        return _parse_stringified_list_value(v)
+
+
 # -- Source assignment (long-essay path) -----------------------------------
 
 

@@ -46,7 +46,7 @@ Deterministic Python pipeline for academic essay writing using the OpenAI SDK + 
 2. **Validate** (worker) — checks brief completeness; if gaps found, prompts user interactively and updates brief JSON
 3. **Plan** (worker) — creates sections, word targets, research queries → `EssayPlan` via structured output
 4. **Research** — pure Python: extracts queries from plan, calls `run_research()` → `registry.json`
-5. **Read sources** (worker, parallel) — pipeline fetches URLs via `fetch_url_content()`, then worker extracts `SourceNote` via structured output
+5. **Read sources** (worker) — two-phase: (a) fetch PDF content only (non-PDF URLs skipped), (b) batch-score all candidates via `source_scoring.j2` → `SourceScoreBatch`, (c) select top T, (d) full extraction on selected sources via `source_reading.j2` → `SourceNote`
 5.5. **Assign sources** (worker, long path only) — assigns selected sources to sections based on content fit → `source_assignments.json`
 6. **Write** (writer) — short path writes a full draft; long path drafts most sections in parallel, then writes full-context sections (for example intro/conclusion) after the rest of the draft exists → `essay/sections/*.md`, `draft.md`
 6.5. **Reconcile sections** (worker, long path only) — inspects all drafted sections and produces per-section correction notes for overlap, transitions, and boundary cleanup → `essay/reconciliation.json`
@@ -57,7 +57,7 @@ Deterministic Python pipeline for academic essay writing using the OpenAI SDK + 
 
 | Role | Google (default) | OpenAI | Anthropic | Templates | Purpose |
 |------|-----------------|--------|-----------|-----------|----------|
-| **worker** | `gemini-2.5-flash` | `gpt-5.4-nano` | `claude-haiku-4-5` | `intake.j2`, `validate.j2`, `plan.j2`, `source_reading.j2`, `source_assignment.j2` | Structured data extraction (brief, plan, notes, source assignment) |
+| **worker** | `gemini-2.5-flash` | `gpt-5.4-nano` | `claude-haiku-4-5` | `intake.j2`, `validate.j2`, `plan.j2`, `source_scoring.j2`, `source_reading.j2`, `source_assignment.j2` | Structured data extraction (brief, plan, notes, source scoring, source assignment) |
 | **writer** | `gemini-3.1-pro-preview` | `gpt-5.4` | `claude-sonnet-4-6` | `essay_writing.j2`, `section_writing.j2` | Essay text generation |
 | **reviewer** | `gemini-3.1-pro-preview` | `gpt-5.4` | `claude-opus-4-6` | `essay_review.j2`, `section_review.j2` | Essay review and polish |
 
@@ -71,13 +71,14 @@ All tool calls (research, URL fetching, PDF reading) are plain Python functions 
 
 ### Templates (per-task Jinja2)
 
-10 templates in `src/templates/`, one per pipeline task. Each template receives specific context variables and renders the complete prompt for that step:
+11 templates in `src/templates/`, one per pipeline task. Each template receives specific context variables and renders the complete prompt for that step:
 
 | Template | Context variables | Output |
 |----------|-------------------|--------|
 | `intake.j2` | `extracted_text`, `extra_prompt` | `AssignmentBrief` JSON |
 | `validate.j2` | `brief_json` | `ValidationResult` JSON |
 | `plan.j2` | `brief_json` | `EssayPlan` JSON |
+| `source_scoring.j2` | `essay_topic`, `thesis`, `sources` (list of {source_id, title, authors, year, doi, abstract, content_snippet}) | `SourceScoreBatch` JSON |
 | `source_reading.j2` | `source_id`, `title`, `authors`, `year`, `doi`, `abstract`, `content`, `essay_topic` | `SourceNote` JSON |
 | `source_assignment.j2` | `plan_json`, `source_notes`, `min_per_section` | `SourceAssignmentPlan` JSON |
 | `essay_writing.j2` | `brief_json`, `plan_json`, `source_notes`, `target_words` | Essay markdown |
@@ -95,7 +96,7 @@ Each run uses a directory with these subdirectories:
 - `plan/plan.json` — essay plan (Pydantic `EssayPlan`); each section may set `requires_full_context` for intro/conclusion/synthesis sections that should be drafted after the rest of the essay, and `deferred_order` to control the writing sequence among deferred sections
 - `plan/source_assignments.json` — source-to-section assignments (Pydantic `SourceAssignmentPlan`; long-path only)
 - `sources/registry.json` — source metadata (from `run_research()`)
-- `sources/notes/{source_id}.json` — reader notes, one file per source (Pydantic `SourceNote`)
+- `sources/notes/{source_id}.json` — reader notes for selected sources only (Pydantic `SourceNote`)
 - `sources/selected.json` — best N sources selected for the essay
 - `sources/user/` — user-provided source files and their extracted text
 - `essay/sections/{position:02d}.md` — long-path section drafts, keyed by internal section position
@@ -135,7 +136,7 @@ No `default.yaml` exists; field defaults in `schemas.py` are canonical.
 
 - **Deterministic pipeline** — `src/pipeline.py` builds and runs the step sequence, while `src/pipeline_support.py`, `src/pipeline_sources.py`, and `src/pipeline_writing.py` hold the shared helpers and phase-specific implementations. No LLM decides the flow. Steps 1–5 use the worker model; step 6 uses the writer model; step 7 uses the reviewer model; step 8 is pure Python.
 - **Direct model calls** — no agent framework. `_structured_call()` uses Instructor `client.chat.completions.create(response_model=Schema)` for JSON steps with auto-retry on validation failure. `_text_call()` uses OpenAI SDK `client.chat.completions.create()` for text steps.
-- **Jinja2 templates** (`src/templates/*.j2`) render prompts. 10 templates, one per pipeline task.
+- **Jinja2 templates** (`src/templates/*.j2`) render prompts. 11 templates, one per pipeline task.
 - **Explicit structure preservation** — when the user provides a concrete outline, named headings, or required section order in the prompt or assignment materials, intake should capture it and planning/writing/review prompts should preserve it rather than normalizing it into a generic essay template.
 - **Plain function tools** — `run_research()`, `fetch_url_content()`, `read_pdf_text()`, `read_docx_text()` are plain Python functions called by the pipeline. No `@tool` decorators.
 - **Retry logic** — `_retry_with_backoff()` in `src/agent.py` handles transient 429/503 API errors and timeouts with exponential backoff. All clients are created with a 300-second request timeout (`_REQUEST_TIMEOUT`) to prevent hung connections. Instructor handles validation retries.
@@ -146,13 +147,13 @@ No `default.yaml` exists; field defaults in `schemas.py` are canonical.
 - **Citation-aware ranking** — after deduplication, sources are sorted by citation count (higher first), then accessibility tier (OA PDF > DOI > metadata-only) as tiebreaker. This ensures highly-cited paywalled papers outrank low-citation OA papers. OpenAlex requests use sort `relevance_score:desc`: that field is **OpenAlex’s API relevance** (how well each work matches that search request). It is unrelated to **`SourceNote.relevance_score`** in `schemas.py`, which is a **1–5 topic-fit score** assigned by the worker during source reading from the assignment brief’s `topic` (`source_reading.j2`).
 - **Shared HTTP transport** — search APIs and URL fetching use a shared `httpx.Client` with centralized retry behavior and connection pooling in `src/tools/_http.py`.
 - **Pricing** — shared runtime helpers in `src/runtime.py` use the `genai-prices` package for automatic per-model pricing across all providers; `src/runner.py` and the web job flow both consume that shared logic.
-- **Parallel source reading** — `asyncio.gather()` with `Semaphore(6)` reads **every** API row in `registry.json` (plus all user uploads) concurrently, bounded only by registry size. URL fetching runs in `asyncio.to_thread()`, LLM calls use async Instructor client.
-- **`_select_best_sources`** — builds `sources/selected.json` with up to `target_sources` **usable** IDs only. Sources with `relevance_score < 2` (barely relevant) are filtered out before ranking. Sort keys (all descending where numeric, `reverse=True` on the composite tuple): **`user_provided`** in registry (user uploads first), **`SourceNote.relevance_score`**, registry row has at least one non-blank author string, registry **`citation_count`**, then **`content_word_count`** on the note. If the usable pool is smaller than `target_sources`, the selected set is smaller too — it is not padded with inaccessible IDs.
+- **Two-phase source reading** — Phase 1: fetch PDF content only (non-PDF URLs are skipped — analysis showed 89% are garbage HTML). Phase 2: filter out sources with neither useful abstract nor PDF body. Phase 3: batch-score remaining candidates via `source_scoring.j2` (batches of `search.batch_score_size`, default 50). Phase 4: select top T. Phase 5: full LLM extraction (`source_reading.j2`) on selected sources only. `SourceNote` files are produced only for selected sources.
+- **`_select_top_sources`** — ranks batch-scored candidates and returns top `target_sources` IDs. Sources with `relevance_score < 2` are filtered out. Sort keys (all descending, `reverse=True`): **`user_provided`** → **batch relevance_score** → has authors → **`citation_count`** → **has_fulltext**. If the usable pool is smaller than `target_sources`, the selected set is smaller — not padded.
 - **Source target scaling** — `target_sources` uses log-based scaling (`sources_per_1k_words × 3 × log2(1 + words/1000)`) for diminishing marginal growth, floored by `search.min_sources` or the brief/user minimum. The web UI auto-fills the suggested source count when the user enters a word target. `fetch_sources` is `max(target_sources, target × overfetch_multiplier)`. Writing and review prompts clamp the minimum distinct-source requirement to the number of actually selected usable sources, so the model is never asked to cite more sources than exist in the usable selected pool.
 - **Selected sources drive writing** — after source reading, `sources/selected.json` contains the usable source set intended for essay generation. If the file is missing or stale, the pipeline can still fall back to all accessible notes, but an intentionally empty selected set remains empty.
-- **Source shortfall handling** — after the first read pass, if `selected.json` still contains fewer usable sources than the target, the pipeline performs one deterministic recovery rerun with a larger fetch budget and full-text-biased API filters where available. If the usable selected pool is still below target, the pipeline pauses before writing and asks the user whether to continue with the smaller source set.
+- **Source shortfall handling** — after the first batch-score + select pass, if `selected.json` still contains fewer usable sources than the target, the pipeline performs one deterministic recovery rerun with a larger fetch budget and full-text-biased API filters where available. If the usable selected pool is still below target, the pipeline pauses before writing and asks the user whether to continue with the smaller source set.
 - **Long-path writer context** — writer prompts include full summaries for a **lexically ranked** subset (`search.section_source_full_detail_max`) plus a **compact catalog** of every selected source (id, authors, year, title). Review steps see essay text only (refiner; no source bodies).
-- **User-provided sources** — users can supply their own reference PDFs/documents via `--sources` (CLI) or the "Your Sources" upload (web UI). These are saved to `sources/user/`, injected into `registry.json` with `user_provided: true` and placeholder metadata. The source-reading step extracts both notes and bibliographic metadata (title, authors, year, DOI) from the content via the LLM, then backfills the registry. User sources are always read first and are prioritized in `_select_best_sources`.
+- **User-provided sources** — users can supply their own reference PDFs/documents via `--sources` (CLI) or the "Your Sources" upload (web UI). These are saved to `sources/user/`, injected into `registry.json` with `user_provided: true` and placeholder metadata. User sources skip batch scoring and go directly to full extraction, which extracts both notes and bibliographic metadata (title, authors, year, DOI) from the content via the LLM, then backfills the registry. User sources are always prioritized in `_select_top_sources`.
 - **Optional PDF uploads (web)** — after the first source-read pass, API sources with `SourceNote.fetched_fulltext=False` (abstract-only or short fetch) may be offered to the user (up to `search.optional_pdf_prompt_top_n`, lexical relevance from brief/plan + citation count). The UI accepts a local PDF file or an http(s) URL to a PDF; text is saved under `sources/supplement/` and `registry[id].content_path` is set, then those IDs are re-read before `selected.json`. CLI runs print a stderr hint instead of blocking. Config: `optional_pdf_prompt_top_n`, `optional_pdf_min_body_words`.
 - **Short vs long path** — essays ≤ `long_essay_threshold` (default 4000 words) use full-essay write/review. Longer essays use section-by-section write/review with a source-assignment step (5.5), hybrid section drafting, and a reconciliation step before review.
 - **Source assignment (long path)** — after source reading, the worker assigns each selected source to the sections where it is most relevant (`source_assignment.j2` → `SourceAssignmentPlan`). During section writing, assigned sources are boosted to the top of the detail window so the writer sees their full summaries, and the template requires citing each assigned source at least once.

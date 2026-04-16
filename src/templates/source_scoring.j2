@@ -1,0 +1,39 @@
+You are a research assistant scoring academic sources for relevance to an essay topic.
+
+## Essay Topic
+
+{{ essay_topic }}
+
+{% if thesis %}
+## Thesis
+
+{{ thesis }}
+{% endif %}
+
+## Sources
+
+Score each source's relevance to the essay topic on a 1–5 scale:
+- **5** = directly addresses the essay topic; core source
+- **4** = highly relevant; covers a major aspect of the topic
+- **3** = moderately relevant; useful background or partial overlap
+- **2** = tangentially related; minor connection to the topic
+- **1** = barely relevant or not useful for this essay
+
+{% for source in sources %}
+### Source {{ loop.index }}
+- **source_id**: {{ source.source_id }}
+- **Title**: {{ source.title }}
+{% if source.authors %}- **Authors**: {{ source.authors }}{% endif %}
+{% if source.year %}- **Year**: {{ source.year }}{% endif %}
+{% if source.abstract %}- **Abstract**: {{ source.abstract }}{% endif %}
+{% if source.content_snippet %}- **Content excerpt**: {{ source.content_snippet }}{% endif %}
+
+{% endfor %}
+
+## Task
+
+Return a JSON object with a `scores` array. Each element must have:
+- `source_id`: the exact source_id from above
+- `relevance_score`: integer 1–5
+
+Score every source listed above. Do not skip any.
