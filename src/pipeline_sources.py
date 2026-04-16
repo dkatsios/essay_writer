@@ -721,352 +721,346 @@ def make_read_sources(
             logger.warning("No registry.json found -- skipping source reading.")
             return
 
-        min_body = ctx.config.search.optional_pdf_min_body_words
-        batch_size = ctx.config.search.batch_score_size
-        top_n = ctx.config.search.optional_pdf_prompt_top_n
-        sources_dir = str(ctx.run_dir / "sources")
-        notes_dir = ctx.run_dir / "sources" / "notes"
-        notes_dir.mkdir(parents=True, exist_ok=True)
+        asyncio.run(
+            _async_read_sources_orchestration(
+                ctx, registry_path, target_sources, fetch_sources
+            )
+        )
 
-        brief_path = ctx.run_dir / "brief" / "assignment.json"
-        essay_topic = ""
-        thesis = ""
-        if brief_path.exists():
-            try:
-                brief = json.loads(brief_path.read_text(encoding="utf-8"))
-                essay_topic = brief.get("topic", "")
-            except Exception:
-                pass
-        plan_path = ctx.run_dir / "plan" / "plan.json"
-        if plan_path.exists():
-            try:
-                plan_data = json.loads(plan_path.read_text(encoding="utf-8"))
-                thesis = plan_data.get("thesis", "")
-            except Exception:
-                pass
+    return _do_read_sources
 
-        async_worker = ctx.async_worker or ctx.worker.to_async()
 
-        # -- Orchestration -------------------------------------------------
+async def _async_read_sources_orchestration(
+    ctx: PipelineContext,
+    registry_path: Path,
+    target_sources: int,
+    fetch_sources: int,
+) -> None:
+    """Core async orchestration for source reading.
 
-        recovery_done = False
+    Runs inside a single ``asyncio.run()`` call.  All async phases use
+    ``await`` directly; the sync recovery research pass is offloaded via
+    ``asyncio.to_thread``.
+    """
+    import asyncio
+
+    min_body = ctx.config.search.optional_pdf_min_body_words
+    batch_size = ctx.config.search.batch_score_size
+    top_n = ctx.config.search.optional_pdf_prompt_top_n
+    sources_dir = str(ctx.run_dir / "sources")
+    notes_dir = ctx.run_dir / "sources" / "notes"
+    notes_dir.mkdir(parents=True, exist_ok=True)
+
+    brief_path = ctx.run_dir / "brief" / "assignment.json"
+    essay_topic = ""
+    thesis = ""
+    if brief_path.exists():
+        try:
+            brief = json.loads(brief_path.read_text(encoding="utf-8"))
+            essay_topic = brief.get("topic", "")
+        except Exception:
+            pass
+    plan_path = ctx.run_dir / "plan" / "plan.json"
+    if plan_path.exists():
+        try:
+            plan_data = json.loads(plan_path.read_text(encoding="utf-8"))
+            thesis = plan_data.get("thesis", "")
+        except Exception:
+            pass
+
+    async_worker = ctx.async_worker or ctx.worker.to_async()
+
+    # -- Orchestration -------------------------------------------------
+
+    recovery_done = False
+    registry = _read_registry(registry_path)
+
+    # Separate user sources from API sources
+    user_pairs = [
+        (sid, meta) for sid, meta in registry.items() if meta.get("user_provided")
+    ]
+    api_pairs = [
+        (sid, meta) for sid, meta in registry.items() if not meta.get("user_provided")
+    ]
+
+    # Phase 2: filter API sources by abstract BEFORE fetching PDFs
+    if ctx.tracker is not None:
+        ctx.tracker.set_current_step("read_sources:score")
+    scorable = _filter_scorable_sources({sid: meta for sid, meta in api_pairs})
+    scorable_ids = {s["source_id"] for s in scorable}
+    logger.info(
+        "Filtered to %d scorable API sources (of %d total API)",
+        len(scorable),
+        len(api_pairs),
+    )
+
+    # Phase 1: fetch PDFs only for scorable API sources + user sources
+    fetch_pairs = [
+        (sid, meta) for sid, meta in api_pairs if sid in scorable_ids
+    ] + user_pairs
+    if not fetch_pairs and not scorable:
+        logger.info("No sources to read (no scorable API and no user-provided).")
+        return
+    if ctx.tracker is not None:
+        ctx.tracker.set_current_step("read_sources:fetch")
+    logger.info("Fetching PDF content for %d source candidates...", len(fetch_pairs))
+    fetch_results: dict[str, str] = await _fetch_all_pdfs(
+        fetch_pairs, sources_dir, tracker=ctx.tracker, min_body_words=min_body
+    )
+
+    # Phase 3: batch-score scorable API sources
+    if ctx.tracker is not None:
+        ctx.tracker.set_current_step("read_sources:score")
+    logger.info(
+        "Batch-scoring %d scorable sources (batch_size=%d)...",
+        len(scorable),
+        batch_size,
+    )
+    scores: dict[str, int] = await _async_batch_score_sources(
+        scorable,
+        essay_topic,
+        thesis,
+        async_worker,
+        tracker=ctx.tracker,
+        batch_size=batch_size,
+    )
+
+    # Phase 4: select top T from API sources
+    above_threshold = sum(1 for s in scores.values() if s >= _MIN_RELEVANCE_SCORE)
+    selected_ids = _select_top_sources(
+        scores, registry, target_sources, fetch_results, min_body
+    )
+    logger.info(
+        "Selected %d API sources from %d scored candidates (%d above threshold)",
+        len(selected_ids),
+        len(scorable),
+        above_threshold,
+    )
+
+    # Recovery pass if below target (API sources only)
+    if len(selected_ids) < target_sources:
+        recovery_fetch_sources = max(
+            fetch_sources + 1,
+            int(fetch_sources * ctx.config.search.recovery_overfetch_multiplier),
+        )
+        recovery_fetch_per_api = max(
+            ctx.config.search.fetch_per_api + 1,
+            int(
+                ctx.config.search.fetch_per_api
+                * ctx.config.search.recovery_fetch_per_api_multiplier
+            ),
+        )
+        logger.info(
+            "Selected usable sources below target (%d/%d) — rerunning research with max_sources=%d fetch_per_api=%d prefer_fulltext=%s",
+            len(selected_ids),
+            target_sources,
+            recovery_fetch_sources,
+            recovery_fetch_per_api,
+            ctx.config.search.recovery_prefer_fulltext,
+        )
+        await asyncio.to_thread(
+            _run_research_pass,
+            ctx,
+            recovery_fetch_sources,
+            fetch_per_api=recovery_fetch_per_api,
+            prefer_fulltext=ctx.config.search.recovery_prefer_fulltext,
+        )
+        recovery_done = True
         registry = _read_registry(registry_path)
 
-        # Separate user sources from API sources
-        user_pairs = [
-            (sid, meta) for sid, meta in registry.items() if meta.get("user_provided")
-        ]
-        api_pairs = [
-            (sid, meta)
+        # Filter + fetch new API candidates only
+        new_api = {
+            sid: meta
             for sid, meta in registry.items()
-            if not meta.get("user_provided")
-        ]
+            if not meta.get("user_provided") and sid not in scores
+        }
+        if new_api:
+            new_scorable = _filter_scorable_sources(new_api)
+            if new_scorable:
+                new_scorable_ids = {s["source_id"] for s in new_scorable}
+                new_fetch_pairs = [
+                    (sid, meta)
+                    for sid, meta in new_api.items()
+                    if sid in new_scorable_ids and sid not in fetch_results
+                ]
+                if new_fetch_pairs:
+                    if ctx.tracker is not None:
+                        ctx.tracker.set_current_step("read_sources:fetch")
+                    logger.info(
+                        "Fetching PDF content for %d new candidates after recovery...",
+                        len(new_fetch_pairs),
+                    )
+                    new_fetches = await _fetch_all_pdfs(
+                        new_fetch_pairs,
+                        sources_dir,
+                        tracker=ctx.tracker,
+                        min_body_words=min_body,
+                    )
+                    fetch_results.update(new_fetches)
 
-        # Phase 2: filter API sources by abstract BEFORE fetching PDFs
-        if ctx.tracker is not None:
-            ctx.tracker.set_current_step("read_sources:score")
-        scorable = _filter_scorable_sources({sid: meta for sid, meta in api_pairs})
-        scorable_ids = {s["source_id"] for s in scorable}
-        logger.info(
-            "Filtered to %d scorable API sources (of %d total API)",
-            len(scorable),
-            len(api_pairs),
-        )
+                if ctx.tracker is not None:
+                    ctx.tracker.set_current_step("read_sources:score")
+                logger.info(
+                    "Batch-scoring %d new sources after recovery...",
+                    len(new_scorable),
+                )
+                new_scores = await _async_batch_score_sources(
+                    new_scorable,
+                    essay_topic,
+                    thesis,
+                    async_worker,
+                    tracker=ctx.tracker,
+                    batch_size=batch_size,
+                )
+                scores.update(new_scores)
 
-        # Phase 1: fetch PDFs only for scorable API sources + user sources
-        fetch_pairs = [
-            (sid, meta) for sid, meta in api_pairs if sid in scorable_ids
-        ] + user_pairs
-        if not fetch_pairs and not scorable:
-            logger.info("No sources to read (no scorable API and no user-provided).")
-            return
-        if ctx.tracker is not None:
-            ctx.tracker.set_current_step("read_sources:fetch")
-        logger.info(
-            "Fetching PDF content for %d source candidates...", len(fetch_pairs)
-        )
-        fetch_results: dict[str, str] = asyncio.run(
-            _fetch_all_pdfs(
-                fetch_pairs, sources_dir, tracker=ctx.tracker, min_body_words=min_body
-            )
-        )
-
-        # Phase 3: batch-score scorable API sources
-        if ctx.tracker is not None:
-            ctx.tracker.set_current_step("read_sources:score")
-        logger.info(
-            "Batch-scoring %d scorable sources (batch_size=%d)...",
-            len(scorable),
-            batch_size,
-        )
-        scores: dict[str, int] = asyncio.run(
-            _async_batch_score_sources(
-                scorable,
-                essay_topic,
-                thesis,
-                async_worker,
-                tracker=ctx.tracker,
-                batch_size=batch_size,
-            )
-        )
-
-        # Phase 4: select top T from API sources
+        # Recompute above_threshold after merging recovery scores
         above_threshold = sum(1 for s in scores.values() if s >= _MIN_RELEVANCE_SCORE)
         selected_ids = _select_top_sources(
             scores, registry, target_sources, fetch_results, min_body
         )
+
+    # Phase 5: full extraction on selected API sources
+    if ctx.tracker is not None:
+        ctx.tracker.set_current_step("read_sources:extract")
+    selected_pairs = [(sid, registry[sid]) for sid in selected_ids if sid in registry]
+
+    # Extract user sources (bypass scoring entirely)
+    all_extract_pairs = user_pairs + selected_pairs
+    if all_extract_pairs:
         logger.info(
-            "Selected %d API sources from %d scored candidates (%d above threshold)",
-            len(selected_ids),
-            len(scorable),
-            above_threshold,
+            "Running full LLM extraction on %d sources (%d user, %d API)...",
+            len(all_extract_pairs),
+            len(user_pairs),
+            len(selected_pairs),
         )
-
-        # Recovery pass if below target (API sources only)
-        if len(selected_ids) < target_sources:
-            recovery_fetch_sources = max(
-                fetch_sources + 1,
-                int(fetch_sources * ctx.config.search.recovery_overfetch_multiplier),
-            )
-            recovery_fetch_per_api = max(
-                ctx.config.search.fetch_per_api + 1,
-                int(
-                    ctx.config.search.fetch_per_api
-                    * ctx.config.search.recovery_fetch_per_api_multiplier
-                ),
-            )
-            logger.info(
-                "Selected usable sources below target (%d/%d) — rerunning research with max_sources=%d fetch_per_api=%d prefer_fulltext=%s",
-                len(selected_ids),
-                target_sources,
-                recovery_fetch_sources,
-                recovery_fetch_per_api,
-                ctx.config.search.recovery_prefer_fulltext,
-            )
-            _run_research_pass(
-                ctx,
-                recovery_fetch_sources,
-                fetch_per_api=recovery_fetch_per_api,
-                prefer_fulltext=ctx.config.search.recovery_prefer_fulltext,
-            )
-            recovery_done = True
-            registry = _read_registry(registry_path)
-
-            # Filter + fetch new API candidates only
-            new_api = {
-                sid: meta
-                for sid, meta in registry.items()
-                if not meta.get("user_provided") and sid not in scores
-            }
-            if new_api:
-                new_scorable = _filter_scorable_sources(new_api)
-                if new_scorable:
-                    new_scorable_ids = {s["source_id"] for s in new_scorable}
-                    new_fetch_pairs = [
-                        (sid, meta)
-                        for sid, meta in new_api.items()
-                        if sid in new_scorable_ids and sid not in fetch_results
-                    ]
-                    if new_fetch_pairs:
-                        if ctx.tracker is not None:
-                            ctx.tracker.set_current_step("read_sources:fetch")
-                        logger.info(
-                            "Fetching PDF content for %d new candidates after recovery...",
-                            len(new_fetch_pairs),
-                        )
-                        new_fetches = asyncio.run(
-                            _fetch_all_pdfs(
-                                new_fetch_pairs,
-                                sources_dir,
-                                tracker=ctx.tracker,
-                                min_body_words=min_body,
-                            )
-                        )
-                        fetch_results.update(new_fetches)
-
-                    if ctx.tracker is not None:
-                        ctx.tracker.set_current_step("read_sources:score")
-                    logger.info(
-                        "Batch-scoring %d new sources after recovery...",
-                        len(new_scorable),
-                    )
-                    new_scores = asyncio.run(
-                        _async_batch_score_sources(
-                            new_scorable,
-                            essay_topic,
-                            thesis,
-                            async_worker,
-                            tracker=ctx.tracker,
-                            batch_size=batch_size,
-                        )
-                    )
-                    scores.update(new_scores)
-
-            # Recompute above_threshold after merging recovery scores
-            above_threshold = sum(
-                1 for s in scores.values() if s >= _MIN_RELEVANCE_SCORE
-            )
-            selected_ids = _select_top_sources(
-                scores, registry, target_sources, fetch_results, min_body
-            )
-
-        # Phase 5: full extraction on selected API sources
-        if ctx.tracker is not None:
-            ctx.tracker.set_current_step("read_sources:extract")
-        selected_pairs = [
-            (sid, registry[sid]) for sid in selected_ids if sid in registry
-        ]
-
-        # Extract user sources (bypass scoring entirely)
-        all_extract_pairs = user_pairs + selected_pairs
-        if all_extract_pairs:
-            logger.info(
-                "Running full LLM extraction on %d sources (%d user, %d API)...",
-                len(all_extract_pairs),
-                len(user_pairs),
-                len(selected_pairs),
-            )
-            results = asyncio.run(
-                _extract_all(
-                    all_extract_pairs,
-                    fetch_results,
-                    async_worker,
-                    sources_dir,
-                    notes_dir,
-                    essay_topic=essay_topic,
-                    tracker=ctx.tracker,
-                    min_body_words=min_body,
-                )
-            )
-            registry = _backfill_registry(registry, results, registry_path)
-
-            # User sources: keep only accessible ones
-            user_accessible_ids = [
-                sid
-                for sid, note in results[: len(user_pairs)]
-                if note is not None and note.is_accessible
-            ]
-            # API sources: all are accessible (forced in _async_read_one_source)
-            api_extracted_ids = [
-                sid
-                for sid, note in results[len(user_pairs) :]
-                if note is not None and note.is_accessible
-            ]
-            selected_ids = user_accessible_ids + api_extracted_ids
-
-        # Optional PDF prompt for selected sources without fulltext
-        task_ids = set(selected_ids)
-        corpus = _optional_pdf_corpus_tokens(ctx.run_dir)
-        results_for_optional = [
-            (
-                sid,
-                SourceNote.model_validate_json(
-                    (notes_dir / f"{sid}.json").read_text(encoding="utf-8")
-                ),
-            )
-            for sid in selected_ids
-            if (notes_dir / f"{sid}.json").exists()
-        ]
-        items, prompt_ids = _build_optional_pdf_prompt_payload(
-            results_for_optional, registry, task_ids, corpus, top_n
+        results = await _extract_all(
+            all_extract_pairs,
+            fetch_results,
+            async_worker,
+            sources_dir,
+            notes_dir,
+            essay_topic=essay_topic,
+            tracker=ctx.tracker,
+            min_body_words=min_body,
         )
+        registry = _backfill_registry(registry, results, registry_path)
 
-        if items and top_n > 0:
-            paths_before = {
-                source_id: (registry.get(source_id) or {}).get("content_path")
-                for source_id in prompt_ids
-            }
-            if ctx.on_optional_source_pdfs:
-                ctx.on_optional_source_pdfs(ctx.run_dir, items)
-            else:
-                _cli_optional_pdf_hint(ctx.run_dir, items)
+        # User sources: keep only accessible ones
+        user_accessible_ids = [
+            sid
+            for sid, note in results[: len(user_pairs)]
+            if note is not None and note.is_accessible
+        ]
+        # API sources: all are accessible (forced in _async_read_one_source)
+        api_extracted_ids = [
+            sid
+            for sid, note in results[len(user_pairs) :]
+            if note is not None and note.is_accessible
+        ]
+        selected_ids = user_accessible_ids + api_extracted_ids
 
-            registry = _read_registry(registry_path)
-            reread_ids = [
-                source_id
-                for source_id in prompt_ids
-                if (registry.get(source_id) or {}).get("content_path")
-                != paths_before.get(source_id)
-            ]
-            if reread_ids:
-                logger.info(
-                    "Re-reading %d source(s) after optional PDF upload…",
-                    len(reread_ids),
-                )
-                reread_pairs = [
-                    (source_id, registry[source_id]) for source_id in reread_ids
-                ]
-                # Re-fetch content for uploaded sources
-                reread_fetch = asyncio.run(
-                    _fetch_all_pdfs(
-                        reread_pairs,
-                        sources_dir,
-                        tracker=ctx.tracker,
-                        min_body_words=min_body,
-                    )
-                )
-                fetch_results.update(reread_fetch)
-                reread_results = asyncio.run(
-                    _extract_all(
-                        reread_pairs,
-                        fetch_results,
-                        async_worker,
-                        sources_dir,
-                        notes_dir,
-                        essay_topic=essay_topic,
-                        tracker=ctx.tracker,
-                        min_body_words=min_body,
-                    )
-                )
-                registry = _backfill_registry(registry, reread_results, registry_path)
+    # Optional PDF prompt for selected sources without fulltext
+    task_ids = set(selected_ids)
+    corpus = _optional_pdf_corpus_tokens(ctx.run_dir)
+    results_for_optional = [
+        (
+            sid,
+            SourceNote.model_validate_json(
+                (notes_dir / f"{sid}.json").read_text(encoding="utf-8")
+            ),
+        )
+        for sid in selected_ids
+        if (notes_dir / f"{sid}.json").exists()
+    ]
+    items, prompt_ids = _build_optional_pdf_prompt_payload(
+        results_for_optional, registry, task_ids, corpus, top_n
+    )
 
-                # Update selected_ids: add any newly accessible sources
-                for sid, note in reread_results:
-                    if (
-                        note is not None
-                        and note.is_accessible
-                        and sid not in selected_ids
-                    ):
-                        selected_ids.append(sid)
-
-        # Build selected registry subset and save
-        selected_registry = {
-            sid: registry[sid] for sid in selected_ids if sid in registry
+    if items and top_n > 0:
+        paths_before = {
+            source_id: (registry.get(source_id) or {}).get("content_path")
+            for source_id in prompt_ids
         }
-        (ctx.run_dir / "sources" / "selected.json").write_text(
-            json.dumps(selected_registry, ensure_ascii=False, indent=2),
-            encoding="utf-8",
-        )
-        logger.info(
-            "Selected %d usable sources (target %d)",
+        if ctx.on_optional_source_pdfs:
+            ctx.on_optional_source_pdfs(ctx.run_dir, items)
+        else:
+            _cli_optional_pdf_hint(ctx.run_dir, items)
+
+        registry = _read_registry(registry_path)
+        reread_ids = [
+            source_id
+            for source_id in prompt_ids
+            if (registry.get(source_id) or {}).get("content_path")
+            != paths_before.get(source_id)
+        ]
+        if reread_ids:
+            logger.info(
+                "Re-reading %d source(s) after optional PDF upload…",
+                len(reread_ids),
+            )
+            reread_pairs = [
+                (source_id, registry[source_id]) for source_id in reread_ids
+            ]
+            # Re-fetch content for uploaded sources
+            reread_fetch = await _fetch_all_pdfs(
+                reread_pairs,
+                sources_dir,
+                tracker=ctx.tracker,
+                min_body_words=min_body,
+            )
+            fetch_results.update(reread_fetch)
+            reread_results = await _extract_all(
+                reread_pairs,
+                fetch_results,
+                async_worker,
+                sources_dir,
+                notes_dir,
+                essay_topic=essay_topic,
+                tracker=ctx.tracker,
+                min_body_words=min_body,
+            )
+            registry = _backfill_registry(registry, reread_results, registry_path)
+
+            # Update selected_ids: add any newly accessible sources
+            for sid, note in reread_results:
+                if note is not None and note.is_accessible and sid not in selected_ids:
+                    selected_ids.append(sid)
+
+    # Build selected registry subset and save
+    selected_registry = {sid: registry[sid] for sid in selected_ids if sid in registry}
+    (ctx.run_dir / "sources" / "selected.json").write_text(
+        json.dumps(selected_registry, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    logger.info(
+        "Selected %d usable sources (target %d)",
+        len(selected_registry),
+        target_sources,
+    )
+
+    if len(selected_registry) < target_sources:
+        logger.warning(
+            "Only %d usable selected sources after filtering (target %d).",
             len(selected_registry),
             target_sources,
         )
-
-        if len(selected_registry) < target_sources:
-            logger.warning(
-                "Only %d usable selected sources after filtering (target %d).",
-                len(selected_registry),
-                target_sources,
+        if ctx.on_source_shortfall is not None:
+            proceed = ctx.on_source_shortfall(
+                ctx.run_dir,
+                {
+                    "usable_sources": len(selected_registry),
+                    "target_sources": target_sources,
+                    "scorable_candidates": len(scorable),
+                    "above_threshold": above_threshold,
+                    "total_candidates": len(api_pairs) + len(user_pairs),
+                    "recovery_attempted": recovery_done,
+                },
             )
-            if ctx.on_source_shortfall is not None:
-                proceed = ctx.on_source_shortfall(
-                    ctx.run_dir,
-                    {
-                        "usable_sources": len(selected_registry),
-                        "target_sources": target_sources,
-                        "scorable_candidates": len(scorable),
-                        "above_threshold": above_threshold,
-                        "total_candidates": len(api_pairs) + len(user_pairs),
-                        "recovery_attempted": recovery_done,
-                    },
+            if not proceed:
+                raise SourceShortfallAbort(
+                    "User declined to proceed after source shortfall"
                 )
-                if not proceed:
-                    raise SourceShortfallAbort(
-                        "User declined to proceed after source shortfall"
-                    )
-
-    return _do_read_sources
 
 
 def do_assign_sources(ctx: PipelineContext) -> None:
