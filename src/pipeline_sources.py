@@ -5,7 +5,6 @@ from __future__ import annotations
 import json
 import logging
 import re
-import sys
 import threading
 from collections.abc import Callable
 from pathlib import Path
@@ -714,20 +713,19 @@ def _build_optional_pdf_prompt_payload(
 
 
 def _cli_optional_pdf_hint(run_dir: Path, items: list[dict]) -> None:
-    print(
-        "\n"
-        + "=" * 50
-        + "\n  Some ranked sources have no full text (abstract-only or fetch failed).\n"
-        + "  The web UI can prompt for optional PDFs; on CLI, use --sources with your files\n"
-        + "  or add text under the run directory and re-run if you extend the tool.\n"
-        + f"  Run directory: {run_dir}\n",
-        file=sys.stderr,
+    logger.info(
+        "%s\nSome ranked sources have no full text (abstract-only or fetch failed).\n"
+        "The web UI can prompt for optional PDFs; on CLI, use --sources with your files\n"
+        "or add text under the run directory and re-run if you extend the tool.\n"
+        "Run directory: %s",
+        "=" * 50,
+        run_dir,
     )
     for item in items:
-        print(f"  • {item.get('title', item['source_id'])}"[:200], file=sys.stderr)
+        logger.info("  • %s", f"{item.get('title', item['source_id'])}"[:200])
         if item.get("doi_url"):
-            print(f"    {item['doi_url']}", file=sys.stderr)
-        print(f"    id={item['source_id']}", file=sys.stderr)
+            logger.info("    %s", item["doi_url"])
+        logger.info("    id=%s", item["source_id"])
 
 
 def make_read_sources(
@@ -1105,9 +1103,10 @@ def make_read_sources(
         )
 
         if len(selected_registry) < target_sources:
-            print(
-                f"  ⚠ Only {len(selected_registry)} usable selected sources after filtering (target {target_sources}).",
-                file=sys.stderr,
+            logger.warning(
+                "Only %d usable selected sources after filtering (target %d).",
+                len(selected_registry),
+                target_sources,
             )
             if ctx.on_source_shortfall is not None:
                 proceed = ctx.on_source_shortfall(

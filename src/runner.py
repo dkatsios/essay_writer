@@ -76,18 +76,14 @@ def _parse_validation_answers(
 
 def _handle_questions(questions: list[ValidationQuestion], run_dir: Path) -> None:
     """Print validator questions, collect answers via stdin, append to brief."""
-    print(
-        "\n"
-        + "=" * 50
-        + "\n  The assignment brief has gaps that may affect quality."
-        + "\n  Please answer the following:\n",
-        file=sys.stderr,
+    logger.info(
+        "%s\nThe assignment brief has gaps that may affect quality.\nPlease answer the following:",
+        "=" * 50,
     )
-    print(_format_validation_questions(questions), file=sys.stderr)
-    print(
+    logger.info("%s", _format_validation_questions(questions))
+    logger.info(
         "\n  Enter answers (e.g. '1. a, 2. c'). Lines marked ← suggested default; "
         "press Enter to skip all:",
-        file=sys.stderr,
     )
     answers = input("> ").strip()
     if not answers:
@@ -111,23 +107,20 @@ def _handle_source_shortfall(run_dir: Path, summary: dict) -> bool:
     total = int(summary.get("total_candidates", 0) or 0)
     recovered = bool(summary.get("recovery_attempted"))
 
-    print(
-        "\n"
-        + "=" * 50
-        + "\n  Source shortfall detected."
-        + f"\n  Target usable sources: {target}"
-        + f"\n  Available selected usable sources: {usable}"
-        + f"\n  Accessible candidates after reading: {accessible}/{total}",
-        file=sys.stderr,
+    logger.warning(
+        "%s\nSource shortfall detected.\nTarget usable sources: %d\nAvailable selected usable sources: %d\nAccessible candidates after reading: %d/%d",
+        "=" * 50,
+        target,
+        usable,
+        accessible,
+        total,
     )
     if recovered:
-        print(
+        logger.warning(
             "  A recovery search pass already ran with broader/full-text-biased parameters.",
-            file=sys.stderr,
         )
-    print(
+    logger.warning(
         "  Continue with the available usable sources instead of the original target? [y/N]",
-        file=sys.stderr,
     )
     answer = input("> ").strip().lower()
     return answer in {"y", "yes"}
@@ -184,12 +177,11 @@ def _execute_pipeline(
             user_sources_dir=user_sources_dir,
         )
     except SourceShortfallAbort as exc:
-        print(f"\nAborted: {exc}", file=sys.stderr)
+        logger.warning("Aborted: %s", exc)
         return
     finally:
         cost = tracker.cost_summary()
-        print(cost, file=sys.stderr)
-        logger.info("Run summary:\n%s", cost)
+        logger.info("%s", cost)
         tracker.write_report(run_dir)
         clear_run_id()
         teardown_run_logging(log_handler)
@@ -207,7 +199,7 @@ def run(
     input_files = scan(input_path)
     for f in input_files:
         status = f.category if not f.warning else f"SKIPPED ({f.warning})"
-        print(f"  [{status}] {f.path.name}", file=sys.stderr)
+        logger.info("[%s] %s", status, f.path.name)
     extracted_text = build_extracted_text(input_files, extra_prompt=prompt)
 
     _execute_pipeline(
@@ -244,7 +236,7 @@ def resume_run(
     """Resume a previous pipeline run from its output directory."""
     run_dir = Path(run_dir_path)
     if not run_dir.is_dir():
-        print(f"Error: {run_dir} is not a directory.", file=sys.stderr)
+        logger.error("%s is not a directory.", run_dir)
         sys.exit(1)
 
     extracted_path = run_dir / "input" / "extracted.md"
@@ -282,12 +274,11 @@ def resume_run(
             resume=True,
         )
     except SourceShortfallAbort as exc:
-        print(f"\nAborted: {exc}", file=sys.stderr)
+        logger.warning("Aborted: %s", exc)
         return
     finally:
         cost = tracker.cost_summary()
-        print(cost, file=sys.stderr)
-        logger.info("Run summary:\n%s", cost)
+        logger.info("%s", cost)
         tracker.write_report(run_dir)
         clear_run_id()
         teardown_run_logging(log_handler)
@@ -358,7 +349,7 @@ def main() -> None:
             sys.exit(1)
         prompt_text = sys.stdin.read().strip()
         if not prompt_text:
-            print("Error: No input provided.", file=sys.stderr)
+            logger.error("No input provided.")
             sys.exit(1)
         run_prompt(
             prompt_text,

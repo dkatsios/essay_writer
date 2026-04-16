@@ -6,7 +6,6 @@ import json
 import logging
 import math
 import re
-import sys
 from collections import Counter
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -111,15 +110,13 @@ def _execute(
     running_idx = 0
     for step in steps:
         if checkpoint is not None and step.name in checkpoint:
-            print(f"\n{'=' * 50}", file=sys.stderr)
-            print(f"  Step: {step.name} (skipped — already completed)", file=sys.stderr)
-            logger.info("Step %s skipped (already completed)", step.name)
+            logger.info(
+                "%s\nStep: %s (skipped — already completed)", "=" * 50, step.name
+            )
             running_idx += 1
             continue
 
-        print(f"\n{'=' * 50}", file=sys.stderr)
-        print(f"  Step: {step.name}", file=sys.stderr)
-        logger.info("Step %s started", step.name)
+        logger.info("%s\nStep: %s", "=" * 50, step.name)
         if ctx.tracker is not None:
             ctx.tracker.set_current_step(step.name)
             if total_steps is not None:
@@ -129,12 +126,10 @@ def _execute(
         try:
             step.fn(ctx)
             duration = monotonic() - start
-            print(f"  OK {step.name} ({duration:.1f}s)", file=sys.stderr)
-            logger.info("Step %s completed (%.1fs)", step.name, duration)
+            logger.info("OK %s (%.1fs)", step.name, duration)
         except Exception:
             duration = monotonic() - start
-            print(f"  FAIL {step.name} ({duration:.1f}s)", file=sys.stderr)
-            logger.error("Step %s failed (%.1fs)", step.name, duration)
+            logger.error("FAIL %s (%.1fs)", step.name, duration)
             if ctx.tracker is not None:
                 ctx.tracker.record_duration(step.name, duration)
             raise

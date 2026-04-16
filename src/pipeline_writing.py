@@ -5,7 +5,6 @@ from __future__ import annotations
 import json
 import logging
 import re
-import sys
 from collections import defaultdict, deque
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -405,9 +404,11 @@ def make_write_sections(
                 }
                 for future in as_completed(futures):
                     section, text, duration = future.result()
-                    print(
-                        f"    section {section.number} ({section.title}) -- {duration:.1f}s",
-                        file=sys.stderr,
+                    logger.info(
+                        "section %s (%s) -- %.1fs",
+                        section.number,
+                        section.title,
+                        duration,
                     )
                     written_sections.append((section, text))
                     if ctx.tracker is not None:
@@ -428,9 +429,11 @@ def make_write_sections(
                 min_sources=min_sources,
                 essay_context=essay_context,
             )
-            print(
-                f"    section {section.number} ({section.title}) -- {duration:.1f}s",
-                file=sys.stderr,
+            logger.info(
+                "section %s (%s) -- %.1fs",
+                section.number,
+                section.title,
+                duration,
             )
             written_sections.append((section, text))
             if ctx.tracker is not None:
@@ -585,9 +588,11 @@ def make_review_sections(
                 if ctx.tracker is not None:
                     ctx.tracker.increment_sub_done()
                 if duration > 0:
-                    print(
-                        f"    section {section.number} ({section.title}) -- {duration:.1f}s",
-                        file=sys.stderr,
+                    logger.info(
+                        "section %s (%s) -- %.1fs",
+                        section.number,
+                        section.title,
+                        duration,
                     )
 
         reviewed_parts = []
@@ -699,7 +704,7 @@ def do_export(ctx: PipelineContext) -> None:
     run_docx.parent.mkdir(parents=True, exist_ok=True)
     document.save(str(run_docx))
     logger.info("essay.docx saved to %s", run_docx)
-    print(f"  essay.docx -> {run_docx}", file=sys.stderr)
+    logger.info("essay.docx -> %s", run_docx)
 
     # Also copy to the shared output_dir for CLI convenience.
     output_path = Path(ctx.config.paths.output_dir) / "essay.docx"

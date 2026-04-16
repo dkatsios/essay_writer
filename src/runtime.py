@@ -5,7 +5,6 @@ from __future__ import annotations
 import json
 import logging
 import re
-import sys
 from collections.abc import Callable
 from pathlib import Path
 
@@ -304,7 +303,7 @@ class TokenTracker:
 
         report_path = run_dir / "report.md"
         report_path.write_text("\n".join(lines), encoding="utf-8")
-        print(f"  Report: {report_path}", file=sys.stderr)
+        logger.info("Report: %s", report_path)
         return report_path
 
 
