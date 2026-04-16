@@ -981,17 +981,20 @@ async def _async_read_sources_orchestration(
         )
         registry = _backfill_registry(registry, results, registry_path)
 
-        # User sources: keep only accessible ones
+        # Partition by origin using registry metadata (not positional slicing)
         user_accessible_ids = [
             sid
-            for sid, note in results[: len(user_pairs)]
-            if note is not None and note.is_accessible
+            for sid, note in results
+            if note is not None
+            and note.is_accessible
+            and registry.get(sid, {}).get("user_provided")
         ]
-        # API sources: all are accessible (forced in _async_read_one_source)
         api_extracted_ids = [
             sid
-            for sid, note in results[len(user_pairs) :]
-            if note is not None and note.is_accessible
+            for sid, note in results
+            if note is not None
+            and note.is_accessible
+            and not registry.get(sid, {}).get("user_provided")
         ]
         selected_ids = user_accessible_ids + api_extracted_ids
 
