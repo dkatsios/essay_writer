@@ -113,11 +113,13 @@ def _execute(
         if checkpoint is not None and step.name in checkpoint:
             print(f"\n{'=' * 50}", file=sys.stderr)
             print(f"  Step: {step.name} (skipped — already completed)", file=sys.stderr)
+            logger.info("Step %s skipped (already completed)", step.name)
             running_idx += 1
             continue
 
         print(f"\n{'=' * 50}", file=sys.stderr)
         print(f"  Step: {step.name}", file=sys.stderr)
+        logger.info("Step %s started", step.name)
         if ctx.tracker is not None:
             ctx.tracker.set_current_step(step.name)
             if total_steps is not None:
@@ -128,9 +130,11 @@ def _execute(
             step.fn(ctx)
             duration = monotonic() - start
             print(f"  OK {step.name} ({duration:.1f}s)", file=sys.stderr)
+            logger.info("Step %s completed (%.1fs)", step.name, duration)
         except Exception:
             duration = monotonic() - start
             print(f"  FAIL {step.name} ({duration:.1f}s)", file=sys.stderr)
+            logger.error("Step %s failed (%.1fs)", step.name, duration)
             if ctx.tracker is not None:
                 ctx.tracker.record_duration(step.name, duration)
             raise

@@ -20,6 +20,12 @@ import httpx
 from src.runtime import TokenTracker
 from src.schemas import AssignmentBrief, Clarification, ValidationQuestion
 from src.pipeline_sources import SourceShortfallAbort
+from src.run_logging import (
+    clear_run_id,
+    set_run_id,
+    setup_run_logging,
+    teardown_run_logging,
+)
 from src.tools._http import http_get
 from src.tools.web_fetcher import extract_pdf_bytes_to_text
 
@@ -299,7 +305,11 @@ def run_pipeline_thread(
     interaction_timeout_seconds_fn=interaction_timeout_seconds,
 ) -> None:
     """Execute the essay pipeline in a background thread."""
+    log_handler = None
     try:
+        set_run_id(job.job_id)
+        log_handler = setup_run_logging(job.run_dir, job.job_id)
+
         config = load_config_fn()
 
         if job.provider:
@@ -475,6 +485,10 @@ def run_pipeline_thread(
     except Exception:
         logger.exception("Pipeline failed for job %s", job.job_id)
         set_job_error(job, "Pipeline failed. Check server logs for details.")
+    finally:
+        clear_run_id()
+        if log_handler is not None:
+            teardown_run_logging(log_handler)
 
 
 def build_zip(run_dir: Path) -> BytesIO:

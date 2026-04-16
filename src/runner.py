@@ -29,6 +29,7 @@ from __future__ import annotations
 import argparse
 import logging
 import sys
+import threading
 from datetime import datetime, timezone
 from pathlib import Path
 from dotenv import load_dotenv
@@ -49,19 +50,12 @@ from src.runtime import (  # noqa: E402
 )
 from src.scratch_dir import SCRATCH_RUN_DIR  # noqa: E402
 from src.schemas import Clarification, ValidationQuestion  # noqa: E402
-
-
-def _setup_file_logging(output_dir: Path) -> logging.FileHandler:
-    log_path = output_dir / "run.log"
-    handler = logging.FileHandler(log_path, encoding="utf-8")
-    handler.setLevel(logging.DEBUG)
-    handler.setFormatter(
-        logging.Formatter(
-            "%(asctime)s [%(levelname)s] %(name)s: %(message)s", "%H:%M:%S"
-        )
-    )
-    logging.getLogger().addHandler(handler)
-    return handler
+from src.run_logging import (  # noqa: E402
+    clear_run_id,
+    set_run_id,
+    setup_run_logging,
+    teardown_run_logging,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -160,7 +154,9 @@ def _execute_pipeline(
     run_dir = output_dir or SCRATCH_RUN_DIR
     run_dir.mkdir(parents=True, exist_ok=True)
 
-    log_handler = _setup_file_logging(run_dir) if output_dir else None
+    run_id = str(threading.current_thread().ident)
+    set_run_id(run_id)
+    log_handler = setup_run_logging(run_dir, run_id)
 
     input_dir = run_dir / "input"
     input_dir.mkdir(parents=True, exist_ok=True)
@@ -191,15 +187,12 @@ def _execute_pipeline(
         print(f"\nAborted: {exc}", file=sys.stderr)
         return
     finally:
-        if log_handler:
-            logging.getLogger().removeHandler(log_handler)
-            log_handler.close()
-
-    cost = tracker.cost_summary()
-    print(cost, file=sys.stderr)
-    logger.info("Run summary:\n%s", cost)
-
-    tracker.write_report(run_dir)
+        cost = tracker.cost_summary()
+        print(cost, file=sys.stderr)
+        logger.info("Run summary:\n%s", cost)
+        tracker.write_report(run_dir)
+        clear_run_id()
+        teardown_run_logging(log_handler)
 
 
 def run(
@@ -263,7 +256,9 @@ def resume_run(
         sys.exit(1)
 
     config = load_config(config_path)
-    log_handler = _setup_file_logging(run_dir)
+    run_id = str(threading.current_thread().ident)
+    set_run_id(run_id)
+    log_handler = setup_run_logging(run_dir, run_id)
 
     worker = create_client(config.models.worker)
     writer = create_client(config.models.writer)
@@ -290,14 +285,12 @@ def resume_run(
         print(f"\nAborted: {exc}", file=sys.stderr)
         return
     finally:
-        logging.getLogger().removeHandler(log_handler)
-        log_handler.close()
-
-    cost = tracker.cost_summary()
-    print(cost, file=sys.stderr)
-    logger.info("Run summary:\n%s", cost)
-
-    tracker.write_report(run_dir)
+        cost = tracker.cost_summary()
+        print(cost, file=sys.stderr)
+        logger.info("Run summary:\n%s", cost)
+        tracker.write_report(run_dir)
+        clear_run_id()
+        teardown_run_logging(log_handler)
 
 
 def main() -> None:
@@ -342,7 +335,7 @@ def main() -> None:
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-        datefmt="%H:%M:%S",
+        datefmt="%Y-%m-%d %H:%M:%S",
     )
     logging.getLogger("httpx").setLevel(logging.WARNING)
     logging.getLogger("httpcore").setLevel(logging.WARNING)
