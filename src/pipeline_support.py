@@ -314,7 +314,9 @@ def _compute_max_sources(
 
 
 def _corpus_tokens(text: str) -> set[str]:
-    return set(re.findall(r"\w+", text.lower(), flags=re.UNICODE))
+    return {
+        w for w in re.findall(r"\w+", text.lower(), flags=re.UNICODE) if len(w) >= 4
+    }
 
 
 def _note_lexical_score(corpus_tokens: set[str], note: SourceNote) -> int:

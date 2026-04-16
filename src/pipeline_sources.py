@@ -47,13 +47,7 @@ _USER_SOURCE_PREFIX = "user_"
 _USER_ID_HASH_LENGTH = 8
 _SOURCE_READ_CONCURRENCY = 6
 _MIN_RELEVANCE_SCORE = 2
-_OPTIONAL_PDF_STOPWORDS = frozenset(
-    "the a an and or for to of in on at by with from as is are was were be been being "
-    "this that these those it its they them their we our you your he she his her not no "
-    "but if than then so such also only both all any each more most other some very can "
-    "will may might must should could would about into through over after before under "
-    "between out up down new first one two how what when where which who whom why into".split()
-)
+_MIN_TOKEN_LENGTH = 4
 
 
 class SourceShortfallAbort(RuntimeError):
@@ -71,8 +65,11 @@ def _has_substantive_body(content: str, min_words: int) -> bool:
 def _tokenize_for_overlap(text: str) -> set[str]:
     if not text:
         return set()
-    words = re.findall(r"[\w'-]{3,}", text.lower(), flags=re.UNICODE)
-    return {word for word in words if word not in _OPTIONAL_PDF_STOPWORDS}
+    return {
+        w
+        for w in re.findall(r"[\w'-]{3,}", text.lower(), flags=re.UNICODE)
+        if len(w) >= _MIN_TOKEN_LENGTH
+    }
 
 
 def _optional_pdf_corpus_tokens(run_dir: Path) -> set[str]:

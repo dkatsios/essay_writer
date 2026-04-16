@@ -15,7 +15,7 @@ from pathlib import Path
 
 from src.run_logging import submit_with_current_context
 from src.schemas import RegistryEntry
-from src.tools.academic_search import search_semantic_scholar
+from src.tools.academic_search import reset_throttle, search_semantic_scholar
 from src.tools.author_names import surname_from_author_string
 from src.tools.crossref_search import search_crossref
 from src.tools.openalex_search import search_openalex
@@ -297,6 +297,8 @@ def run_research(
     sources_path = Path(sources_dir) if sources_dir else None
 
     logger.info("run_research: %d queries, max_sources=%d", len(queries), max_sources)
+
+    reset_throttle()
 
     all_results, all_raw = _run_queries(
         queries,

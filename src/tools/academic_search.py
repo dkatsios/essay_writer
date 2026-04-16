@@ -34,6 +34,13 @@ def _throttle() -> None:
         _last_request_time = time.monotonic()
 
 
+def reset_throttle() -> None:
+    """Reset the request throttle so a new search session starts fresh."""
+    global _last_request_time
+    with _request_lock:
+        _last_request_time = 0.0
+
+
 def _get_headers() -> dict[str, str]:
     """Build request headers, including API key if available."""
     headers: dict[str, str] = {}
