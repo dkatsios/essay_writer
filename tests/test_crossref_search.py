@@ -46,7 +46,7 @@ def test_search_crossref_requests_abstract_filter(monkeypatch) -> None:
         "filter": "has-abstract:true",
         "rows": 7,
         "mailto": crossref_search.DEFAULT_MAILTO,
-        "select": "title,author,published,abstract,DOI,URL,type,is-referenced-by-count",
+        "select": "title,author,published,abstract,DOI,URL,type,is-referenced-by-count,link",
     }
     assert captured["request_name"] == "Crossref"
 
@@ -70,3 +70,54 @@ def test_search_crossref_can_prefer_fulltext(monkeypatch) -> None:
     )
 
     assert captured["params"]["filter"] == "has-abstract:true,has-full-text:true"
+
+
+def test_search_crossref_extracts_pdf_url_from_links(monkeypatch) -> None:
+    class _Response:
+        def json(self) -> dict:
+            return {
+                "message": {
+                    "items": [
+                        {
+                            "title": ["Test Paper"],
+                            "author": [{"given": "Jane", "family": "Doe"}],
+                            "published": {"date-parts": [[2024]]},
+                            "abstract": "Some abstract text.",
+                            "DOI": "10.1234/test",
+                            "URL": "https://doi.org/10.1234/test",
+                            "type": "journal-article",
+                            "is-referenced-by-count": 5,
+                            "link": [
+                                {
+                                    "content-type": "application/xml",
+                                    "URL": "https://example.com/full.xml",
+                                },
+                                {
+                                    "content-type": "application/pdf",
+                                    "URL": "https://example.com/paper.pdf",
+                                },
+                                {
+                                    "content-type": "unspecified",
+                                    "URL": "https://example.com/paper.pdf",
+                                },
+                            ],
+                        },
+                        {
+                            "title": ["No PDF Paper"],
+                            "author": [],
+                            "DOI": "10.1234/nolinks",
+                            "URL": "https://doi.org/10.1234/nolinks",
+                            "type": "journal-article",
+                            "is-referenced-by-count": 0,
+                        },
+                    ]
+                }
+            }
+
+    monkeypatch.setattr(crossref_search, "http_get", lambda *a, **kw: _Response())
+
+    results, _ = crossref_search.search_crossref("test", 5)
+
+    assert len(results) == 2
+    assert results[0]["pdf_url"] == "https://example.com/paper.pdf"
+    assert results[1]["pdf_url"] == ""

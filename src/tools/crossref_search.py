@@ -45,7 +45,7 @@ def search_crossref(
         "filter": ",".join(filters),
         "rows": max_results,
         "mailto": mailto,
-        "select": "title,author,published,abstract,DOI,URL,type,is-referenced-by-count",
+        "select": "title,author,published,abstract,DOI,URL,type,is-referenced-by-count,link",
     }
 
     try:
@@ -96,6 +96,12 @@ def search_crossref(
         title_raw = title_list[0] if title_list else ""
         title = _strip_inline_markup(title_raw)
 
+        pdf_url = ""
+        for link in item.get("link", []):
+            if link.get("content-type") == "application/pdf":
+                pdf_url = link.get("URL", "")
+                break
+
         results.append(
             {
                 "title": title,
@@ -105,7 +111,7 @@ def search_crossref(
                 "abstract": abstract,
                 "doi": item.get("DOI", ""),
                 "url": item.get("URL", ""),
-                "pdf_url": "",
+                "pdf_url": pdf_url,
                 "source_type": (item.get("type") or "").lower(),
                 "citation_count": item.get("is-referenced-by-count") or 0,
             }
