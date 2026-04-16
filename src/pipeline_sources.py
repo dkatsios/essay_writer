@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import re
@@ -43,6 +44,7 @@ _JUNK_ABSTRACT_PATTERNS = re.compile(
 )
 _MIN_ABSTRACT_WORDS = 20
 _USER_SOURCE_PREFIX = "user_"
+_USER_ID_HASH_LENGTH = 8
 _SOURCE_READ_CONCURRENCY = 6
 _MIN_RELEVANCE_SCORE = 2
 _OPTIONAL_PDF_STOPWORDS = frozenset(
@@ -185,7 +187,13 @@ def _inject_user_sources(user_sources_dir: Path, run_dir: Path) -> None:
             )
             continue
 
-        source_id = f"{_USER_SOURCE_PREFIX}{added:03d}"
+        content_hash = hashlib.sha256(content.encode("utf-8")).hexdigest()[
+            :_USER_ID_HASH_LENGTH
+        ]
+        source_id = f"{_USER_SOURCE_PREFIX}{content_hash}"
+        if source_id in registry:
+            logger.debug("User source already in registry: %s", source_id)
+            continue
         shutil.copy2(
             str(input_file.path), str(user_dir / f"{source_id}_{input_file.path.name}")
         )
@@ -868,11 +876,38 @@ async def _async_read_sources_orchestration(
         recovery_done = True
         registry = _read_registry(registry_path)
 
-        # Filter + fetch new API candidates only
+        # Build DOI/title sets from already-scored sources for dedup
+        scored_dois: set[str] = set()
+        scored_titles: set[str] = set()
+        for sid in scores:
+            meta = registry.get(sid, {})
+            doi = (meta.get("doi") or "").strip().lower()
+            if doi:
+                scored_dois.add(doi)
+            title = (meta.get("title") or "").strip()
+            if title:
+                norm = re.sub(r"[\W_]+", "", title.casefold(), flags=re.UNICODE)
+                if norm:
+                    scored_titles.add(norm)
+
+        def _is_duplicate(meta: dict) -> bool:
+            doi = (meta.get("doi") or "").strip().lower()
+            if doi and doi in scored_dois:
+                return True
+            title = (meta.get("title") or "").strip()
+            if title:
+                norm = re.sub(r"[\W_]+", "", title.casefold(), flags=re.UNICODE)
+                if norm and norm in scored_titles:
+                    return True
+            return False
+
+        # Filter + fetch new API candidates only (skip ID and content dupes)
         new_api = {
             sid: meta
             for sid, meta in registry.items()
-            if not meta.get("user_provided") and sid not in scores
+            if not meta.get("user_provided")
+            and sid not in scores
+            and not _is_duplicate(meta)
         }
         if new_api:
             new_scorable = _filter_scorable_sources(new_api)
