@@ -372,18 +372,16 @@ def _select_best_sources(
 ) -> dict[str, dict]:
     notes_dir = run_dir / "sources" / "notes"
     accessible: list[tuple[str, int, int]] = []
-    inaccessible: list[str] = []
     filtered_low_relevance = 0
 
     for source_id in registry:
         note_path = notes_dir / f"{source_id}.json"
         if not note_path.exists():
-            inaccessible.append(source_id)
             continue
         try:
             note = SourceNote.model_validate_json(note_path.read_text(encoding="utf-8"))
             if not note.is_accessible:
-                inaccessible.append(source_id)
+                continue
             elif note.relevance_score < _MIN_RELEVANCE_SCORE:
                 filtered_low_relevance += 1
                 logger.info(
@@ -396,7 +394,7 @@ def _select_best_sources(
                     (source_id, note.relevance_score, note.content_word_count)
                 )
         except Exception:
-            inaccessible.append(source_id)
+            continue
 
     if filtered_low_relevance:
         logger.info(
@@ -421,9 +419,6 @@ def _select_best_sources(
         reverse=True,
     )
     selected_ids = [source_id for source_id, _, _ in accessible[:target_sources]]
-    remaining = target_sources - len(selected_ids)
-    if remaining > 0:
-        selected_ids.extend(inaccessible[:remaining])
     return {
         source_id: registry[source_id]
         for source_id in selected_ids
@@ -654,16 +649,16 @@ def make_read_sources(target_sources: int) -> Callable[[PipelineContext], None]:
             encoding="utf-8",
         )
         logger.info(
-            "Selected %d/%d sources (%d accessible, %d inaccessible)",
+            "Selected %d usable sources from %d candidates (%d accessible, %d inaccessible)",
             len(selected),
             len(tasks),
             accessible_count,
             inaccessible_count,
         )
 
-        if inaccessible_count:
+        if accessible_count < target_sources:
             print(
-                f"  ⚠ {inaccessible_count}/{len(tasks)} sources inaccessible ({accessible_count} usable). Selected {len(selected)} best sources.",
+                f"  ⚠ Only {accessible_count} usable sources from {len(tasks)} candidates. Selected {len(selected)} usable sources for writing.",
                 file=sys.stderr,
             )
 

@@ -216,6 +216,7 @@ class TokenTracker:
         reviewed_words = _count_words(run_dir / "essay" / "reviewed.md")
         target_words = _parse_target_words(run_dir / "plan" / "plan.json")
         sources_count = _count_sources(run_dir / "sources" / "registry.json")
+        usable_count = _count_accessible_notes(run_dir / "sources" / "notes")
         selected_count = _count_sources(run_dir / "sources" / "selected.json")
         essay_path = run_dir / "essay" / "reviewed.md"
         if not essay_path.exists():
@@ -233,6 +234,8 @@ class TokenTracker:
         ]
         if sources_count:
             lines.append(f"| Sources fetched | {sources_count} |")
+        if usable_count:
+            lines.append(f"| Sources usable | {usable_count} |")
         if selected_count:
             lines.append(f"| Sources selected | {selected_count} |")
         if cited_count:
@@ -290,6 +293,23 @@ def _count_sources(path: Path) -> int:
         return len(json.loads(path.read_text(encoding="utf-8")))
     except (json.JSONDecodeError, ValueError):
         return 0
+
+
+def _count_accessible_notes(notes_dir: Path) -> int:
+    if not notes_dir.exists():
+        return 0
+
+    count = 0
+    for path in notes_dir.iterdir():
+        if path.suffix != ".json":
+            continue
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, ValueError):
+            continue
+        if isinstance(data, dict) and data.get("is_accessible"):
+            count += 1
+    return count
 
 
 def _count_cited_sources(path: Path) -> int:

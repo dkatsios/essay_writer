@@ -1071,6 +1071,24 @@ class TestSelectedSourceNotes:
         assert [note.source_id for note in notes] == ["alpha2024", "beta2024"]
         assert "Selected sources had no accessible notes" in caplog.text
 
+    def test_empty_selected_set_stays_empty(self, tmp_path):
+        from src.pipeline_support import _load_selected_source_notes
+        from src.schemas import SourceNote
+
+        notes_dir = tmp_path / "sources" / "notes"
+        notes_dir.mkdir(parents=True)
+
+        note_a = SourceNote(source_id="alpha2024", is_accessible=True, title="A")
+        (notes_dir / "alpha2024.json").write_text(
+            note_a.model_dump_json(), encoding="utf-8"
+        )
+
+        (tmp_path / "sources" / "selected.json").write_text(
+            json.dumps({}), encoding="utf-8"
+        )
+
+        assert _load_selected_source_notes(tmp_path) == []
+
     def test_source_read_candidates_includes_all_api_sources(self):
         from src.pipeline_sources import _source_read_candidates
 
@@ -1085,6 +1103,108 @@ class TestSelectedSourceNotes:
 
         assert len(candidates) == 20
         assert all(sid != "s_no_url" for sid, _ in candidates)
+
+    def test_select_best_sources_keeps_only_usable_ranked_sources(self, tmp_path):
+        from src.pipeline_sources import _select_best_sources
+        from src.schemas import SourceNote
+
+        notes_dir = tmp_path / "sources" / "notes"
+        notes_dir.mkdir(parents=True)
+        registry = {
+            "usable2024": {
+                "title": "Usable",
+                "authors": ["A Author"],
+                "citation_count": 5,
+            },
+            "inaccessible2024": {
+                "title": "No body",
+                "authors": ["B Author"],
+                "citation_count": 100,
+            },
+        }
+
+        (notes_dir / "usable2024.json").write_text(
+            SourceNote(
+                source_id="usable2024",
+                is_accessible=True,
+                relevance_score=4,
+                title="Usable",
+            ).model_dump_json(),
+            encoding="utf-8",
+        )
+        (notes_dir / "inaccessible2024.json").write_text(
+            SourceNote(
+                source_id="inaccessible2024",
+                is_accessible=False,
+                title="No body",
+            ).model_dump_json(),
+            encoding="utf-8",
+        )
+
+        selected = _select_best_sources(tmp_path, registry, target_sources=2)
+
+        assert list(selected) == ["usable2024"]
+
+    def test_write_full_clamps_min_sources_to_selected_usable_count(
+        self, tmp_path, monkeypatch
+    ):
+        from types import SimpleNamespace
+
+        from src.pipeline_support import PipelineContext
+        from src.pipeline_writing import make_write_full
+        from src.schemas import SourceNote
+
+        (tmp_path / "brief").mkdir(parents=True)
+        (tmp_path / "plan").mkdir(parents=True)
+        (tmp_path / "brief" / "assignment.json").write_text(
+            json.dumps({"language": "English", "topic": "Test topic"}),
+            encoding="utf-8",
+        )
+        (tmp_path / "plan" / "plan.json").write_text(
+            json.dumps({"title": "Test plan", "sections": [], "total_word_target": 1000}),
+            encoding="utf-8",
+        )
+
+        source_notes = [
+            SourceNote(source_id="a", is_accessible=True, title="A"),
+            SourceNote(source_id="b", is_accessible=True, title="B"),
+        ]
+        captured: dict[str, object] = {}
+
+        monkeypatch.setattr(
+            "src.pipeline_writing._load_selected_source_notes",
+            lambda _run_dir: source_notes,
+        )
+
+        def fake_render_prompt(_template: str, **kwargs) -> str:
+            captured.update(kwargs)
+            return "PROMPT"
+
+        monkeypatch.setattr("src.pipeline_writing.render_prompt", fake_render_prompt)
+        monkeypatch.setattr(
+            "src.pipeline_writing._text_call",
+            lambda _client, _system, _prompt, _tracker=None: "essay body",
+        )
+
+        ctx = PipelineContext(
+            worker=MagicMock(),
+            async_worker=None,
+            writer=MagicMock(),
+            reviewer=MagicMock(),
+            run_dir=tmp_path,
+            config=SimpleNamespace(
+                search=SimpleNamespace(section_source_full_detail_max=3),
+                writing=SimpleNamespace(word_count_tolerance=0.1),
+            ),
+            tracker=None,
+        )
+
+        make_write_full(target_words=1000, citation_min_sources=5)(ctx)
+
+        assert captured["min_sources"] == 2
+        assert (tmp_path / "essay" / "draft.md").read_text(encoding="utf-8") == (
+            "essay body"
+        )
 
 
 class TestSourceTargetScaling:

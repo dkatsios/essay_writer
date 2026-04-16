@@ -405,8 +405,11 @@ def _load_selected_source_notes(run_dir: Path) -> list[SourceNote]:
         logger.warning("Failed to load selected sources; using all accessible notes")
         return all_notes
 
-    if not isinstance(selected, dict) or not selected:
+    if not isinstance(selected, dict):
         return all_notes
+
+    if not selected:
+        return []
 
     selected_ids = set(selected)
     selected_notes = [note for note in all_notes if note.source_id in selected_ids]

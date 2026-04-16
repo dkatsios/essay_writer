@@ -46,6 +46,10 @@ _WRITE_CONCURRENCY = 8
 _REVIEW_CONCURRENCY = 4
 
 
+def _effective_min_sources(citation_min_sources: int, source_notes: list) -> int:
+    return min(citation_min_sources, len(source_notes))
+
+
 def _load_source_assignments(
     run_dir: Path, sections: list[Section]
 ) -> dict[int, list[str]]:
@@ -87,6 +91,7 @@ def make_write_full(
         plan_json = _read_text(ctx.run_dir / "plan" / "plan.json")
         source_notes = _load_selected_source_notes(ctx.run_dir)
         language = _get_brief_language(ctx.run_dir)
+        min_sources = _effective_min_sources(citation_min_sources, source_notes)
         detail_notes, catalog_md, total_notes = _split_writer_source_context(
             _plan_corpus_from_json(plan_json),
             source_notes,
@@ -106,7 +111,7 @@ def make_write_full(
                 target_words * (1 - ctx.config.writing.word_count_tolerance)
             ),
             language=language,
-            min_sources=citation_min_sources,
+            min_sources=min_sources,
         )
 
         essay = _text_call(
@@ -134,6 +139,7 @@ def make_review_full(
         draft_words = len(draft.split())
         language = _get_brief_language(ctx.run_dir)
         source_notes = _load_selected_source_notes(ctx.run_dir)
+        min_sources = _effective_min_sources(citation_min_sources, source_notes)
         catalog_md = _source_catalog_markdown(source_notes)
         uncited_ids = [
             note.source_id
@@ -156,7 +162,7 @@ def make_review_full(
                 ctx.config.writing.word_count_tolerance_over * 100
             ),
             language=language,
-            min_sources=citation_min_sources,
+            min_sources=min_sources,
             source_catalog=catalog_md,
             total_selected_sources=len(source_notes),
             uncited_ids=uncited_ids,
@@ -283,7 +289,7 @@ def _write_section_draft(
     section_assignments: dict[int, list[str]],
     budget: int,
     language: str,
-    citation_min_sources: int,
+    min_sources: int,
     essay_context: str,
 ) -> tuple[Section, str, float]:
     section_corpus = (
@@ -328,7 +334,7 @@ def _write_section_draft(
             section.word_target * (1 - ctx.config.writing.word_count_tolerance)
         ),
         language=language,
-        min_sources=citation_min_sources,
+        min_sources=min_sources,
         has_full_context=bool(essay_context),
         essay_context=essay_context,
     )
@@ -365,6 +371,7 @@ def make_write_sections(
         source_notes = _load_selected_source_notes(ctx.run_dir)
         language = _get_brief_language(ctx.run_dir)
         budget = ctx.config.search.section_source_full_detail_max
+        min_sources = _effective_min_sources(citation_min_sources, source_notes)
         written_sections: list[tuple[Section, str]] = []
         section_assignments = _load_source_assignments(ctx.run_dir, sections)
         notes_by_id = {note.source_id: note for note in source_notes}
@@ -389,7 +396,7 @@ def make_write_sections(
                         section_assignments=section_assignments,
                         budget=budget,
                         language=language,
-                        citation_min_sources=citation_min_sources,
+                        min_sources=min_sources,
                         essay_context="",
                     ): section
                     for section in parallel_sections
@@ -416,7 +423,7 @@ def make_write_sections(
                 section_assignments=section_assignments,
                 budget=budget,
                 language=language,
-                citation_min_sources=citation_min_sources,
+                min_sources=min_sources,
                 essay_context=essay_context,
             )
             print(
