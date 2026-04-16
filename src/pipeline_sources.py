@@ -551,6 +551,138 @@ def _cli_optional_pdf_hint(run_dir: Path, items: list[dict]) -> None:
         logger.info("    id=%s", item["source_id"])
 
 
+# ---------------------------------------------------------------------------
+# Extracted phases — each takes explicit inputs, returns explicit outputs.
+# ---------------------------------------------------------------------------
+
+
+async def _fetch_all_pdfs(
+    pairs: list[tuple[str, dict]],
+    sources_dir: str,
+    *,
+    tracker: object | None = None,
+    min_body_words: int = 50,
+) -> dict[str, str]:
+    """Fetch PDF content for all candidates. Returns {source_id: content}."""
+    import asyncio
+
+    if tracker is not None:
+        tracker.set_sub_total(len(pairs))
+    domain_tracker = _DomainFailureTracker()
+    semaphore = asyncio.Semaphore(_SOURCE_READ_CONCURRENCY)
+
+    async def _fetch_one(source_id: str, meta: dict) -> tuple[str, str]:
+        async with semaphore:
+            try:
+                return await _async_fetch_pdf_content(
+                    source_id,
+                    meta,
+                    sources_dir,
+                    domain_tracker=domain_tracker,
+                    min_body_words=min_body_words,
+                )
+            except Exception:
+                logger.exception("Failed to fetch PDF for %s", source_id)
+                return source_id, ""
+            finally:
+                if tracker is not None:
+                    tracker.increment_sub_done()
+
+    results = await asyncio.gather(*(_fetch_one(sid, meta) for sid, meta in pairs))
+    return dict(results)
+
+
+async def _extract_all(
+    pairs: list[tuple[str, dict]],
+    fetch_results: dict[str, str],
+    async_worker,
+    sources_dir: str,
+    notes_dir: Path,
+    *,
+    essay_topic: str = "",
+    tracker: object | None = None,
+    min_body_words: int = 50,
+) -> list[tuple[str, SourceNote | None]]:
+    """Run full LLM extraction on selected sources with pre-fetched content."""
+    import asyncio
+
+    if tracker is not None:
+        tracker.set_sub_total(len(pairs))
+    semaphore = asyncio.Semaphore(_SOURCE_READ_CONCURRENCY)
+
+    async def _extract_one(source_id: str, meta: dict) -> tuple[str, SourceNote | None]:
+        async with semaphore:
+            try:
+                note = await _async_read_one_source(
+                    source_id,
+                    meta,
+                    async_worker,
+                    sources_dir,
+                    tracker=tracker,
+                    essay_topic=essay_topic,
+                    min_body_words=min_body_words,
+                    prefetched_content=fetch_results.get(source_id, ""),
+                )
+                _write_json(notes_dir / f"{source_id}.json", note)
+                return source_id, note
+            except Exception:
+                logger.exception("Failed to read source %s", source_id)
+                return source_id, None
+            finally:
+                if tracker is not None:
+                    tracker.increment_sub_done()
+
+    return await asyncio.gather(*(_extract_one(sid, meta) for sid, meta in pairs))
+
+
+def _backfill_registry(
+    registry: dict[str, dict],
+    results: list[tuple[str, SourceNote | None]],
+    registry_path: Path,
+) -> dict[str, dict]:
+    """Update registry metadata for user-provided sources from LLM extraction."""
+    registry_updated = False
+    for source_id, note in results:
+        if (
+            not note
+            or not registry.get(source_id, {}).get("user_provided")
+            or not note.is_accessible
+        ):
+            continue
+        entry = registry[source_id]
+        if note.title:
+            entry["title"] = note.title
+        if note.authors:
+            entry["authors"] = note.authors
+            clean_authors = [
+                author for author in note.authors if author and str(author).strip()
+            ]
+            if note.author_families and len(note.author_families) == len(clean_authors):
+                entry["author_families"] = list(note.author_families)
+            else:
+                entry["author_families"] = [
+                    surname_from_author_string(author) for author in clean_authors
+                ]
+        if note.year:
+            entry["year"] = note.year
+        if note.doi:
+            entry["doi"] = note.doi
+        registry_updated = True
+
+    if registry_updated:
+        registry_path.write_text(
+            json.dumps(registry, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        logger.info("Backfilled registry metadata for user-provided sources")
+    return registry
+
+
+def _read_registry(registry_path: Path) -> dict[str, dict]:
+    """Load the source registry from disk."""
+    return json.loads(registry_path.read_text(encoding="utf-8"))
+
+
 def make_read_sources(
     target_sources: int,
     fetch_sources: int,
@@ -589,130 +721,10 @@ def make_read_sources(
 
         async_worker = ctx.async_worker or ctx.worker.to_async()
 
-        # -- Phase 1: fetch PDF content (network I/O only) -----------------
-
-        async def fetch_all_pdfs(
-            pairs: list[tuple[str, dict]],
-        ) -> dict[str, str]:
-            """Fetch PDF content for all candidates. Returns {source_id: content}."""
-            if ctx.tracker is not None:
-                ctx.tracker.set_sub_total(len(pairs))
-            domain_tracker = _DomainFailureTracker()
-            semaphore = asyncio.Semaphore(_SOURCE_READ_CONCURRENCY)
-
-            async def fetch_one(source_id: str, meta: dict) -> tuple[str, str]:
-                async with semaphore:
-                    try:
-                        return await _async_fetch_pdf_content(
-                            source_id,
-                            meta,
-                            sources_dir,
-                            domain_tracker=domain_tracker,
-                            min_body_words=min_body,
-                        )
-                    except Exception:
-                        logger.exception("Failed to fetch PDF for %s", source_id)
-                        return source_id, ""
-                    finally:
-                        if ctx.tracker is not None:
-                            ctx.tracker.increment_sub_done()
-
-            results = await asyncio.gather(
-                *(fetch_one(sid, meta) for sid, meta in pairs)
-            )
-            return dict(results)
-
-        # -- Phase 5: full extraction on selected sources ------------------
-
-        async def extract_all(
-            pairs: list[tuple[str, dict]],
-            fetch_results: dict[str, str],
-        ) -> list[tuple[str, SourceNote | None]]:
-            """Run full LLM extraction on selected sources with pre-fetched content."""
-            if ctx.tracker is not None:
-                ctx.tracker.set_sub_total(len(pairs))
-            semaphore = asyncio.Semaphore(_SOURCE_READ_CONCURRENCY)
-
-            async def extract_one(
-                source_id: str, meta: dict
-            ) -> tuple[str, SourceNote | None]:
-                async with semaphore:
-                    try:
-                        note = await _async_read_one_source(
-                            source_id,
-                            meta,
-                            async_worker,
-                            sources_dir,
-                            tracker=ctx.tracker,
-                            essay_topic=essay_topic,
-                            min_body_words=min_body,
-                            prefetched_content=fetch_results.get(source_id, ""),
-                        )
-                        _write_json(notes_dir / f"{source_id}.json", note)
-                        return source_id, note
-                    except Exception:
-                        logger.exception("Failed to read source %s", source_id)
-                        return source_id, None
-                    finally:
-                        if ctx.tracker is not None:
-                            ctx.tracker.increment_sub_done()
-
-            return await asyncio.gather(
-                *(extract_one(sid, meta) for sid, meta in pairs)
-            )
-
-        def backfill_registry(
-            registry: dict[str, dict],
-            results: list[tuple[str, SourceNote | None]],
-        ) -> dict[str, dict]:
-            registry_updated = False
-            for source_id, note in results:
-                if (
-                    not note
-                    or not registry.get(source_id, {}).get("user_provided")
-                    or not note.is_accessible
-                ):
-                    continue
-                entry = registry[source_id]
-                if note.title:
-                    entry["title"] = note.title
-                if note.authors:
-                    entry["authors"] = note.authors
-                    clean_authors = [
-                        author
-                        for author in note.authors
-                        if author and str(author).strip()
-                    ]
-                    if note.author_families and len(note.author_families) == len(
-                        clean_authors
-                    ):
-                        entry["author_families"] = list(note.author_families)
-                    else:
-                        entry["author_families"] = [
-                            surname_from_author_string(author)
-                            for author in clean_authors
-                        ]
-                if note.year:
-                    entry["year"] = note.year
-                if note.doi:
-                    entry["doi"] = note.doi
-                registry_updated = True
-
-            if registry_updated:
-                registry_path.write_text(
-                    json.dumps(registry, ensure_ascii=False, indent=2),
-                    encoding="utf-8",
-                )
-                logger.info("Backfilled registry metadata for user-provided sources")
-            return registry
-
-        def read_registry() -> dict[str, dict]:
-            return json.loads(registry_path.read_text(encoding="utf-8"))
-
         # -- Orchestration -------------------------------------------------
 
         recovery_done = False
-        registry = read_registry()
+        registry = _read_registry(registry_path)
 
         # Separate user sources from API sources
         user_pairs = [
@@ -747,7 +759,11 @@ def make_read_sources(
         logger.info(
             "Fetching PDF content for %d source candidates...", len(fetch_pairs)
         )
-        fetch_results: dict[str, str] = asyncio.run(fetch_all_pdfs(fetch_pairs))
+        fetch_results: dict[str, str] = asyncio.run(
+            _fetch_all_pdfs(
+                fetch_pairs, sources_dir, tracker=ctx.tracker, min_body_words=min_body
+            )
+        )
 
         # Phase 3: batch-score scorable API sources
         if ctx.tracker is not None:
@@ -808,7 +824,7 @@ def make_read_sources(
                 prefer_fulltext=ctx.config.search.recovery_prefer_fulltext,
             )
             recovery_done = True
-            registry = read_registry()
+            registry = _read_registry(registry_path)
 
             # Filter + fetch new API candidates only
             new_api = {
@@ -832,7 +848,14 @@ def make_read_sources(
                             "Fetching PDF content for %d new candidates after recovery...",
                             len(new_fetch_pairs),
                         )
-                        new_fetches = asyncio.run(fetch_all_pdfs(new_fetch_pairs))
+                        new_fetches = asyncio.run(
+                            _fetch_all_pdfs(
+                                new_fetch_pairs,
+                                sources_dir,
+                                tracker=ctx.tracker,
+                                min_body_words=min_body,
+                            )
+                        )
                         fetch_results.update(new_fetches)
 
                     if ctx.tracker is not None:
@@ -877,8 +900,19 @@ def make_read_sources(
                 len(user_pairs),
                 len(selected_pairs),
             )
-            results = asyncio.run(extract_all(all_extract_pairs, fetch_results))
-            registry = backfill_registry(registry, results)
+            results = asyncio.run(
+                _extract_all(
+                    all_extract_pairs,
+                    fetch_results,
+                    async_worker,
+                    sources_dir,
+                    notes_dir,
+                    essay_topic=essay_topic,
+                    tracker=ctx.tracker,
+                    min_body_words=min_body,
+                )
+            )
+            registry = _backfill_registry(registry, results, registry_path)
 
             # User sources: keep only accessible ones
             user_accessible_ids = [
@@ -921,7 +955,7 @@ def make_read_sources(
             else:
                 _cli_optional_pdf_hint(ctx.run_dir, items)
 
-            registry = read_registry()
+            registry = _read_registry(registry_path)
             reread_ids = [
                 source_id
                 for source_id in prompt_ids
@@ -937,10 +971,28 @@ def make_read_sources(
                     (source_id, registry[source_id]) for source_id in reread_ids
                 ]
                 # Re-fetch content for uploaded sources
-                reread_fetch = asyncio.run(fetch_all_pdfs(reread_pairs))
+                reread_fetch = asyncio.run(
+                    _fetch_all_pdfs(
+                        reread_pairs,
+                        sources_dir,
+                        tracker=ctx.tracker,
+                        min_body_words=min_body,
+                    )
+                )
                 fetch_results.update(reread_fetch)
-                reread_results = asyncio.run(extract_all(reread_pairs, fetch_results))
-                registry = backfill_registry(registry, reread_results)
+                reread_results = asyncio.run(
+                    _extract_all(
+                        reread_pairs,
+                        fetch_results,
+                        async_worker,
+                        sources_dir,
+                        notes_dir,
+                        essay_topic=essay_topic,
+                        tracker=ctx.tracker,
+                        min_body_words=min_body,
+                    )
+                )
+                registry = _backfill_registry(registry, reread_results, registry_path)
 
                 # Update selected_ids: add any newly accessible sources
                 for sid, note in reread_results:
