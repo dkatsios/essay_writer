@@ -14,6 +14,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 from src.run_logging import submit_with_current_context
+from src.schemas import RegistryEntry
 from src.tools.academic_search import search_semantic_scholar
 from src.tools.author_names import surname_from_author_string
 from src.tools.crossref_search import search_crossref
@@ -259,20 +260,19 @@ def _build_registry(
         source_id = _dedup_source_id(source_id, used_ids)
         used_ids.add(source_id)
 
-        entry: dict = {
-            "authors": authors,
-            "year": str(hit.get("year", "") or ""),
-            "title": hit.get("title", ""),
-            "abstract": hit.get("abstract", "") or "",
-            "doi": hit["_doi"],
-            "url": hit["_url"],
-            "pdf_url": hit["_pdf_url"],
-            "source_type": hit["_source_type"],
-            "citation_count": hit.get("citation_count") or 0,
-        }
-        if author_families:
-            entry["author_families"] = author_families
-        registry[source_id] = entry
+        entry = RegistryEntry(
+            authors=authors,
+            year=str(hit.get("year", "") or ""),
+            title=hit.get("title", ""),
+            abstract=hit.get("abstract", "") or "",
+            doi=hit["_doi"],
+            url=hit["_url"],
+            pdf_url=hit["_pdf_url"],
+            source_type=hit["_source_type"],
+            citation_count=hit.get("citation_count") or 0,
+            author_families=author_families or None,
+        )
+        registry[source_id] = entry.model_dump(exclude_none=True)
 
         if len(registry) >= max_sources:
             break

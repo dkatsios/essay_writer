@@ -147,6 +147,31 @@ class EssayPlan(BaseModel):
         return self
 
 
+# -- Source registry -------------------------------------------------------
+
+
+class RegistryEntry(BaseModel):
+    """A single entry in sources/registry.json."""
+
+    authors: list[str] = []
+    author_families: list[str] | None = None
+    year: str = ""
+    title: str = ""
+    abstract: str = ""
+    doi: str = ""
+    url: str = ""
+    pdf_url: str = ""
+    source_type: str = ""
+    citation_count: int = 0
+    user_provided: bool = False
+    content_path: str | None = None
+
+    @field_validator("authors", mode="before")
+    @classmethod
+    def _parse_stringified_authors(cls, v: object) -> object:
+        return _parse_stringified_list_value(v)
+
+
 # -- Source notes ----------------------------------------------------------
 
 

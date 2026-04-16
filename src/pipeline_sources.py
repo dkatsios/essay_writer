@@ -13,7 +13,13 @@ from urllib.parse import urlparse
 import httpx
 
 from src.rendering import render_prompt
-from src.schemas import EssayPlan, SourceAssignmentPlan, SourceNote, SourceScoreBatch
+from src.schemas import (
+    EssayPlan,
+    RegistryEntry,
+    SourceAssignmentPlan,
+    SourceNote,
+    SourceScoreBatch,
+)
 from src.tools.author_names import surname_from_author_string
 from src.tools.research_sources import run_research
 from src.tools.web_fetcher import fetch_url_content
@@ -187,18 +193,12 @@ def _inject_user_sources(user_sources_dir: Path, run_dir: Path) -> None:
         content_path = user_dir / f"{source_id}.txt"
         content_path.write_text(content, encoding="utf-8")
 
-        registry[source_id] = {
-            "authors": [],
-            "year": "",
-            "title": input_file.path.stem,
-            "abstract": "",
-            "doi": "",
-            "url": "",
-            "pdf_url": "",
-            "source_type": "user_provided",
-            "user_provided": True,
-            "content_path": str(content_path),
-        }
+        registry[source_id] = RegistryEntry(
+            title=input_file.path.stem,
+            source_type="user_provided",
+            user_provided=True,
+            content_path=str(content_path),
+        ).model_dump()
         added += 1
 
     if added:
@@ -412,6 +412,7 @@ async def _async_batch_score_sources(
     """Score sources in batches via the LLM.
 
     Returns ``{source_id: relevance_score}`` for every source in *scorable*.
+    On batch failure, retries once then falls back to individual scoring.
     """
     if not scorable:
         return {}
@@ -423,27 +424,52 @@ async def _async_batch_score_sources(
     if tracker is not None:
         tracker.set_sub_total(num_batches)
 
-    scores: dict[str, int] = {}
-    for batch in batches:
+    async def _score_batch(batch: list[dict]) -> dict[str, int]:
+        """Score a single batch, returning {source_id: score}."""
         prompt = render_prompt(
             "source_scoring.j2",
             essay_topic=essay_topic,
             thesis=thesis,
             sources=batch,
         )
+        result = await _async_structured_call(
+            async_worker, prompt, SourceScoreBatch, tracker
+        )
+        return {item.source_id: item.relevance_score for item in result.scores}
+
+    scores: dict[str, int] = {}
+    for batch in batches:
         try:
-            result = await _async_structured_call(
-                async_worker, prompt, SourceScoreBatch, tracker
-            )
-            for item in result.scores:
-                scores[item.source_id] = item.relevance_score
+            scores.update(await _score_batch(batch))
         except Exception:
             logger.warning(
-                "Batch scoring failed for %d sources; assigning score 0",
+                "Batch scoring failed for %d sources; retrying once…",
                 len(batch),
             )
-            for source in batch:
-                scores[source["source_id"]] = 0
+            try:
+                scores.update(await _score_batch(batch))
+            except Exception:
+                if len(batch) <= 1:
+                    logger.warning(
+                        "Single-source scoring failed for %s; assigning score 0",
+                        batch[0]["source_id"] if batch else "?",
+                    )
+                    for source in batch:
+                        scores[source["source_id"]] = 0
+                else:
+                    logger.warning(
+                        "Batch retry failed; falling back to individual scoring for %d sources",
+                        len(batch),
+                    )
+                    for source in batch:
+                        try:
+                            scores.update(await _score_batch([source]))
+                        except Exception:
+                            logger.warning(
+                                "Individual scoring failed for %s; assigning score 0",
+                                source["source_id"],
+                            )
+                            scores[source["source_id"]] = 0
         finally:
             if tracker is not None:
                 tracker.increment_sub_done()
