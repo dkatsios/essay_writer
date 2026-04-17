@@ -804,7 +804,7 @@ class TestValidationQuestionSuggestedIndex:
 
 class TestValidationClarifications:
     def test_parse_validation_answers_maps_letter_choices(self):
-        from src.runner import _parse_validation_answers
+        from src.runtime import parse_validation_answers
         from src.schemas import ValidationQuestion
 
         questions = [
@@ -818,14 +818,14 @@ class TestValidationClarifications:
             ),
         ]
 
-        clarifications = _parse_validation_answers(questions, "1. b, 2. a")
+        clarifications = parse_validation_answers(questions, "1. b, 2. a")
 
         assert len(clarifications) == 2
         assert clarifications[0].answer == "Micro"
         assert clarifications[1].answer == "Yes"
 
     def test_parse_validation_answers_allows_single_question_freeform(self):
-        from src.runner import _parse_validation_answers
+        from src.runtime import parse_validation_answers
         from src.schemas import ValidationQuestion
 
         questions = [
@@ -835,47 +835,12 @@ class TestValidationClarifications:
             )
         ]
 
-        clarifications = _parse_validation_answers(
+        clarifications = parse_validation_answers(
             questions, "Focus on public policy implications"
         )
 
         assert len(clarifications) == 1
         assert clarifications[0].answer == "Focus on public policy implications"
-
-    async def test_handle_questions_persists_structured_clarifications(
-        self, tmp_path, monkeypatch
-    ):
-        from src.runner import _handle_questions
-        from src.schemas import AssignmentBrief, ValidationQuestion
-
-        brief_path = tmp_path / "brief" / "assignment.json"
-        brief_path.parent.mkdir(parents=True)
-        brief = AssignmentBrief(topic="Topic", description="Desc")
-        brief_path.write_text(brief.model_dump_json(), encoding="utf-8")
-
-        questions = [
-            ValidationQuestion(
-                question="Choose scope",
-                options=["Macro", "Micro"],
-            ),
-            ValidationQuestion(
-                question="Need case study",
-                options=["Yes", "No"],
-            ),
-        ]
-        monkeypatch.setattr("builtins.input", lambda _prompt="": "1. b, 2. a")
-
-        await _handle_questions(questions, tmp_path)
-
-        saved = AssignmentBrief.model_validate_json(
-            brief_path.read_text(encoding="utf-8")
-        )
-
-        assert saved.clarifications is not None
-        assert len(saved.clarifications) == 2
-        assert saved.clarifications[0].question == "Choose scope"
-        assert saved.clarifications[0].answer == "Micro"
-        assert saved.clarifications[1].answer == "Yes"
 
 
 class TestPricing:

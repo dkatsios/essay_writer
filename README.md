@@ -23,7 +23,7 @@ AI-powered academic essay generator for Greek university students. Uses a determ
 - Supports multiple input formats: PDF, DOCX, PPTX, images, text files
 - User-provided reference sources (separate from assignment files) are prioritized and cited in the essay
 - Source PDFs saved alongside run artifacts for inspection
-- Configurable via YAML, environment variables, or both
+- Configurable via environment variables
 - Custom AI endpoint support via `AI_BASE_URL` / `AI_API_KEY` / `AI_MODEL`
 
 ## Quick Start
@@ -32,26 +32,7 @@ AI-powered academic essay generator for Greek university students. Uses a determ
 # Install dependencies
 uv sync
 
-# Run with assignment files
-uv run python -m src.runner /path/to/assignment/
-
-# Run with a single file
-uv run python -m src.runner /path/to/brief.pdf
-
-# Run with a text prompt
-uv run python -m src.runner -p "Write a 3000-word essay on climate change"
-
-# Provide your own reference sources
-uv run python -m src.runner /path/to/assignment/ --sources /path/to/my/papers/
-```
-
-Output is written to the `output/` directory as a `.docx` file.
-
-## Web UI
-
-A browser-based interface is available as an alternative to the CLI.
-
-```bash
+# Run the web UI
 uv run uvicorn src.web:app --reload
 ```
 
@@ -84,6 +65,6 @@ The service exposes the web UI on the port assigned by Render. Optional: set `ES
 
 ## Configuration
 
-Default settings are defined in `config/schemas.py`. Override with `--config path/to/custom.yaml` or environment variables (prefix `ESSAY_WRITER_`).
+Default settings are defined in `config/schemas.py`. Override them with environment variables using the `ESSAY_WRITER_` prefix.
 
 When the direct Google provider path is used, the runtime auto-detects the credential format. Classic `GOOGLE_API_KEY` values stay on the Gemini Developer API path, while `AQ.` keys are routed through Vertex AI. In the web UI, the same credential field also accepts pasted Vertex service-account JSON; when that JSON includes `project_id`, it is used if `GOOGLE_CLOUD_PROJECT` is unset. `GOOGLE_CLOUD_LOCATION` is still required for all direct Vertex paths. If `AI_BASE_URL` is set, the runtime uses the gateway credentials instead and ignores direct Google Vertex credentials.

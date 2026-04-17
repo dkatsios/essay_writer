@@ -3,10 +3,6 @@
 from __future__ import annotations
 from pydantic import BaseModel, ConfigDict, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
-from pydantic_settings.sources import (
-    PydanticBaseSettingsSource,
-    YamlConfigSettingsSource,
-)
 
 
 class ProviderModels(BaseModel):
@@ -116,19 +112,12 @@ class SearchConfig(BaseModel):
     """Maximum number of sources per batch-scoring LLM call."""
 
 
-class PathsConfig(BaseModel):
-    """File system paths."""
-
-    output_dir: str = "./output"
-
-
 class EssayWriterConfig(BaseSettings):
     """Root configuration for the essay writer.
 
     Config priority (highest wins):
       1. Environment variables (prefix: ESSAY_WRITER_)
-      2. Custom YAML config file (via --config)
-      3. Field defaults above
+    2. Field defaults above
     """
 
     model_config = SettingsConfigDict(
@@ -140,44 +129,8 @@ class EssayWriterConfig(BaseSettings):
     writing: WritingConfig = WritingConfig()
     formatting: FormattingConfig = FormattingConfig()
     search: SearchConfig = SearchConfig()
-    paths: PathsConfig = PathsConfig()
-
-    @classmethod
-    def settings_customise_sources(
-        cls,
-        settings_cls: type[BaseSettings],
-        init_settings: PydanticBaseSettingsSource,
-        env_settings: PydanticBaseSettingsSource,
-        dotenv_settings: PydanticBaseSettingsSource,
-        file_secret_settings: PydanticBaseSettingsSource,
-    ) -> tuple[PydanticBaseSettingsSource, ...]:
-        yaml_file = cls.model_config.get("yaml_file")
-        sources = [init_settings, env_settings]
-        if yaml_file:
-            sources.append(YamlConfigSettingsSource(settings_cls))
-        return tuple(sources)
 
 
-def load_config(yaml_path: str | None = None) -> EssayWriterConfig:
-    """Load configuration, optionally from a custom YAML file.
-
-    Args:
-        yaml_path: Path to a YAML config file. If None, uses field defaults
-            with environment variable overrides.
-
-    Returns:
-        Validated EssayWriterConfig instance.
-    """
-    if yaml_path is None:
-        return EssayWriterConfig()
-
-    # Override the yaml_file path for this instance
-    class _CustomConfig(EssayWriterConfig):
-        model_config = SettingsConfigDict(
-            env_prefix="ESSAY_WRITER_",
-            env_nested_delimiter="__",
-            yaml_file=yaml_path,
-            yaml_file_encoding="utf-8",
-        )
-
-    return _CustomConfig()
+def load_config() -> EssayWriterConfig:
+    """Load configuration from environment variables and model defaults."""
+    return EssayWriterConfig()

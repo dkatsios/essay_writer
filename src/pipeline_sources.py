@@ -570,11 +570,11 @@ def _build_optional_pdf_prompt_payload(
     return items, [item[0] for item in chosen]
 
 
-def _cli_optional_pdf_hint(run_dir: Path, items: list[dict]) -> None:
+def _log_optional_pdf_hint(run_dir: Path, items: list[dict]) -> None:
     logger.info(
         "%s\nSome ranked sources have no full text (abstract-only or fetch failed).\n"
-        "The web UI can prompt for optional PDFs; on CLI, use --sources with your files\n"
-        "or add text under the run directory and re-run if you extend the tool.\n"
+        "Optional PDF uploads are available when the active entrypoint provides\n"
+        "an upload callback. No callback is configured for this run.\n"
         "Run directory: %s",
         "=" * 50,
         run_dir,
@@ -1018,7 +1018,7 @@ async def _async_read_sources_orchestration(
         if ctx.on_optional_source_pdfs:
             await ctx.on_optional_source_pdfs(ctx.run_dir, items)
         else:
-            _cli_optional_pdf_hint(ctx.run_dir, items)
+            _log_optional_pdf_hint(ctx.run_dir, items)
 
         registry = _read_registry(registry_path)
         reread_ids = [

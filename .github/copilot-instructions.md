@@ -8,20 +8,6 @@ This is the canonical AI guidance file for the essay writer project. See `.githu
 # Install dependencies
 uv sync
 
-# Run the pipeline — point at a file or directory with assignment materials
-uv run python -m src.runner /path/to/assignment/
-uv run python -m src.runner /path/to/brief.pdf
-uv run python -m src.runner /path/to/files/ -p "Focus on economic aspects"
-
-# Prompt-only mode (no files)
-uv run python -m src.runner -p "Write a 3000-word essay on climate change"
-
-# Provide your own reference sources
-uv run python -m src.runner /path/to/files/ --sources /path/to/my/papers/
-
-# Custom config
-uv run python -m src.runner /path/to/files/ --config my_config.yaml
-
 # Run the web UI
 uv run uvicorn src.web:app --reload
 
@@ -92,7 +78,7 @@ All tool calls (research, URL fetching, PDF reading) are plain Python functions 
 Each run uses a directory with these subdirectories:
 
 - `brief/assignment.json` — assignment brief (Pydantic `AssignmentBrief`)
-- `brief/validation.json` — validation result (Pydantic `ValidationResult`); each `ValidationQuestion` includes `suggested_option_index` (0-based default for UI/CLI)
+- `brief/validation.json` — validation result (Pydantic `ValidationResult`); each `ValidationQuestion` includes `suggested_option_index` (0-based default for the web UI)
 - `plan/plan.json` — essay plan (Pydantic `EssayPlan`); each section may set `requires_full_context` for intro/conclusion/synthesis sections that should be drafted after the rest of the essay, and `deferred_order` to control the writing sequence among deferred sections
 - `plan/source_assignments.json` — source-to-section assignments (Pydantic `SourceAssignmentPlan`; long-path only)
 - `sources/registry.json` — source metadata (from `run_research()`)
@@ -110,7 +96,7 @@ All file I/O is done by the pipeline Python code — LLMs never read or write fi
 
 ### Input Handling
 
-The CLI accepts a file or directory path. The intake module (`src/intake.py`):
+The web UI accepts uploaded files plus an optional prompt. The intake module (`src/intake.py`):
 - Scans and categorizes files by extension
 - Extracts text from `.md`, `.txt`, `.pdf`, `.docx`, `.pptx`
 - For scanned PDFs (sparse text extraction), inserts a short text placeholder in `extracted.md` (no page rasterization; no OCR)
@@ -123,8 +109,7 @@ Supported: `.md`, `.txt`, `.text`, `.rst`, `.csv`, `.tsv`, `.log`, `.pdf`, `.doc
 Uses `pydantic-settings` (`BaseSettings`) with two layers (highest wins):
 
 1. **Environment variables** — prefix `ESSAY_WRITER_`, nested with `__` (e.g., `ESSAY_WRITER_MODELS__PROVIDER=openai` or `ESSAY_WRITER_MODELS__WORKER=google_genai:gemini-2.5-flash`)
-2. **Custom YAML config file** — override with `--config path/to/custom.yaml`
-3. **Field defaults** — in the Pydantic models at `config/schemas.py`
+2. **Field defaults** — in the Pydantic models at `config/schemas.py`
 
 No `default.yaml` exists; field defaults in `schemas.py` are canonical.
 
@@ -146,15 +131,15 @@ No `default.yaml` exists; field defaults in `schemas.py` are canonical.
 - **Recovery search controls** — `search.recovery_overfetch_multiplier`, `search.recovery_fetch_per_api_multiplier`, and `search.recovery_prefer_fulltext` control the single automatic recovery rerun that happens when usable selected sources remain below target after the first read pass.
 - **Citation-aware ranking** — after deduplication, sources are sorted by citation count (higher first), then accessibility tier (OA PDF > DOI > metadata-only) as tiebreaker. This ensures highly-cited paywalled papers outrank low-citation OA papers. OpenAlex requests use sort `relevance_score:desc`: that field is **OpenAlex’s API relevance** (how well each work matches that search request). It is unrelated to **`SourceNote.relevance_score`** in `schemas.py`, which is a **1–5 topic-fit score** assigned by the worker during source reading from the assignment brief’s `topic` (`source_reading.j2`).
 - **Shared HTTP transport** — search APIs and URL fetching use a shared `httpx.Client` with centralized retry behavior and connection pooling in `src/tools/_http.py`.
-- **Pricing** — shared runtime helpers in `src/runtime.py` use the `genai-prices` package for automatic per-model pricing across all providers; `src/runner.py` and the web job flow both consume that shared logic.
+- **Pricing** — shared runtime helpers in `src/runtime.py` use the `genai-prices` package for automatic per-model pricing across all providers; the web job flow consumes that shared logic.
 - **Two-phase source reading** — Phase 1: fetch PDF content only (non-PDF URLs are skipped — analysis showed 89% are garbage HTML). Phase 2: filter out sources with neither useful abstract nor PDF body. Phase 3: batch-score remaining candidates via `source_scoring.j2` (batches of `search.batch_score_size`, default 50). Phase 4: select top T. Phase 5: full LLM extraction (`source_reading.j2`) on selected sources only. `SourceNote` files are produced only for selected sources.
 - **`_select_top_sources`** — ranks batch-scored candidates and returns top `target_sources` IDs. Sources with `relevance_score < 2` are filtered out. Sort keys (all descending, `reverse=True`): **`user_provided`** → **batch relevance_score** → has authors → **`citation_count`** → **has_fulltext**. If the usable pool is smaller than `target_sources`, the selected set is smaller — not padded.
 - **Source target scaling** — `target_sources` uses log-based scaling (`sources_per_1k_words × 3 × log2(1 + words/1000)`) for diminishing marginal growth, floored by `search.min_sources` or the brief/user minimum. The web UI auto-fills the suggested source count when the user enters a word target. `fetch_sources` is `max(target_sources, target × overfetch_multiplier)`. Writing and review prompts clamp the minimum distinct-source requirement to the number of actually selected usable sources, so the model is never asked to cite more sources than exist in the usable selected pool.
 - **Selected sources drive writing** — after source reading, `sources/selected.json` contains the usable source set intended for essay generation. If the file is missing or stale, the pipeline can still fall back to all accessible notes, but an intentionally empty selected set remains empty.
 - **Source shortfall handling** — after the first batch-score + select pass, if `selected.json` still contains fewer usable sources than the target, the pipeline performs one deterministic recovery rerun with a larger fetch budget and full-text-biased API filters where available. If the usable selected pool is still below target, the pipeline pauses before writing and asks the user whether to continue with the smaller source set.
 - **Long-path writer context** — writer prompts include full summaries for a **lexically ranked** subset (`search.section_source_full_detail_max`) plus a **compact catalog** of every selected source (id, authors, year, title). Review steps see essay text only (refiner; no source bodies).
-- **User-provided sources** — users can supply their own reference PDFs/documents via `--sources` (CLI) or the "Your Sources" upload (web UI). These are saved to `sources/user/`, injected into `registry.json` with `user_provided: true` and placeholder metadata. User sources skip batch scoring and go directly to full extraction, which extracts both notes and bibliographic metadata (title, authors, year, DOI) from the content via the LLM, then backfills the registry. User sources are always prioritized in `_select_top_sources`.
-- **Optional PDF uploads (web)** — after the first source-read pass, API sources with `SourceNote.fetched_fulltext=False` (abstract-only or short fetch) may be offered to the user (up to `search.optional_pdf_prompt_top_n`, lexical relevance from brief/plan + citation count). The UI accepts a local PDF file or an http(s) URL to a PDF; text is saved under `sources/supplement/` and `registry[id].content_path` is set, then those IDs are re-read before `selected.json`. CLI runs print a stderr hint instead of blocking. Config: `optional_pdf_prompt_top_n`, `optional_pdf_min_body_words`.
+- **User-provided sources** — users can supply their own reference PDFs/documents via the "Your Sources" upload (web UI). These are saved to `sources/user/`, injected into `registry.json` with `user_provided: true` and placeholder metadata. User sources skip batch scoring and go directly to full extraction, which extracts both notes and bibliographic metadata (title, authors, year, DOI) from the content via the LLM, then backfills the registry. User sources are always prioritized in `_select_top_sources`.
+- **Optional PDF uploads (web)** — after the first source-read pass, API sources with `SourceNote.fetched_fulltext=False` (abstract-only or short fetch) may be offered to the user (up to `search.optional_pdf_prompt_top_n`, lexical relevance from brief/plan + citation count). The UI accepts a local PDF file or an http(s) URL to a PDF; text is saved under `sources/supplement/` and `registry[id].content_path` is set, then those IDs are re-read before `selected.json`. If no optional-PDF callback is configured, the pipeline logs a hint instead of blocking. Config: `optional_pdf_prompt_top_n`, `optional_pdf_min_body_words`.
 - **Short vs long path** — essays ≤ `long_essay_threshold` (default 4000 words) use full-essay write/review. Longer essays use section-by-section write/review with a source-assignment step (5.5), hybrid section drafting, and a reconciliation step before review.
 - **Source assignment (long path)** — after source reading, the worker assigns each selected source to the sections where it is most relevant (`source_assignment.j2` → `SourceAssignmentPlan`). During section writing, assigned sources are boosted to the top of the detail window so the writer sees their full summaries, and the template requires citing each assigned source at least once.
 - **Hybrid long-essay drafting** — body sections without `requires_full_context` are drafted in parallel. Sections marked `requires_full_context` are drafted afterward sorted by `deferred_order` (ascending, then by position) so later sections see more context. Both fields are set by the LLM in the plan — no heuristic overrides.
@@ -165,7 +150,7 @@ No `default.yaml` exists; field defaults in `schemas.py` are canonical.
 - **Custom AI endpoint** — when `AI_BASE_URL` is set in `.env`, all models route through an OpenAI-compatible endpoint using `AI_API_KEY` and `AI_MODEL`.
 - **Deterministic export** — step 8 calls `build_document()` directly from Python. No LLM involved. Prefers `reviewed.md`, falls back to `draft.md`.
 - **Markdown table support** — `_parse_and_add_content()` detects standard markdown tables (pipe-delimited with `|---|` separator) and renders them as native Word tables via `doc.add_table()`. Writing templates instruct the LLM to use tables sparingly when they improve clarity.
-- **Validate step** — after intake, the worker evaluates the brief for significant gaps. If found, prints numbered questions with options and collects answers via `input()`. Answers are stored as structured `clarifications` in `assignment.json`, one entry per answered question. The `on_questions` callback in `run_pipeline` makes this interactive behavior pluggable.
+- **Validate step** — after intake, the worker evaluates the brief for significant gaps. If found, the `on_questions` callback receives those questions and the chosen answers are stored as structured `clarifications` in `assignment.json`, one entry per answered question.
 - **Structured outputs** — brief, validation, plan, and source notes are JSON files validated by Pydantic models in `src/schemas.py`. Essays remain markdown.
 
 ### Test Fixtures
@@ -174,7 +159,7 @@ Place test assignment directories under `examples/`. Each subdirectory is a self
 
 ### Web UI
 
-`src/web.py` is a thin FastAPI route layer that wraps the same pipeline used by the CLI. Shared web job state, TTL cleanup, optional-PDF handling, and background execution live in `src/web_jobs.py`. A single HTML page (`src/templates/web/index.html`) provides a form (prompt, file upload, target word count). Jobs run in background threads; validation questions pause the pipeline thread via `threading.Event` and are pushed to the browser via Server-Sent Events (SSE). The web path respects `writing.interactive_validation` the same way as the CLI. Results are returned as a ZIP containing the docx, markdown, and sources metadata.
+`src/web.py` is a thin FastAPI route layer that wraps the pipeline. Shared web job state, TTL cleanup, optional-PDF handling, and background execution live in `src/web_jobs.py`. A single HTML page (`src/templates/web/index.html`) provides a form (prompt, file upload, target word count). Jobs run in background threads; validation questions pause the pipeline thread via `threading.Event` and are pushed to the browser via Server-Sent Events (SSE). The web path respects `writing.interactive_validation` through the validation callback flow. Results are returned as a ZIP containing the docx, markdown, and sources metadata.
 
 - **SSE (`/stream/{job_id}`)** — the primary status channel. The server holds a long-lived `text/event-stream` connection and pushes `data: {JSON}\n\n` events whenever `job.status` or the pipeline stage changes. The client uses the native `EventSource` API which handles automatic reconnection. `_notify_job(job)` sets a `threading.Event` on each state transition; the SSE generator wakes on that signal or after a 2-second timeout (to catch stage changes within `running`). Terminal states (`done`, `error`, `gone`) close the generator so `EventSource` does not reconnect.
 - **Download lifecycle** — `GET /download/{job_id}` returns the ZIP without deleting it so interrupted transfers can retry safely. The browser UI follows that with `POST /download/{job_id}/cleanup` after it has received the blob, which deletes the temp directory and removes the job from memory. Jobs that finish (`done` or `error`) but are never cleaned up are removed automatically after a TTL (default 24h). Optional environment variables: `ESSAY_WEB_JOB_TTL_SECONDS` (default `86400`, use `0` to disable TTL cleanup only), `ESSAY_WEB_JOB_SWEEP_INTERVAL_SECONDS` (default `300`, minimum `60` between sweeps), and `ESSAY_WEB_INTERACTION_TIMEOUT_SECONDS` (default `1800`) for paused `questions` / `optional_pdfs` waits before the job fails.

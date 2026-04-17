@@ -1,4 +1,4 @@
-"""Shared runtime helpers for CLI and web entry points."""
+"""Shared runtime helpers for the web workflow and pipeline utilities."""
 
 from __future__ import annotations
 
@@ -354,23 +354,6 @@ def _parse_target_words(path: Path) -> int:
         return plan.get("total_word_target", 0)
     except (json.JSONDecodeError, ValueError):
         return 0
-
-
-def format_validation_questions(questions: list[ValidationQuestion]) -> str:
-    """Format validation questions for CLI display."""
-    lines: list[str] = []
-    for i, question in enumerate(questions, 1):
-        lines.append(f"{i}. {question.question}")
-        n = len(question.options)
-        sugg = question.suggested_option_index if n else 0
-        if n:
-            sugg = max(0, min(sugg, n - 1))
-        for j, option in enumerate(question.options):
-            label = chr(ord("a") + j)
-            hint = "  ← suggested default" if j == sugg else ""
-            lines.append(f"   {label}) {option}{hint}")
-        lines.append("")
-    return "\n".join(lines).strip()
 
 
 def parse_validation_answers(

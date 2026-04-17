@@ -712,11 +712,3 @@ def do_export(ctx: PipelineContext) -> None:
     document.save(str(run_docx))
     logger.info("essay.docx saved to %s", run_docx)
     logger.info("essay.docx -> %s", run_docx)
-
-    # Also copy to the shared output_dir for CLI convenience.
-    output_path = Path(ctx.config.paths.output_dir) / "essay.docx"
-    if output_path.resolve() != run_docx.resolve():
-        import shutil
-
-        output_path.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(str(run_docx), str(output_path))
