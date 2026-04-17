@@ -72,9 +72,11 @@ def _make_ctx(run_dir: Path, tracker: object | None = None) -> PipelineContext:
     )
     return PipelineContext(
         worker=MagicMock(),
-        async_worker=None,
+        async_worker=MagicMock(),
         writer=MagicMock(),
+        async_writer=MagicMock(),
         reviewer=MagicMock(),
+        async_reviewer=MagicMock(),
         run_dir=run_dir,
         config=config,
         tracker=tracker,
@@ -90,7 +92,7 @@ def test_parse_sections_uses_plan_position_as_internal_id(tmp_path: Path) -> Non
     assert [section.number for section in sections] == [1, 2, 2]
 
 
-def test_write_sections_keeps_duplicate_numbers_distinct(
+async def test_write_sections_keeps_duplicate_numbers_distinct(
     tmp_path: Path, monkeypatch
 ) -> None:
     _write_plan(tmp_path)
@@ -125,12 +127,13 @@ def test_write_sections_keeps_duplicate_numbers_distinct(
         return section.title
 
     monkeypatch.setattr("src.pipeline_writing.render_prompt", fake_render_prompt)
-    monkeypatch.setattr(
-        "src.pipeline_writing._text_call",
-        lambda _client, _system, user_prompt, _tracker=None: f"draft:{user_prompt}",
-    )
 
-    make_write_sections(sections, target_words=1300, citation_min_sources=1)(
+    async def _fake_async_text_call(_client, _system, user_prompt, _tracker=None):
+        return f"draft:{user_prompt}"
+
+    monkeypatch.setattr("src.pipeline_writing._async_text_call", _fake_async_text_call)
+
+    await make_write_sections(sections, target_words=1300, citation_min_sources=1)(
         _make_ctx(tmp_path, tracker=tracker)
     )
 
@@ -165,7 +168,7 @@ def test_write_sections_keeps_duplicate_numbers_distinct(
     assert sorted(write_steps[:-1]) == ["write", "write"]
 
 
-def test_review_sections_keeps_duplicate_numbers_distinct(
+async def test_review_sections_keeps_duplicate_numbers_distinct(
     tmp_path: Path, monkeypatch
 ) -> None:
     _write_plan(tmp_path)
@@ -182,12 +185,13 @@ def test_review_sections_keeps_duplicate_numbers_distinct(
         "src.pipeline_writing.render_prompt",
         lambda _template, **kwargs: kwargs["section"].title,
     )
-    monkeypatch.setattr(
-        "src.pipeline_writing._text_call",
-        lambda _client, _system, user_prompt, _tracker=None: f"review:{user_prompt}",
-    )
 
-    make_review_sections(sections, target_words=1300)(
+    async def _fake_async_text_call(_client, _system, user_prompt, _tracker=None):
+        return f"review:{user_prompt}"
+
+    monkeypatch.setattr("src.pipeline_writing._async_text_call", _fake_async_text_call)
+
+    await make_review_sections(sections, target_words=1300)(
         _make_ctx(tmp_path, tracker=tracker)
     )
 
@@ -210,7 +214,7 @@ def test_review_sections_keeps_duplicate_numbers_distinct(
     ]
 
 
-def test_review_sections_routes_reconciliation_notes_by_position(
+async def test_review_sections_routes_reconciliation_notes_by_position(
     tmp_path: Path, monkeypatch
 ) -> None:
     _write_plan(tmp_path)
@@ -281,12 +285,13 @@ def test_review_sections_routes_reconciliation_notes_by_position(
         return section.title
 
     monkeypatch.setattr("src.pipeline_writing.render_prompt", fake_render_prompt)
-    monkeypatch.setattr(
-        "src.pipeline_writing._text_call",
-        lambda _client, _system, user_prompt, _tracker=None: f"review:{user_prompt}",
-    )
 
-    make_review_sections(sections, target_words=1300)(_make_ctx(tmp_path))
+    async def _fake_async_text_call(_client, _system, user_prompt, _tracker=None):
+        return f"review:{user_prompt}"
+
+    monkeypatch.setattr("src.pipeline_writing._async_text_call", _fake_async_text_call)
+
+    await make_review_sections(sections, target_words=1300)(_make_ctx(tmp_path))
 
     assert captured_notes == {
         1: ["Align the introduction with the completed body."],

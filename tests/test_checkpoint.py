@@ -82,7 +82,7 @@ class TestExecuteWithCheckpoint:
             config=MagicMock(),
         )
 
-    def test_skips_completed_steps(self, run_dir: Path):
+    async def test_skips_completed_steps(self, run_dir: Path):
         ctx = self._make_ctx(run_dir)
         calls = []
         steps = [
@@ -90,30 +90,30 @@ class TestExecuteWithCheckpoint:
             PipelineStep("b", lambda _ctx: calls.append("b")),
             PipelineStep("c", lambda _ctx: calls.append("c")),
         ]
-        _execute(steps, ctx, checkpoint={"a", "b"})
+        await _execute(steps, ctx, checkpoint={"a", "b"})
         assert calls == ["c"]
 
-    def test_no_checkpoint_runs_all(self, run_dir: Path):
+    async def test_no_checkpoint_runs_all(self, run_dir: Path):
         ctx = self._make_ctx(run_dir)
         calls = []
         steps = [
             PipelineStep("a", lambda _ctx: calls.append("a")),
             PipelineStep("b", lambda _ctx: calls.append("b")),
         ]
-        _execute(steps, ctx)
+        await _execute(steps, ctx)
         assert calls == ["a", "b"]
 
-    def test_writes_checkpoint_after_each_step(self, run_dir: Path):
+    async def test_writes_checkpoint_after_each_step(self, run_dir: Path):
         ctx = self._make_ctx(run_dir)
         steps = [
             PipelineStep("a", lambda _ctx: None),
             PipelineStep("b", lambda _ctx: None),
         ]
-        _execute(steps, ctx)
+        await _execute(steps, ctx)
         checkpoint = _load_checkpoint(run_dir)
         assert checkpoint == {"a", "b"}
 
-    def test_failed_step_not_checkpointed(self, run_dir: Path):
+    async def test_failed_step_not_checkpointed(self, run_dir: Path):
         ctx = self._make_ctx(run_dir)
 
         def _fail(_ctx):
@@ -124,16 +124,16 @@ class TestExecuteWithCheckpoint:
             PipelineStep("b", _fail),
         ]
         with pytest.raises(RuntimeError, match="boom"):
-            _execute(steps, ctx)
+            await _execute(steps, ctx)
 
         checkpoint = _load_checkpoint(run_dir)
         assert checkpoint == {"a"}
 
-    def test_empty_checkpoint_runs_all(self, run_dir: Path):
+    async def test_empty_checkpoint_runs_all(self, run_dir: Path):
         ctx = self._make_ctx(run_dir)
         calls = []
         steps = [
             PipelineStep("a", lambda _ctx: calls.append("a")),
         ]
-        _execute(steps, ctx, checkpoint=set())
+        await _execute(steps, ctx, checkpoint=set())
         assert calls == ["a"]

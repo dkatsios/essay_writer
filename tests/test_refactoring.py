@@ -842,7 +842,7 @@ class TestValidationClarifications:
         assert len(clarifications) == 1
         assert clarifications[0].answer == "Focus on public policy implications"
 
-    def test_handle_questions_persists_structured_clarifications(
+    async def test_handle_questions_persists_structured_clarifications(
         self, tmp_path, monkeypatch
     ):
         from src.runner import _handle_questions
@@ -865,7 +865,7 @@ class TestValidationClarifications:
         ]
         monkeypatch.setattr("builtins.input", lambda _prompt="": "1. b, 2. a")
 
-        _handle_questions(questions, tmp_path)
+        await _handle_questions(questions, tmp_path)
 
         saved = AssignmentBrief.model_validate_json(
             brief_path.read_text(encoding="utf-8")
@@ -1089,7 +1089,7 @@ class TestSelectedSourceNotes:
 
         assert _load_selected_source_notes(tmp_path) == []
 
-    def test_write_full_clamps_min_sources_to_selected_usable_count(
+    async def test_write_full_clamps_min_sources_to_selected_usable_count(
         self, tmp_path, monkeypatch
     ):
         from types import SimpleNamespace
@@ -1133,15 +1133,19 @@ class TestSelectedSourceNotes:
             return "PROMPT"
 
         monkeypatch.setattr("src.pipeline_writing.render_prompt", fake_render_prompt)
+
+        async def _fake_async_text_call(_client, _system, _prompt, _tracker=None):
+            return "essay body"
+
         monkeypatch.setattr(
-            "src.pipeline_writing._text_call",
-            lambda _client, _system, _prompt, _tracker=None: "essay body",
+            "src.pipeline_writing._async_text_call", _fake_async_text_call
         )
 
         ctx = PipelineContext(
             worker=MagicMock(),
-            async_worker=None,
+            async_worker=MagicMock(),
             writer=MagicMock(),
+            async_writer=MagicMock(),
             reviewer=MagicMock(),
             run_dir=tmp_path,
             config=SimpleNamespace(
@@ -1151,7 +1155,7 @@ class TestSelectedSourceNotes:
             tracker=None,
         )
 
-        make_write_full(target_words=1000, citation_min_sources=5)(ctx)
+        await make_write_full(target_words=1000, citation_min_sources=5)(ctx)
 
         assert captured["min_sources"] == 2
         assert (tmp_path / "essay" / "draft.md").read_text(encoding="utf-8") == (

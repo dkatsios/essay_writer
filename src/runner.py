@@ -27,6 +27,7 @@ Usage (via uv):
 from __future__ import annotations
 
 import argparse
+import asyncio
 import logging
 import sys
 import threading
@@ -39,7 +40,7 @@ logger = logging.getLogger(__name__)
 load_dotenv()
 
 from config.schemas import load_config  # noqa: E402
-from src.agent import create_client  # noqa: E402
+from src.agent import create_async_client, create_client  # noqa: E402
 from src.intake import build_extracted_text, scan  # noqa: E402
 from src.pipeline import run_pipeline  # noqa: E402
 from src.pipeline_sources import SourceShortfallAbort  # noqa: E402
@@ -74,7 +75,7 @@ def _parse_validation_answers(
     return parse_validation_answers(questions, answers)
 
 
-def _handle_questions(questions: list[ValidationQuestion], run_dir: Path) -> None:
+async def _handle_questions(questions: list[ValidationQuestion], run_dir: Path) -> None:
     """Print validator questions, collect answers via stdin, append to brief."""
     logger.info(
         "%s\nThe assignment brief has gaps that may affect quality.\nPlease answer the following:",
@@ -85,7 +86,7 @@ def _handle_questions(questions: list[ValidationQuestion], run_dir: Path) -> Non
         "\n  Enter answers (e.g. '1. a, 2. c'). Lines marked ← suggested default; "
         "press Enter to skip all:",
     )
-    answers = input("> ").strip()
+    answers = (await asyncio.to_thread(input, "> ")).strip()
     if not answers:
         return
     from src.schemas import AssignmentBrief
@@ -100,7 +101,7 @@ def _handle_questions(questions: list[ValidationQuestion], run_dir: Path) -> Non
     )
 
 
-def _handle_source_shortfall(run_dir: Path, summary: dict) -> bool:
+async def _handle_source_shortfall(run_dir: Path, summary: dict) -> bool:
     usable = int(summary.get("usable_sources", 0) or 0)
     target = int(summary.get("target_sources", 0) or 0)
     scorable = int(summary.get("scorable_candidates", 0) or 0)
@@ -125,7 +126,7 @@ def _handle_source_shortfall(run_dir: Path, summary: dict) -> bool:
     logger.warning(
         "  Continue with the available usable sources instead of the original target? [y/N]",
     )
-    answer = input("> ").strip().lower()
+    answer = (await asyncio.to_thread(input, "> ")).strip().lower()
     return answer in {"y", "yes"}
 
 
@@ -134,7 +135,7 @@ def _handle_source_shortfall(run_dir: Path, summary: dict) -> bool:
 # ---------------------------------------------------------------------------
 
 
-def _execute_pipeline(
+async def _execute_pipeline(
     extracted_text: str,
     *,
     prompt: str | None = None,
@@ -161,11 +162,14 @@ def _execute_pipeline(
     worker = create_client(config.models.worker)
     writer = create_client(config.models.writer)
     reviewer = create_client(config.models.reviewer)
+    async_worker = create_async_client(config.models.worker)
+    async_writer = create_async_client(config.models.writer)
+    async_reviewer = create_async_client(config.models.reviewer)
 
     tracker = TokenTracker()
 
     try:
-        run_pipeline(
+        await run_pipeline(
             worker,
             writer,
             reviewer,
@@ -178,6 +182,9 @@ def _execute_pipeline(
             else None,
             on_source_shortfall=_handle_source_shortfall,
             user_sources_dir=user_sources_dir,
+            async_worker=async_worker,
+            async_writer=async_writer,
+            async_reviewer=async_reviewer,
         )
     except SourceShortfallAbort as exc:
         logger.warning("Aborted: %s", exc)
@@ -190,7 +197,7 @@ def _execute_pipeline(
         teardown_run_logging(log_handler)
 
 
-def run(
+async def run(
     input_path: str,
     *,
     prompt: str | None = None,
@@ -205,7 +212,7 @@ def run(
         logger.info("[%s] %s", status, f.path.name)
     extracted_text = build_extracted_text(input_files, extra_prompt=prompt)
 
-    _execute_pipeline(
+    await _execute_pipeline(
         extracted_text,
         prompt=prompt,
         config_path=config_path,
@@ -214,7 +221,7 @@ def run(
     )
 
 
-def run_prompt(
+async def run_prompt(
     prompt: str,
     *,
     config_path: str | None = None,
@@ -222,7 +229,7 @@ def run_prompt(
     user_sources_dir: Path | None = None,
 ) -> None:
     """Run the essay pipeline with a plain text prompt (no files)."""
-    _execute_pipeline(
+    await _execute_pipeline(
         f"# Assignment\n\n{prompt}\n",
         prompt=prompt,
         config_path=config_path,
@@ -231,7 +238,7 @@ def run_prompt(
     )
 
 
-def resume_run(
+async def resume_run(
     run_dir_path: str,
     *,
     config_path: str | None = None,
@@ -258,11 +265,14 @@ def resume_run(
     worker = create_client(config.models.worker)
     writer = create_client(config.models.writer)
     reviewer = create_client(config.models.reviewer)
+    async_worker = create_async_client(config.models.worker)
+    async_writer = create_async_client(config.models.writer)
+    async_reviewer = create_async_client(config.models.reviewer)
 
     tracker = TokenTracker()
 
     try:
-        run_pipeline(
+        await run_pipeline(
             worker,
             writer,
             reviewer,
@@ -275,6 +285,9 @@ def resume_run(
             else None,
             on_source_shortfall=_handle_source_shortfall,
             resume=True,
+            async_worker=async_worker,
+            async_writer=async_writer,
+            async_reviewer=async_reviewer,
         )
     except SourceShortfallAbort as exc:
         logger.warning("Aborted: %s", exc)
@@ -336,7 +349,7 @@ def main() -> None:
     logging.getLogger("openai").setLevel(logging.WARNING)
 
     if args.resume:
-        resume_run(args.resume, config_path=args.config)
+        asyncio.run(resume_run(args.resume, config_path=args.config))
         return
 
     output_dir = None
@@ -354,26 +367,32 @@ def main() -> None:
         if not prompt_text:
             logger.error("No input provided.")
             sys.exit(1)
-        run_prompt(
-            prompt_text,
-            config_path=args.config,
-            output_dir=output_dir,
-            user_sources_dir=sources_dir,
+        asyncio.run(
+            run_prompt(
+                prompt_text,
+                config_path=args.config,
+                output_dir=output_dir,
+                user_sources_dir=sources_dir,
+            )
         )
     elif args.input_path is None:
-        run_prompt(
-            args.prompt,
-            config_path=args.config,
-            output_dir=output_dir,
-            user_sources_dir=sources_dir,
+        asyncio.run(
+            run_prompt(
+                args.prompt,
+                config_path=args.config,
+                output_dir=output_dir,
+                user_sources_dir=sources_dir,
+            )
         )
     else:
-        run(
-            args.input_path,
-            prompt=args.prompt,
-            config_path=args.config,
-            output_dir=output_dir,
-            user_sources_dir=sources_dir,
+        asyncio.run(
+            run(
+                args.input_path,
+                prompt=args.prompt,
+                config_path=args.config,
+                output_dir=output_dir,
+                user_sources_dir=sources_dir,
+            )
         )
 
 

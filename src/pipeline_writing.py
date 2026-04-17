@@ -2,17 +2,16 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import re
 from collections import defaultdict, deque
 from collections.abc import Callable
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from time import monotonic
 
 from src.rendering import render_prompt
-from src.run_logging import submit_with_current_context
 from src.schemas import (
     AssignmentBrief,
     EssayPlan,
@@ -24,8 +23,9 @@ from src.tools.essay_sanitize import strip_leading_submission_metadata
 from src.pipeline_support import (
     PipelineContext,
     Section,
+    _async_structured_call,
+    _async_text_call,
     _build_prior_sections_context,
-    _structured_call,
     _build_review_context,
     _get_brief_language,
     _load_selected_source_notes,
@@ -35,7 +35,6 @@ from src.pipeline_support import (
     _section_window,
     _source_catalog_markdown,
     _split_writer_source_context,
-    _text_call,
     _write_json,
     _write_text,
 )
@@ -85,8 +84,8 @@ def _load_source_assignments(
 def make_write_full(
     target_words: int,
     citation_min_sources: int,
-) -> Callable[[PipelineContext], None]:
-    def _do_write_full(ctx: PipelineContext) -> None:
+) -> Callable:
+    async def _do_write_full(ctx: PipelineContext) -> None:
         brief_json = _read_text(ctx.run_dir / "brief" / "assignment.json")
         plan_json = _read_text(ctx.run_dir / "plan" / "plan.json")
         source_notes = _load_selected_source_notes(ctx.run_dir)
@@ -114,8 +113,8 @@ def make_write_full(
             min_sources=min_sources,
         )
 
-        essay = _text_call(
-            ctx.writer,
+        essay = await _async_text_call(
+            ctx.async_writer,
             f"You are an expert academic writer producing essays in {language}.",
             prompt,
             ctx.tracker,
@@ -131,8 +130,8 @@ def make_write_full(
 def make_review_full(
     target_words: int,
     citation_min_sources: int,
-) -> Callable[[PipelineContext], None]:
-    def _do_review_full(ctx: PipelineContext) -> None:
+) -> Callable:
+    async def _do_review_full(ctx: PipelineContext) -> None:
         brief_json = _read_text(ctx.run_dir / "brief" / "assignment.json")
         plan_json = _read_text(ctx.run_dir / "plan" / "plan.json")
         draft = _read_text(ctx.run_dir / "essay" / "draft.md")
@@ -168,8 +167,8 @@ def make_review_full(
             uncited_ids=uncited_ids,
         )
 
-        reviewed = _text_call(
-            ctx.reviewer,
+        reviewed = await _async_text_call(
+            ctx.async_reviewer,
             f"You are an expert academic editor polishing essays in {language}.",
             prompt,
             ctx.tracker,
@@ -278,7 +277,7 @@ def _normalize_reconciliation_plan(
     )
 
 
-def _write_section_draft(
+async def _write_section_draft(
     ctx: PipelineContext,
     section: Section,
     *,
@@ -345,8 +344,8 @@ def _write_section_draft(
         ctx.tracker.set_current_step(tracker_step)
 
     start = monotonic()
-    text = _text_call(
-        ctx.writer,
+    text = await _async_text_call(
+        ctx.async_writer,
         f"You are an expert academic writer producing essays in {language}.",
         prompt,
         ctx.tracker,
@@ -363,8 +362,8 @@ def make_write_sections(
     sections: list[Section],
     target_words: int,
     citation_min_sources: int,
-) -> Callable[[PipelineContext], None]:
-    def _do_write_sections(ctx: PipelineContext) -> None:
+) -> Callable:
+    async def _do_write_sections(ctx: PipelineContext) -> None:
         sections_dir = ctx.run_dir / "essay" / "sections"
         sections_dir.mkdir(parents=True, exist_ok=True)
 
@@ -383,14 +382,13 @@ def make_write_sections(
             ctx.tracker.set_sub_total(len(ordered))
 
         if parallel_sections:
-            max_workers = min(_WRITE_CONCURRENCY, len(parallel_sections))
-            with ThreadPoolExecutor(max_workers=max_workers) as pool:
-                futures = {
-                    submit_with_current_context(
-                        pool,
-                        _write_section_draft,
+            sem = asyncio.Semaphore(_WRITE_CONCURRENCY)
+
+            async def _bounded_write(sec: Section) -> tuple[Section, str, float]:
+                async with sem:
+                    result = await _write_section_draft(
                         ctx,
-                        section,
+                        sec,
                         sections_dir=sections_dir,
                         plan_json=plan_json,
                         source_notes=source_notes,
@@ -401,24 +399,26 @@ def make_write_sections(
                         min_sources=min_sources,
                         essay_context="",
                         tracker_step="write",
-                    ): section
-                    for section in parallel_sections
-                }
-                for future in as_completed(futures):
-                    section, text, duration = future.result()
-                    logger.info(
-                        "section %s (%s) -- %.1fs",
-                        section.number,
-                        section.title,
-                        duration,
                     )
-                    written_sections.append((section, text))
                     if ctx.tracker is not None:
                         ctx.tracker.increment_sub_done()
+                    return result
+
+            results = await asyncio.gather(
+                *[_bounded_write(section) for section in parallel_sections]
+            )
+            for section, text, duration in results:
+                logger.info(
+                    "section %s (%s) -- %.1fs",
+                    section.number,
+                    section.title,
+                    duration,
+                )
+                written_sections.append((section, text))
 
         for section in deferred_sections:
             essay_context = _build_full_draft_context(sections, written_sections)
-            section, text, duration = _write_section_draft(
+            section, text, duration = await _write_section_draft(
                 ctx,
                 section,
                 sections_dir=sections_dir,
@@ -466,8 +466,8 @@ def make_write_sections(
 def make_reconcile_sections(
     sections: list[Section],
     target_words: int,
-) -> Callable[[PipelineContext], None]:
-    def _do_reconcile_sections(ctx: PipelineContext) -> None:
+) -> Callable:
+    async def _do_reconcile_sections(ctx: PipelineContext) -> None:
         sections_dir = ctx.run_dir / "essay" / "sections"
         plan_json = _read_text(ctx.run_dir / "plan" / "plan.json")
         language = _get_brief_language(ctx.run_dir)
@@ -499,8 +499,8 @@ def make_reconcile_sections(
             drafted_sections=drafted_sections,
             language=language,
         )
-        plan = _structured_call(
-            ctx.worker,
+        plan = await _async_structured_call(
+            ctx.async_worker,
             prompt,
             EssayReconciliationPlan,
             ctx.tracker,
@@ -514,8 +514,8 @@ def make_reconcile_sections(
 def make_review_sections(
     sections: list[Section],
     target_words: int,
-) -> Callable[[PipelineContext], None]:
-    def _do_review_sections(ctx: PipelineContext) -> None:
+) -> Callable:
+    async def _do_review_sections(ctx: PipelineContext) -> None:
         _ = target_words
         sections_dir = ctx.run_dir / "essay" / "sections"
         reviewed_dir = ctx.run_dir / "essay" / "reviewed"
@@ -529,7 +529,7 @@ def make_review_sections(
         if ctx.tracker is not None:
             ctx.tracker.set_sub_total(len(plan_order))
 
-        def _review_one(section: Section) -> tuple[Section, str, float]:
+        async def _review_one(section: Section) -> tuple[Section, str, float]:
             if section.position not in draft_texts:
                 logger.warning("Section %d missing, skipping review", section.number)
                 return section, "", 0.0
@@ -568,8 +568,8 @@ def make_review_sections(
                 ctx.tracker.set_current_step("review")
 
             start = monotonic()
-            reviewed = _text_call(
-                ctx.reviewer,
+            reviewed = await _async_text_call(
+                ctx.async_reviewer,
                 f"You are an expert academic editor polishing essays in {language}.",
                 prompt,
                 ctx.tracker,
@@ -581,22 +581,26 @@ def make_review_sections(
                 ctx.tracker.record_duration(tracker_step, duration)
             return section, reviewed, duration
 
-        with ThreadPoolExecutor(max_workers=_REVIEW_CONCURRENCY) as pool:
-            futures = {
-                submit_with_current_context(pool, _review_one, section): section
-                for section in plan_order
-            }
-            for future in as_completed(futures):
-                section, _, duration = future.result()
+        sem = asyncio.Semaphore(_REVIEW_CONCURRENCY)
+
+        async def _bounded_review(sec: Section) -> tuple[Section, str, float]:
+            async with sem:
+                result = await _review_one(sec)
                 if ctx.tracker is not None:
                     ctx.tracker.increment_sub_done()
-                if duration > 0:
-                    logger.info(
-                        "section %s (%s) -- %.1fs",
-                        section.number,
-                        section.title,
-                        duration,
-                    )
+                return result
+
+        results = await asyncio.gather(
+            *[_bounded_review(section) for section in plan_order]
+        )
+        for section, _, duration in results:
+            if duration > 0:
+                logger.info(
+                    "section %s (%s) -- %.1fs",
+                    section.number,
+                    section.title,
+                    duration,
+                )
 
         reviewed_parts = []
         for section in plan_order:

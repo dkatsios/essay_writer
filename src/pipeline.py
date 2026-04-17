@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from pathlib import Path
 
 from src.rendering import render_prompt
@@ -16,6 +16,7 @@ from src.pipeline_sources import (
 from src.pipeline_support import (
     PipelineContext,
     PipelineStep,
+    _async_structured_call,
     _compute_max_sources,
     _execute,
     _get_brief_language,
@@ -23,7 +24,6 @@ from src.pipeline_support import (
     _load_checkpoint,
     _parse_sections,
     _read_text,
-    _structured_call,
     _write_json,
 )
 from src.pipeline_writing import (
@@ -38,7 +38,7 @@ from src.pipeline_writing import (
 logger = logging.getLogger(__name__)
 
 
-def _do_intake(ctx: PipelineContext) -> None:
+async def _do_intake(ctx: PipelineContext) -> None:
     extracted_path = ctx.run_dir / "input" / "extracted.md"
     extracted_text = _read_text(extracted_path) if extracted_path.exists() else ""
     prompt = render_prompt(
@@ -46,29 +46,35 @@ def _do_intake(ctx: PipelineContext) -> None:
         extracted_text=extracted_text,
         extra_prompt=ctx.extra_prompt,
     )
-    brief = _structured_call(ctx.worker, prompt, AssignmentBrief, ctx.tracker)
+    brief = await _async_structured_call(
+        ctx.async_worker, prompt, AssignmentBrief, ctx.tracker
+    )
     _write_json(ctx.run_dir / "brief" / "assignment.json", brief)
 
 
-def _do_validate(ctx: PipelineContext) -> None:
+async def _do_validate(ctx: PipelineContext) -> None:
     brief_json = _read_text(ctx.run_dir / "brief" / "assignment.json")
     prompt = render_prompt(
         "validate.j2",
         brief_json=brief_json,
         language=_get_brief_language(ctx.run_dir),
     )
-    result = _structured_call(ctx.worker, prompt, ValidationResult, ctx.tracker)
+    result = await _async_structured_call(
+        ctx.async_worker, prompt, ValidationResult, ctx.tracker
+    )
     _write_json(ctx.run_dir / "brief" / "validation.json", result)
 
 
-def _do_plan(ctx: PipelineContext) -> None:
+async def _do_plan(ctx: PipelineContext) -> None:
     brief_json = _read_text(ctx.run_dir / "brief" / "assignment.json")
     prompt = render_prompt(
         "plan.j2",
         brief_json=brief_json,
         language=_get_brief_language(ctx.run_dir),
     )
-    plan = _structured_call(ctx.worker, prompt, EssayPlan, ctx.tracker)
+    plan = await _async_structured_call(
+        ctx.async_worker, prompt, EssayPlan, ctx.tracker
+    )
     _write_json(ctx.run_dir / "plan" / "plan.json", plan)
 
 
@@ -137,7 +143,7 @@ def _build_execution_steps(
     return steps
 
 
-def run_pipeline(
+async def run_pipeline(
     worker,
     writer,
     reviewer,
@@ -145,16 +151,33 @@ def run_pipeline(
     config,
     *,
     async_worker=None,
+    async_writer=None,
+    async_reviewer=None,
     extra_prompt: str | None = None,
     token_tracker=None,
-    on_questions: Callable[[list[ValidationQuestion], Path], None] | None = None,
-    on_optional_source_pdfs: Callable[[Path, list[dict]], None] | None = None,
-    on_source_shortfall: Callable[[Path, dict], bool] | None = None,
+    on_questions: Callable[[list[ValidationQuestion], Path], Awaitable[None]]
+    | None = None,
+    on_optional_source_pdfs: Callable[[Path, list[dict]], Awaitable[None]]
+    | None = None,
+    on_source_shortfall: Callable[[Path, dict], Awaitable[bool]] | None = None,
     min_sources: int | None = None,
     user_sources_dir: Path | None = None,
     resume: bool = False,
 ) -> None:
-    """Execute the essay writing pipeline."""
+    """Execute the essay writing pipeline.
+
+    All callbacks (``on_questions``, ``on_optional_source_pdfs``,
+    ``on_source_shortfall``) must be async callables.  They are
+    ``await``-ed directly by the pipeline steps.
+    """
+    # Ensure async clients exist for all roles.
+    if async_worker is None:
+        async_worker = worker.to_async()
+    if async_writer is None:
+        async_writer = writer.to_async()
+    if async_reviewer is None:
+        async_reviewer = reviewer.to_async()
+
     checkpoint = _load_checkpoint(run_dir) if resume else set()
     if checkpoint:
         logger.info("Resuming — completed steps: %s", ", ".join(sorted(checkpoint)))
@@ -166,6 +189,8 @@ def run_pipeline(
         reviewer=reviewer,
         run_dir=run_dir,
         config=config,
+        async_writer=async_writer,
+        async_reviewer=async_reviewer,
         extra_prompt=extra_prompt,
         tracker=token_tracker,
         user_sources_dir=user_sources_dir,
@@ -179,7 +204,7 @@ def run_pipeline(
     # Preliminary step count for progress (intake + validate + plan).
     preliminary_total = 3
 
-    _execute(
+    await _execute(
         [PipelineStep("intake", _do_intake)],
         ctx,
         checkpoint=checkpoint,
@@ -199,7 +224,7 @@ def run_pipeline(
             encoding="utf-8",
         )
 
-    _execute(
+    await _execute(
         [PipelineStep("validate", _do_validate)],
         ctx,
         checkpoint=checkpoint,
@@ -216,9 +241,9 @@ def run_pipeline(
             and not validation.is_pass
             and on_questions
         ):
-            on_questions(validation.questions, run_dir)
+            await on_questions(validation.questions, run_dir)
 
-    _execute(
+    await _execute(
         [PipelineStep("plan", _do_plan)],
         ctx,
         checkpoint=checkpoint,
@@ -279,7 +304,7 @@ def run_pipeline(
     )
     total_steps = 3 + len(execution_steps)
 
-    _execute(
+    await _execute(
         execution_steps,
         ctx,
         checkpoint=checkpoint,

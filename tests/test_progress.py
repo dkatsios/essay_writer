@@ -80,7 +80,7 @@ class TestTokenTrackerProgress:
 
 
 class TestExecuteStepProgress:
-    def test_step_progress_set_on_tracker(self, tmp_path):
+    async def test_step_progress_set_on_tracker(self, tmp_path):
         run_dir = tmp_path / "run"
         run_dir.mkdir()
         tracker = TokenTracker()
@@ -102,10 +102,10 @@ class TestExecuteStepProgress:
             PipelineStep("a", step_fn),
             PipelineStep("b", step_fn),
         ]
-        _execute(steps, ctx, step_offset=2, total_steps=5)
+        await _execute(steps, ctx, step_offset=2, total_steps=5)
         assert captured == [(2, 5), (3, 5)]
 
-    def test_sub_total_reset_between_steps(self, tmp_path):
+    async def test_sub_total_reset_between_steps(self, tmp_path):
         run_dir = tmp_path / "run"
         run_dir.mkdir()
         tracker = TokenTracker()
@@ -132,10 +132,10 @@ class TestExecuteStepProgress:
             PipelineStep("s1", step_one),
             PipelineStep("s2", step_two),
         ]
-        _execute(steps, ctx, step_offset=0, total_steps=2)
+        await _execute(steps, ctx, step_offset=0, total_steps=2)
         assert sub_totals_at_start == [(0, 0)]
 
-    def test_no_total_steps_skips_progress(self, tmp_path):
+    async def test_no_total_steps_skips_progress(self, tmp_path):
         run_dir = tmp_path / "run"
         run_dir.mkdir()
         tracker = TokenTracker()
@@ -152,7 +152,7 @@ class TestExecuteStepProgress:
         def noop(_ctx):
             pass
 
-        _execute([PipelineStep("x", noop)], ctx)
+        await _execute([PipelineStep("x", noop)], ctx)
         # step_count stays at default 0 when total_steps not provided
         assert tracker.step_count == 0
 

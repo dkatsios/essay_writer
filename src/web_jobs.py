@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
@@ -304,7 +305,15 @@ def run_pipeline_thread(
     is_academic_level_question_fn=is_academic_level_question,
     interaction_timeout_seconds_fn=interaction_timeout_seconds,
 ) -> None:
-    """Execute the essay pipeline in a background thread."""
+    """Execute the essay pipeline in a background thread.
+
+    Bridge pattern: ``asyncio.run()`` creates a *fresh* event loop isolated
+    from uvicorn's main-thread loop, so there are no cross-loop issues.
+    Blocking waits (``threading.Event``) are offloaded via
+    ``asyncio.to_thread`` so they don't stall the per-thread loop.
+    Long-term, this thread should be replaced by an ``asyncio.Task``
+    on uvicorn's loop once the interaction model is fully async.
+    """
     log_handler = None
     try:
         set_run_id(job.job_id)
@@ -338,6 +347,8 @@ def run_pipeline_thread(
         job.api_key = ""
         worker = create_client_fn(config.models.worker, api_key=api_key)
         async_worker = create_async_client_fn(config.models.worker, api_key=api_key)
+        async_writer = create_async_client_fn(config.models.writer, api_key=api_key)
+        async_reviewer = create_async_client_fn(config.models.reviewer, api_key=api_key)
         writer = create_client_fn(config.models.writer, api_key=api_key)
         reviewer = create_client_fn(config.models.reviewer, api_key=api_key)
 
@@ -345,7 +356,9 @@ def run_pipeline_thread(
         job.tracker = tracker
         tracker.set_on_progress(lambda: notify_job(job))
 
-        def _on_questions(questions: list[ValidationQuestion], run_path: Path) -> None:
+        async def _on_questions(
+            questions: list[ValidationQuestion], run_path: Path
+        ) -> None:
             remaining = questions
             auto_clarifications: list[Clarification] = []
             if job.academic_level:
@@ -390,7 +403,8 @@ def run_pipeline_thread(
             job.answers_event.clear()
             job.status = "questions"
             notify_job(job)
-            if not wait_for_job_signal(
+            if not await asyncio.to_thread(
+                wait_for_job_signal,
                 job,
                 job.answers_event,
                 error_message="Timed out waiting for clarification answers.",
@@ -417,7 +431,7 @@ def run_pipeline_thread(
             )
             job.questions = None
 
-        def _on_optional_pdfs(run_path: Path, items: list[dict]) -> None:
+        async def _on_optional_pdfs(run_path: Path, items: list[dict]) -> None:
             if not items or job.fast_track:
                 return
             job.optional_pdf_choices.clear()
@@ -428,7 +442,8 @@ def run_pipeline_thread(
             job.optional_pdf_event.clear()
             job.status = "optional_pdfs"
             notify_job(job)
-            if not wait_for_job_signal(
+            if not await asyncio.to_thread(
+                wait_for_job_signal,
                 job,
                 job.optional_pdf_event,
                 error_message="Timed out waiting for optional PDF input.",
@@ -438,13 +453,14 @@ def run_pipeline_thread(
             job.optional_pdf_items = None
             job.optional_pdf_allowed_ids = None
 
-        def _on_source_shortfall(run_path: Path, summary: dict) -> bool:
+        async def _on_source_shortfall(run_path: Path, summary: dict) -> bool:
             job.source_shortfall = summary
             job.source_shortfall_decision = ""
             job.source_shortfall_event.clear()
             job.status = "source_shortfall"
             notify_job(job)
-            if not wait_for_job_signal(
+            if not await asyncio.to_thread(
+                wait_for_job_signal,
                 job,
                 job.source_shortfall_event,
                 error_message="Timed out waiting for source shortfall decision.",
@@ -455,22 +471,26 @@ def run_pipeline_thread(
             job.source_shortfall = None
             return decision == "proceed"
 
-        run_pipeline_fn(
-            worker,
-            writer,
-            reviewer,
-            run_dir,
-            config,
-            extra_prompt=prompt,
-            token_tracker=tracker,
-            on_questions=_on_questions
-            if config.writing.interactive_validation
-            else None,
-            on_optional_source_pdfs=_on_optional_pdfs,
-            on_source_shortfall=_on_source_shortfall,
-            min_sources=min_sources,
-            user_sources_dir=user_sources_dir,
-            async_worker=async_worker,
+        asyncio.run(
+            run_pipeline_fn(
+                worker,
+                writer,
+                reviewer,
+                run_dir,
+                config,
+                extra_prompt=prompt,
+                token_tracker=tracker,
+                on_questions=_on_questions
+                if config.writing.interactive_validation
+                else None,
+                on_optional_source_pdfs=_on_optional_pdfs,
+                on_source_shortfall=_on_source_shortfall,
+                min_sources=min_sources,
+                user_sources_dir=user_sources_dir,
+                async_worker=async_worker,
+                async_writer=async_writer,
+                async_reviewer=async_reviewer,
+            )
         )
 
         tracker.write_report(run_dir)

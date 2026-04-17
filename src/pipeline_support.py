@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
+import inspect
 import json
 import logging
 import math
 import re
 from collections import Counter
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from pathlib import Path
 from time import monotonic
@@ -44,11 +45,13 @@ class PipelineContext:
     reviewer: ModelClient
     run_dir: Path
     config: EssayWriterConfig
+    async_writer: AsyncModelClient | None = None
+    async_reviewer: AsyncModelClient | None = None
     extra_prompt: str | None = None
     tracker: object | None = None
     user_sources_dir: Path | None = None
-    on_optional_source_pdfs: Callable[[Path, list[dict]], None] | None = None
-    on_source_shortfall: Callable[[Path, dict], bool] | None = None
+    on_optional_source_pdfs: Callable[[Path, list[dict]], Awaitable[None]] | None = None
+    on_source_shortfall: Callable[[Path, dict], Awaitable[bool]] | None = None
 
 
 @dataclass
@@ -71,7 +74,7 @@ class PipelineStep:
     """A named step in the pipeline."""
 
     name: str
-    fn: Callable[[PipelineContext], None]
+    fn: Callable[[PipelineContext], Awaitable[None]]
 
 
 def _load_checkpoint(run_dir: Path) -> set[str]:
@@ -98,7 +101,7 @@ def _save_checkpoint(run_dir: Path, step_name: str) -> None:
     )
 
 
-def _execute(
+async def _execute(
     steps: list[PipelineStep],
     ctx: PipelineContext,
     *,
@@ -124,7 +127,9 @@ def _execute(
             ctx.tracker.set_sub_total(0)
         start = monotonic()
         try:
-            step.fn(ctx)
+            result = step.fn(ctx)
+            if inspect.isawaitable(result):
+                await result
             duration = monotonic() - start
             logger.info("OK %s (%.1fs)", step.name, duration)
         except Exception:
@@ -216,6 +221,29 @@ def _text_call(
         )
 
     response = _retry_with_backoff(_do_call)
+    _record_usage(tracker, response)
+    return extract_text(response)
+
+
+async def _async_text_call(
+    client: AsyncModelClient,
+    system_prompt: str,
+    user_prompt: str,
+    tracker: object | None = None,
+) -> str:
+    """Async version of _text_call."""
+
+    async def _do_call():
+        return await client.client.chat.completions.create(
+            model=client.model,
+            response_model=None,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
+        )
+
+    response = await _retry_with_backoff(_do_call, is_async=True)
     _record_usage(tracker, response)
     return extract_text(response)
 

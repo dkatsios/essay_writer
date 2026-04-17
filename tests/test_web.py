@@ -178,8 +178,8 @@ def test_pipeline_thread_stops_after_question_timeout(tmp_path, monkeypatch):
         options = ["Yes", "No"]
         suggested_option_index = 0
 
-    def fake_run_pipeline(*args, **kwargs):
-        kwargs["on_questions"]([_Question()], Path(tmp_path))
+    async def fake_run_pipeline(*args, **kwargs):
+        await kwargs["on_questions"]([_Question()], Path(tmp_path))
         captured["continued"] = True
 
     monkeypatch.setattr("src.web.run_pipeline", fake_run_pipeline)
@@ -203,8 +203,8 @@ def test_pipeline_thread_stops_after_source_shortfall_timeout(tmp_path, monkeypa
     monkeypatch.setattr("src.web.create_async_client", lambda *args, **kwargs: object())
     monkeypatch.setattr("src.web_jobs.interaction_timeout_seconds", lambda: 0)
 
-    def fake_run_pipeline(*args, **kwargs):
-        kwargs["on_source_shortfall"](
+    async def fake_run_pipeline(*args, **kwargs):
+        await kwargs["on_source_shortfall"](
             Path(tmp_path),
             {
                 "usable_sources": 8,

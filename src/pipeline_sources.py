@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import logging
@@ -32,7 +33,6 @@ from src.pipeline_support import (
     _note_lexical_score,
     _parse_sections,
     _read_text,
-    _structured_call,
     _write_json,
 )
 
@@ -235,8 +235,12 @@ def _run_research_pass(
         _inject_user_sources(ctx.user_sources_dir, ctx.run_dir)
 
 
-def do_research(ctx: PipelineContext, fetch_sources: int) -> None:
-    _run_research_pass(
+async def do_research(ctx: PipelineContext, fetch_sources: int) -> None:
+    # _run_research_pass → run_research() uses its own ThreadPoolExecutor
+    # for concurrent HTTP requests; asyncio.to_thread offloads the whole
+    # blocking call so it doesn't stall the event loop.
+    await asyncio.to_thread(
+        _run_research_pass,
         ctx,
         fetch_sources,
         fetch_per_api=ctx.config.search.fetch_per_api,
@@ -717,19 +721,15 @@ def _read_registry(registry_path: Path) -> dict[str, dict]:
 def make_read_sources(
     target_sources: int,
     fetch_sources: int,
-) -> Callable[[PipelineContext], None]:
-    def _do_read_sources(ctx: PipelineContext) -> None:
-        import asyncio
-
+) -> Callable:
+    async def _do_read_sources(ctx: PipelineContext) -> None:
         registry_path = ctx.run_dir / "sources" / "registry.json"
         if not registry_path.exists():
             logger.warning("No registry.json found -- skipping source reading.")
             return
 
-        asyncio.run(
-            _async_read_sources_orchestration(
-                ctx, registry_path, target_sources, fetch_sources
-            )
+        await _async_read_sources_orchestration(
+            ctx, registry_path, target_sources, fetch_sources
         )
 
     return _do_read_sources
@@ -743,11 +743,9 @@ async def _async_read_sources_orchestration(
 ) -> None:
     """Core async orchestration for source reading.
 
-    Runs inside a single ``asyncio.run()`` call.  All async phases use
-    ``await`` directly; the sync recovery research pass is offloaded via
-    ``asyncio.to_thread``.
+    All async phases use ``await`` directly; the sync recovery research
+    pass is offloaded via ``asyncio.to_thread``.
     """
-    import asyncio
 
     min_body = ctx.config.search.optional_pdf_min_body_words
     batch_size = ctx.config.search.batch_score_size
@@ -773,7 +771,7 @@ async def _async_read_sources_orchestration(
         except Exception:
             pass
 
-    async_worker = ctx.async_worker or ctx.worker.to_async()
+    async_worker = ctx.async_worker
 
     # -- Orchestration -------------------------------------------------
 
@@ -1018,7 +1016,7 @@ async def _async_read_sources_orchestration(
             for source_id in prompt_ids
         }
         if ctx.on_optional_source_pdfs:
-            ctx.on_optional_source_pdfs(ctx.run_dir, items)
+            await ctx.on_optional_source_pdfs(ctx.run_dir, items)
         else:
             _cli_optional_pdf_hint(ctx.run_dir, items)
 
@@ -1081,7 +1079,7 @@ async def _async_read_sources_orchestration(
             target_sources,
         )
         if ctx.on_source_shortfall is not None:
-            proceed = ctx.on_source_shortfall(
+            proceed = await ctx.on_source_shortfall(
                 ctx.run_dir,
                 {
                     "usable_sources": len(selected_registry),
@@ -1098,7 +1096,7 @@ async def _async_read_sources_orchestration(
                 )
 
 
-def do_assign_sources(ctx: PipelineContext) -> None:
+async def do_assign_sources(ctx: PipelineContext) -> None:
     plan_json = _read_text(ctx.run_dir / "plan" / "plan.json")
     source_notes = _load_selected_source_notes(ctx.run_dir)
     if not source_notes:
@@ -1113,7 +1111,9 @@ def do_assign_sources(ctx: PipelineContext) -> None:
         source_notes=source_notes,
         min_per_section=min_per_section,
     )
-    result = _structured_call(ctx.worker, prompt, SourceAssignmentPlan, ctx.tracker)
+    result = await _async_structured_call(
+        ctx.async_worker, prompt, SourceAssignmentPlan, ctx.tracker
+    )
 
     assigned_ids: set[str] = set()
     for assignment in result.assignments:
