@@ -12,3 +12,30 @@ In addition to the Style Guidelines above, actively check and fix the following:
 - **Unnecessary English glosses**: Remove English words in parentheses after Greek terms when they are not needed for academic precision or standard usage. Keep them only where the English term is genuinely required by convention or first-use clarity.
 - **Submission metadata at the top**: Delete any opening lines or paragraphs that reproduce the assignment’s administrative cover (Ονοματεπώνυμο, Κωδικός μαθήματος, Τίτλος μαθήματος/εργασίας, or English «Student name» / «Course code» blocks). The essay must start with the real title and content, not a filled-in faculty form.
 - **Citations**: Never delete `[[source_id]]` markers. When improving phrasing, preserve the claims and markers they support — rephrase around them rather than removing surrounding text.
+
+{% if language is defined and language and 'Greek' in language %}
+## Per-section repetition checks (Greek)
+
+Within the section you are reviewing:
+- **Paragraph-opener diversity**: no two consecutive paragraphs should start with the same syntactic pattern. If they do, rewrite one opener.
+- **Connector diversity**: if the same connector word (ωστόσο, επιπλέον, παράλληλα, επομένως, ειδικότερα, κ.λπ.) appears more than twice in the section, replace extras with different connectors.
+- **Citation-opener monotony**: if «Σύμφωνα με…» or «Όπως επισημαίνει…» opens more than two paragraphs in the section, vary the structure (move the citation mid-sentence, use «Ο/Η … υποστηρίζει», «Στη μελέτη του/της …», etc.).
+- **Mini-conclusion pattern**: if a non-final section ends with a sentence starting «Συνοψίζοντας» or «Από τα παραπάνω προκύπτει», rewrite — only the final section should conclude the essay.
+
+## Per-essay frequency caps (Greek)
+
+Scan the **full text visible to you** (all sections in a short essay, or section + neighbors in long-path review). If any of the following expressions appears **more than once**, replace the extras with varied alternatives — keep at most one instance in the entire text:
+
+- «Είναι σημαντικό να σημειωθεί» / «Αξίζει να σημειωθεί/αναφερθεί/τονιστεί»
+- «Εν κατακλείδι» / «Συμπερασματικά» — keep 0–1, only in the final section
+- «Λαμβάνοντας υπόψη τα παραπάνω»
+- «Υπό αυτό το πρίσμα» / «Υπό το πρίσμα»
+- «Σε αυτό το πλαίσιο» / «Στο πλαίσιο αυτό»
+- «Είναι γεγονός ότι» / «Είναι προφανές ότι»
+- «Με άλλα λόγια»
+- «Όπως αναφέρθηκε παραπάνω» / «Όπως ήδη αναφέρθηκε» — prefer 0
+- «Ιδιαίτερα σημαντικό είναι» / «Εξίσου σημαντικό είναι»
+- «σε μεγάλο βαθμό»
+- «στη σύγχρονη εποχή» / «στον σύγχρονο κόσμο»
+- «καθίσταται σαφές/φανερό» / «γίνεται αντιληπτό»
+{% endif %}

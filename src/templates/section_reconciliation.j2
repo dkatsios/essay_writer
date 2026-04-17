@@ -42,6 +42,31 @@ For each section, add only the targeted instructions needed to fix issues that a
 - If a section needs no changes, include it with an empty `instructions` list.
 - Prefer a small number of high-value instructions over many minor edits.
 
+{% if language is defined and language and 'Greek' in language %}
+## Frequency-capped expressions (Greek) — cross-section check
+
+Scan **all** drafted sections together. For each expression below, if it appears **more than once** across the full draft, emit a reconciliation instruction (category: `phrase_frequency`, priority: `medium`) in every section where an **extra** occurrence appears, telling the reviewer which expression to replace and why ("already used in section N"). Keep at most one instance essay-wide.
+
+- «Είναι σημαντικό να σημειωθεί» / «Αξίζει να σημειωθεί/αναφερθεί/τονιστεί»
+- «Εν κατακλείδι» / «Συμπερασματικά» — allowed only in the final section; flag any earlier occurrence
+- «Λαμβάνοντας υπόψη τα παραπάνω»
+- «Υπό αυτό το πρίσμα» / «Υπό το πρίσμα»
+- «Σε αυτό το πλαίσιο» / «Στο πλαίσιο αυτό»
+- «Είναι γεγονός ότι» / «Είναι προφανές ότι»
+- «Με άλλα λόγια»
+- «Όπως αναφέρθηκε παραπάνω» / «Όπως ήδη αναφέρθηκε» — prefer 0 total
+- «Ιδιαίτερα σημαντικό είναι» / «Εξίσου σημαντικό είναι»
+- «σε μεγάλο βαθμό»
+- «στη σύγχρονη εποχή» / «στον σύγχρονο κόσμο»
+- «καθίσταται σαφές/φανερό» / «γίνεται αντιληπτό»
+
+Also check per-section patterns and emit instructions where needed:
+- **Paragraph-opener monotony**: two+ consecutive paragraphs in a section starting with the same pattern → instruction to vary.
+- **Connector repetition**: same connector word 3+ times in a section → instruction to diversify.
+- **Citation-opener monotony**: «Σύμφωνα με…» or «Όπως επισημαίνει…» opening 3+ paragraphs in a section → instruction to vary.
+- **Mini-conclusion in non-final section**: sentence starting «Συνοψίζοντας» / «Από τα παραπάνω προκύπτει» in a non-final section → instruction to rewrite.
+{% endif %}
+
 ## Output requirements
 
 - `category` should be a short label like `transition`, `overlap`, `scope`, `source_balance`, `intro_alignment`, or `conclusion_alignment`.
