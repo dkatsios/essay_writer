@@ -566,7 +566,7 @@
           clarificationsHistoryHtml +
           '<p>✅ Essay generated!</p>' +
           '<button type="button" class="download-link" id="download-btn">Download ZIP</button>' +
-          '<p class="hint">The server removes this package after you download it, or automatically after a timeout if you leave it here.</p>';
+          '<p class="hint">You can re-download as many times as you need. The server removes this package automatically after a timeout.</p>';
         submitBtn.disabled = false;
         const dl = document.getElementById('download-btn');
         if (dl) dl.addEventListener('click', () => { void downloadZip(); });
@@ -962,21 +962,10 @@
         document.body.appendChild(a);
         a.click();
         a.remove();
-        URL.revokeObjectURL(url);
-        const cleanupRes = await fetch(`/download/${currentJobId}/cleanup`, { method: 'POST' });
-        if (!cleanupRes.ok) {
-          statusArea.innerHTML =
-            clarificationsHistoryHtml +
-            '<p>✅ Download ready.</p>' +
-            '<p class="hint">Server cleanup did not complete. The job may remain available until automatic cleanup runs.</p>';
-          submitBtn.disabled = false;
-          return;
-        }
-        statusArea.innerHTML =
-          clarificationsHistoryHtml +
-          '<p>✅ Download ready. You can submit another essay when you are ready.</p>';
-        setActiveJobId(null);
-        submitBtn.disabled = false;
+        /* Don't revoke the blob URL or call cleanup immediately —
+           a.click() only opens the save dialog; the user may cancel.
+           Keep the download button active so they can re-download.
+           Server-side TTL sweep handles eventual artifact cleanup. */
       } catch (err) {
         showError('Download failed: ' + err.message);
       } finally {
