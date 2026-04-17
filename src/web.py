@@ -23,6 +23,7 @@ from src import web_jobs  # noqa: E402
 from src.agent import create_async_client, create_client  # noqa: E402
 from src.intake import build_extracted_text, scan  # noqa: E402
 from src.pipeline import run_pipeline  # noqa: E402
+from src.run_logging import configure_web_logging, run_id_context  # noqa: E402
 from src.runtime import parse_validation_answers  # noqa: E402
 
 logger = logging.getLogger(__name__)
@@ -68,6 +69,8 @@ def _run_pipeline_thread(
 
 @asynccontextmanager
 async def _lifespan(app: FastAPI):
+    configure_web_logging()
+    logger.info("Web application logging configured")
     web_jobs.start_job_ttl_sweeper()
     yield
 
@@ -134,6 +137,17 @@ async def submit(
     )
     _jobs[job_id] = job
 
+    with run_id_context(job_id):
+        logger.info(
+            "Job %s submitted (provider=%s, target_words=%s, min_sources=%s, files=%d, sources=%d)",
+            job_id,
+            provider_value or "default",
+            target_words_value,
+            min_sources_value,
+            len([file for file in files if file.filename]),
+            len([file for file in sources if file.filename]),
+        )
+
     upload_dir: Path | None = None
     if files and files[0].filename:
         upload_dir = run_dir / "uploads"
@@ -168,6 +182,9 @@ async def submit(
         daemon=True,
     )
     thread.start()
+
+    with run_id_context(job_id):
+        logger.info("Job %s background thread started", job_id)
 
     return JSONResponse({"job_id": job_id})
 
@@ -230,13 +247,19 @@ async def answer(job_id: str, answers: str = Form("")):
     if job.status != "questions":
         return JSONResponse({"error": "No pending questions"}, status_code=400)
 
-    job.answers = answers
-    web_jobs.append_clarification_round_for_ui(
-        job, answers, parse_validation_answers_fn=parse_validation_answers
-    )
-    job.status = "running"
-    _notify_job(job)
-    job.answers_event.set()
+    with run_id_context(job_id):
+        logger.info(
+            "Job %s received clarification answers for %d question(s)",
+            job_id,
+            len(job.questions or []),
+        )
+        job.answers = answers
+        web_jobs.append_clarification_round_for_ui(
+            job, answers, parse_validation_answers_fn=parse_validation_answers
+        )
+        job.status = "running"
+        _notify_job(job)
+        job.answers_event.set()
     return JSONResponse({"status": "ok"})
 
 
@@ -281,10 +304,17 @@ async def optional_pdf_upload(
             status_code=400,
         )
 
-    error = web_jobs.apply_optional_pdf_bytes(job, job_id, source_id_value, raw)
-    if error:
-        return JSONResponse({"error": error}, status_code=400)
-    job.optional_pdf_choices[source_id_value] = "url" if pdf_url_value else "file"
+    with run_id_context(job_id):
+        error = web_jobs.apply_optional_pdf_bytes(job, job_id, source_id_value, raw)
+        if error:
+            return JSONResponse({"error": error}, status_code=400)
+        job.optional_pdf_choices[source_id_value] = "url" if pdf_url_value else "file"
+        logger.info(
+            "Job %s attached optional PDF for source %s via %s",
+            job_id,
+            source_id_value,
+            "url" if pdf_url_value else "file",
+        )
     return JSONResponse({"status": "ok", "source_id": source_id_value})
 
 
@@ -297,10 +327,12 @@ async def optional_pdf_done(job_id: str):
     if job.status != "optional_pdfs":
         return JSONResponse({"error": "No optional PDF step active"}, status_code=400)
 
-    web_jobs.append_optional_pdf_round_for_ui(job)
-    job.status = "running"
-    _notify_job(job)
-    job.optional_pdf_event.set()
+    with run_id_context(job_id):
+        logger.info("Job %s completed optional PDF input step", job_id)
+        web_jobs.append_optional_pdf_round_for_ui(job)
+        job.status = "running"
+        _notify_job(job)
+        job.optional_pdf_event.set()
     return JSONResponse({"status": "ok"})
 
 
@@ -319,10 +351,12 @@ async def source_shortfall_decision(job_id: str, decision: str = Form("")):
     if choice not in {"proceed", "cancel"}:
         return JSONResponse({"error": "Invalid decision"}, status_code=400)
 
-    job.source_shortfall_decision = choice
-    job.status = "running"
-    _notify_job(job)
-    job.source_shortfall_event.set()
+    with run_id_context(job_id):
+        logger.info("Job %s source shortfall decision: %s", job_id, choice)
+        job.source_shortfall_decision = choice
+        job.status = "running"
+        _notify_job(job)
+        job.source_shortfall_event.set()
     return JSONResponse({"status": "ok", "decision": choice})
 
 
@@ -335,7 +369,9 @@ async def download(job_id: str):
     if job.status != "done":
         return JSONResponse({"error": "Job not ready"}, status_code=400)
 
-    buffer = web_jobs.build_zip(job.run_dir)
+    with run_id_context(job_id):
+        logger.info("Job %s download requested", job_id)
+        buffer = web_jobs.build_zip(job.run_dir)
 
     def _iter_zip():
         try:
@@ -359,5 +395,7 @@ async def cleanup_download(job_id: str):
         return JSONResponse({"error": "Job not found"}, status_code=404)
     if job.status != "done":
         return JSONResponse({"error": "Job not ready"}, status_code=400)
-    web_jobs.delete_job_artifacts(job_id)
+    with run_id_context(job_id):
+        logger.info("Job %s cleanup requested", job_id)
+        web_jobs.delete_job_artifacts(job_id)
     return JSONResponse({"status": "ok"})

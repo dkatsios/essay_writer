@@ -1,6 +1,7 @@
 """Smoke tests for the FastAPI web app."""
 
 import json
+import logging
 import threading
 import time
 import zipfile
@@ -24,10 +25,46 @@ from src.web_jobs import wait_for_job_signal as _wait_for_job_signal
 client = TestClient(app)
 
 
+def _essay_console_handlers() -> list[logging.Handler]:
+    return [
+        handler
+        for handler in logging.getLogger("src").handlers
+        if getattr(handler, "_essay_web_console_handler", False)
+    ]
+
+
 def test_health():
     response = client.get("/health")
     assert response.status_code == 200
     assert response.json() == {"status": "ok"}
+
+
+def test_web_logging_bootstrap_is_idempotent():
+    from src.run_logging import configure_web_logging
+
+    configure_web_logging()
+    configure_web_logging()
+
+    assert len(_essay_console_handlers()) == 1
+
+
+def test_run_logging_captures_root_warnings_and_skips_access_log(tmp_path):
+    from src.run_logging import run_id_context, setup_run_logging, teardown_run_logging
+
+    run_dir = Path(tmp_path)
+    with run_id_context("job123"):
+        handler = setup_run_logging(run_dir, "job123")
+        try:
+            logging.getLogger("src.test").info("pipeline step visible")
+            logging.getLogger("openai").warning("provider warning visible")
+            logging.getLogger("uvicorn.access").info("GET /submit 200")
+        finally:
+            teardown_run_logging(handler)
+
+    content = (run_dir / "run.log").read_text(encoding="utf-8")
+    assert "pipeline step visible" in content
+    assert "provider warning visible" in content
+    assert "GET /submit 200" not in content
 
 
 def test_download_keeps_job_until_cleanup(tmp_path):

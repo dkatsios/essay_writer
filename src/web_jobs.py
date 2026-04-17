@@ -22,8 +22,7 @@ from src.runtime import TokenTracker
 from src.schemas import AssignmentBrief, Clarification, ValidationQuestion
 from src.pipeline_sources import SourceShortfallAbort
 from src.run_logging import (
-    clear_run_id,
-    set_run_id,
+    run_id_context,
     setup_run_logging,
     teardown_run_logging,
 )
@@ -204,6 +203,7 @@ def _job_sweep_interval_seconds() -> int:
 
 
 def set_job_error(job: Job, message: str) -> None:
+    logger.error("Job %s failed: %s", job.job_id, message)
     job.questions = None
     job.optional_pdf_items = None
     job.optional_pdf_allowed_ids = None
@@ -315,200 +315,237 @@ def run_pipeline_thread(
     on uvicorn's loop once the interaction model is fully async.
     """
     log_handler = None
-    try:
-        set_run_id(job.job_id)
-        log_handler = setup_run_logging(job.run_dir, job.job_id)
+    with run_id_context(job.job_id):
+        try:
+            log_handler = setup_run_logging(job.run_dir, job.job_id)
+            logger.info(
+                "Job %s started (provider=%s, target_words=%s, min_sources=%s)",
+                job.job_id,
+                job.provider or "default",
+                job.target_words,
+                min_sources,
+            )
 
-        config = load_config_fn()
+            config = load_config_fn()
 
-        if job.provider:
-            config.models = models_config_cls(provider=job.provider)
+            if job.provider:
+                config.models = models_config_cls(provider=job.provider)
 
-        run_dir = job.run_dir
-        input_dir = run_dir / "input"
-        input_dir.mkdir(parents=True, exist_ok=True)
+            run_dir = job.run_dir
+            input_dir = run_dir / "input"
+            input_dir.mkdir(parents=True, exist_ok=True)
 
-        if upload_dir and any(upload_dir.iterdir()):
-            input_files = scan_fn(str(upload_dir))
-            extracted_text = build_extracted_text_fn(input_files, extra_prompt=prompt)
-            del input_files
-        elif prompt:
-            extracted_text = f"# Assignment\n\n{prompt}\n"
-        else:
-            job.status = "error"
-            job.error = "Provide at least a prompt or upload files."
-            job.finished_at = time.time()
-            notify_job(job)
-            return
+            if upload_dir and any(upload_dir.iterdir()):
+                input_files = scan_fn(str(upload_dir))
+                extracted_text = build_extracted_text_fn(
+                    input_files, extra_prompt=prompt
+                )
+                del input_files
+            elif prompt:
+                extracted_text = f"# Assignment\n\n{prompt}\n"
+            else:
+                job.status = "error"
+                job.error = "Provide at least a prompt or upload files."
+                job.finished_at = time.time()
+                notify_job(job)
+                return
 
-        (input_dir / "extracted.md").write_text(extracted_text, encoding="utf-8")
+            (input_dir / "extracted.md").write_text(extracted_text, encoding="utf-8")
 
-        api_key = job.api_key or None
-        job.api_key = ""
-        worker = create_client_fn(config.models.worker, api_key=api_key)
-        async_worker = create_async_client_fn(config.models.worker, api_key=api_key)
-        async_writer = create_async_client_fn(config.models.writer, api_key=api_key)
-        async_reviewer = create_async_client_fn(config.models.reviewer, api_key=api_key)
-        writer = create_client_fn(config.models.writer, api_key=api_key)
-        reviewer = create_client_fn(config.models.reviewer, api_key=api_key)
+            api_key = job.api_key or None
+            job.api_key = ""
+            worker = create_client_fn(config.models.worker, api_key=api_key)
+            async_worker = create_async_client_fn(config.models.worker, api_key=api_key)
+            async_writer = create_async_client_fn(config.models.writer, api_key=api_key)
+            async_reviewer = create_async_client_fn(
+                config.models.reviewer, api_key=api_key
+            )
+            writer = create_client_fn(config.models.writer, api_key=api_key)
+            reviewer = create_client_fn(config.models.reviewer, api_key=api_key)
 
-        tracker = TokenTracker()
-        job.tracker = tracker
-        tracker.set_on_progress(lambda: notify_job(job))
+            tracker = TokenTracker()
+            job.tracker = tracker
+            tracker.set_on_progress(lambda: notify_job(job))
 
-        async def _on_questions(
-            questions: list[ValidationQuestion], run_path: Path
-        ) -> None:
-            remaining = questions
-            auto_clarifications: list[Clarification] = []
-            if job.academic_level:
-                remaining = []
-                for question in questions:
-                    if is_academic_level_question_fn(question):
-                        auto_clarifications.append(
-                            Clarification(
-                                question=question.question,
-                                answer=job.academic_level,
+            async def _on_questions(
+                questions: list[ValidationQuestion], run_path: Path
+            ) -> None:
+                remaining = questions
+                auto_clarifications: list[Clarification] = []
+                if job.academic_level:
+                    remaining = []
+                    for question in questions:
+                        if is_academic_level_question_fn(question):
+                            auto_clarifications.append(
+                                Clarification(
+                                    question=question.question,
+                                    answer=job.academic_level,
+                                )
                             )
-                        )
-                    else:
-                        remaining.append(question)
+                        else:
+                            remaining.append(question)
 
-            if auto_clarifications:
+                if auto_clarifications:
+                    brief_path = run_path / "brief" / "assignment.json"
+                    brief = AssignmentBrief.model_validate_json(
+                        brief_path.read_text(encoding="utf-8")
+                    )
+                    if brief.clarifications is None:
+                        brief.clarifications = []
+                    brief.clarifications.extend(auto_clarifications)
+                    if not brief.academic_level:
+                        brief.academic_level = job.academic_level
+                    brief_path.write_text(
+                        brief.model_dump_json(indent=2, ensure_ascii=False),
+                        encoding="utf-8",
+                    )
+
+                if not remaining:
+                    return
+
+                job.questions = [
+                    {
+                        "question": question.question,
+                        "options": question.options,
+                        "suggested_option_index": question.suggested_option_index,
+                    }
+                    for question in remaining
+                ]
+                job.answers_event.clear()
+                job.status = "questions"
+                logger.info(
+                    "Job %s waiting for %d clarification question(s)",
+                    job.job_id,
+                    len(remaining),
+                )
+                notify_job(job)
+                if not await asyncio.to_thread(
+                    wait_for_job_signal,
+                    job,
+                    job.answers_event,
+                    error_message="Timed out waiting for clarification answers.",
+                    interaction_timeout_seconds_fn=interaction_timeout_seconds_fn,
+                ):
+                    raise JobInteractionTimeout()
+
+                if not job.answers:
+                    logger.info("Job %s clarification step skipped", job.job_id)
+                    job.questions = None
+                    return
+
                 brief_path = run_path / "brief" / "assignment.json"
                 brief = AssignmentBrief.model_validate_json(
                     brief_path.read_text(encoding="utf-8")
                 )
                 if brief.clarifications is None:
                     brief.clarifications = []
-                brief.clarifications.extend(auto_clarifications)
-                if not brief.academic_level:
-                    brief.academic_level = job.academic_level
+                brief.clarifications.extend(
+                    parse_validation_answers_fn(remaining, job.answers)
+                )
                 brief_path.write_text(
                     brief.model_dump_json(indent=2, ensure_ascii=False),
                     encoding="utf-8",
                 )
-
-            if not remaining:
-                return
-
-            job.questions = [
-                {
-                    "question": question.question,
-                    "options": question.options,
-                    "suggested_option_index": question.suggested_option_index,
-                }
-                for question in remaining
-            ]
-            job.answers_event.clear()
-            job.status = "questions"
-            notify_job(job)
-            if not await asyncio.to_thread(
-                wait_for_job_signal,
-                job,
-                job.answers_event,
-                error_message="Timed out waiting for clarification answers.",
-                interaction_timeout_seconds_fn=interaction_timeout_seconds_fn,
-            ):
-                raise JobInteractionTimeout()
-
-            if not job.answers:
+                logger.info("Job %s clarification answers saved", job.job_id)
                 job.questions = None
-                return
 
-            brief_path = run_path / "brief" / "assignment.json"
-            brief = AssignmentBrief.model_validate_json(
-                brief_path.read_text(encoding="utf-8")
-            )
-            if brief.clarifications is None:
-                brief.clarifications = []
-            brief.clarifications.extend(
-                parse_validation_answers_fn(remaining, job.answers)
-            )
-            brief_path.write_text(
-                brief.model_dump_json(indent=2, ensure_ascii=False),
-                encoding="utf-8",
-            )
-            job.questions = None
+            async def _on_optional_pdfs(run_path: Path, items: list[dict]) -> None:
+                if not items:
+                    return
+                if job.fast_track:
+                    logger.info(
+                        "Job %s skipped optional PDF prompt due to fast_track",
+                        job.job_id,
+                    )
+                    return
+                job.optional_pdf_choices.clear()
+                job.optional_pdf_items = items
+                job.optional_pdf_allowed_ids = frozenset(
+                    str(item["source_id"]) for item in items
+                )
+                job.optional_pdf_event.clear()
+                job.status = "optional_pdfs"
+                logger.info(
+                    "Job %s waiting for optional PDFs for %d source(s)",
+                    job.job_id,
+                    len(items),
+                )
+                notify_job(job)
+                if not await asyncio.to_thread(
+                    wait_for_job_signal,
+                    job,
+                    job.optional_pdf_event,
+                    error_message="Timed out waiting for optional PDF input.",
+                    interaction_timeout_seconds_fn=interaction_timeout_seconds_fn,
+                ):
+                    raise JobInteractionTimeout()
+                job.optional_pdf_items = None
+                job.optional_pdf_allowed_ids = None
+                logger.info("Job %s optional PDF step resumed", job.job_id)
 
-        async def _on_optional_pdfs(run_path: Path, items: list[dict]) -> None:
-            if not items or job.fast_track:
-                return
-            job.optional_pdf_choices.clear()
-            job.optional_pdf_items = items
-            job.optional_pdf_allowed_ids = frozenset(
-                str(item["source_id"]) for item in items
+            async def _on_source_shortfall(run_path: Path, summary: dict) -> bool:
+                job.source_shortfall = summary
+                job.source_shortfall_decision = ""
+                job.source_shortfall_event.clear()
+                job.status = "source_shortfall"
+                logger.warning(
+                    "Job %s waiting for source shortfall decision (%s/%s usable sources)",
+                    job.job_id,
+                    summary.get("usable_sources"),
+                    summary.get("target_sources"),
+                )
+                notify_job(job)
+                if not await asyncio.to_thread(
+                    wait_for_job_signal,
+                    job,
+                    job.source_shortfall_event,
+                    error_message="Timed out waiting for source shortfall decision.",
+                    interaction_timeout_seconds_fn=interaction_timeout_seconds_fn,
+                ):
+                    raise JobInteractionTimeout()
+                decision = job.source_shortfall_decision.strip().lower()
+                job.source_shortfall = None
+                return decision == "proceed"
+
+            asyncio.run(
+                run_pipeline_fn(
+                    worker,
+                    writer,
+                    reviewer,
+                    run_dir,
+                    config,
+                    extra_prompt=prompt,
+                    token_tracker=tracker,
+                    on_questions=_on_questions
+                    if config.writing.interactive_validation
+                    else None,
+                    on_optional_source_pdfs=_on_optional_pdfs,
+                    on_source_shortfall=_on_source_shortfall,
+                    min_sources=min_sources,
+                    user_sources_dir=user_sources_dir,
+                    async_worker=async_worker,
+                    async_writer=async_writer,
+                    async_reviewer=async_reviewer,
+                )
             )
-            job.optional_pdf_event.clear()
-            job.status = "optional_pdfs"
+
+            tracker.write_report(run_dir)
+            job.status = "done"
+            job.finished_at = time.time()
+            logger.info("Job %s completed successfully", job.job_id)
             notify_job(job)
-            if not await asyncio.to_thread(
-                wait_for_job_signal,
-                job,
-                job.optional_pdf_event,
-                error_message="Timed out waiting for optional PDF input.",
-                interaction_timeout_seconds_fn=interaction_timeout_seconds_fn,
-            ):
-                raise JobInteractionTimeout()
-            job.optional_pdf_items = None
-            job.optional_pdf_allowed_ids = None
 
-        async def _on_source_shortfall(run_path: Path, summary: dict) -> bool:
-            job.source_shortfall = summary
-            job.source_shortfall_decision = ""
-            job.source_shortfall_event.clear()
-            job.status = "source_shortfall"
-            notify_job(job)
-            if not await asyncio.to_thread(
-                wait_for_job_signal,
-                job,
-                job.source_shortfall_event,
-                error_message="Timed out waiting for source shortfall decision.",
-                interaction_timeout_seconds_fn=interaction_timeout_seconds_fn,
-            ):
-                raise JobInteractionTimeout()
-            decision = job.source_shortfall_decision.strip().lower()
-            job.source_shortfall = None
-            return decision == "proceed"
-
-        asyncio.run(
-            run_pipeline_fn(
-                worker,
-                writer,
-                reviewer,
-                run_dir,
-                config,
-                extra_prompt=prompt,
-                token_tracker=tracker,
-                on_questions=_on_questions
-                if config.writing.interactive_validation
-                else None,
-                on_optional_source_pdfs=_on_optional_pdfs,
-                on_source_shortfall=_on_source_shortfall,
-                min_sources=min_sources,
-                user_sources_dir=user_sources_dir,
-                async_worker=async_worker,
-                async_writer=async_writer,
-                async_reviewer=async_reviewer,
-            )
-        )
-
-        tracker.write_report(run_dir)
-        job.status = "done"
-        job.finished_at = time.time()
-        notify_job(job)
-
-    except JobInteractionTimeout:
-        return
-    except SourceShortfallAbort as exc:
-        set_job_error(job, str(exc))
-    except Exception:
-        logger.exception("Pipeline failed for job %s", job.job_id)
-        set_job_error(job, "Pipeline failed. Check server logs for details.")
-    finally:
-        clear_run_id()
-        if log_handler is not None:
-            teardown_run_logging(log_handler)
+        except JobInteractionTimeout:
+            return
+        except SourceShortfallAbort as exc:
+            logger.warning("Job %s aborted after source shortfall: %s", job.job_id, exc)
+            set_job_error(job, str(exc))
+        except Exception:
+            logger.exception("Pipeline failed for job %s", job.job_id)
+            set_job_error(job, "Pipeline failed. Check server logs for details.")
+        finally:
+            if log_handler is not None:
+                teardown_run_logging(log_handler)
 
 
 def build_zip(run_dir: Path) -> BytesIO:
