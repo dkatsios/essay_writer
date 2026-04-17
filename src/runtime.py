@@ -49,6 +49,21 @@ def _model_short_name(full_name: str) -> str:
     return full_name
 
 
+def _step_cost(data: dict) -> float:
+    """Return the cost for one tracked step, skipping empty non-LLM rows."""
+    input_tokens = data["input_tokens"]
+    output_tokens = data["output_tokens"]
+    thinking_tokens = data["thinking_tokens"]
+    if not data["model"] and not (input_tokens or output_tokens or thinking_tokens):
+        return 0.0
+    return _calc_cost(
+        data["model"] or "unknown",
+        input_tokens,
+        output_tokens,
+        thinking_tokens,
+    )
+
+
 class TokenTracker:
     """Tracks LLM token usage per pipeline step."""
 
@@ -154,12 +169,7 @@ class TokenTracker:
 
         for step, data in self._steps.items():
             model = data["model"] or "unknown"
-            step_cost = _calc_cost(
-                model,
-                data["input_tokens"],
-                data["output_tokens"],
-                data["thinking_tokens"],
-            )
+            step_cost = _step_cost(data)
 
             dur = data["duration"]
             total_cost += step_cost
@@ -195,13 +205,7 @@ class TokenTracker:
         rows: list[tuple[str, dict, float]] = []
 
         for step, data in self._steps.items():
-            model = data["model"] or "unknown"
-            step_cost = _calc_cost(
-                model,
-                data["input_tokens"],
-                data["output_tokens"],
-                data["thinking_tokens"],
-            )
+            step_cost = _step_cost(data)
             rows.append((step, data, step_cost))
             total_cost += step_cost
             total_in += data["input_tokens"]

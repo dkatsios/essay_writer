@@ -6,6 +6,8 @@ import threading
 from pathlib import Path
 from unittest.mock import MagicMock
 
+import src.runtime as runtime_module
+
 from src.runtime import TokenTracker
 from src.pipeline_support import PipelineContext, PipelineStep, _execute
 from src.web_jobs import Job, build_status_payload
@@ -77,6 +79,23 @@ class TestTokenTrackerProgress:
         for t in threads:
             t.join()
         assert tracker.sub_done == 1000
+
+    def test_cost_summary_skips_calc_for_empty_non_llm_steps(self, monkeypatch):
+        tracker = TokenTracker()
+        tracker.record_duration("research", 14.0)
+        calls: list[str] = []
+
+        def fake_calc_cost(model, input_tokens, output_tokens, thinking_tokens=0):
+            calls.append(model)
+            return 0.0
+
+        monkeypatch.setattr(runtime_module, "_calc_cost", fake_calc_cost)
+
+        summary = tracker.cost_summary()
+
+        assert "research" in summary
+        assert "unknown" in summary
+        assert calls == []
 
 
 class TestExecuteStepProgress:
