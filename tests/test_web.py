@@ -92,6 +92,8 @@ def test_download_includes_full_run_contents(tmp_path):
     run_dir = Path(tmp_path) / "run"
     (run_dir / "sources" / "notes").mkdir(parents=True)
     (run_dir / "sources" / "registry.json").write_text("{}", encoding="utf-8")
+    (run_dir / "sources" / "triage.json").write_text("{}", encoding="utf-8")
+    (run_dir / "sources" / "scores.json").write_text("{}", encoding="utf-8")
     (run_dir / "sources" / "notes" / "source_a.json").write_text(
         '{"id": "source_a"}', encoding="utf-8"
     )
@@ -109,6 +111,8 @@ def test_download_includes_full_run_contents(tmp_path):
 
         assert "essay.docx" in names
         assert "sources/registry.json" in names
+        assert "sources/triage.json" in names
+        assert "sources/scores.json" in names
         assert "sources/notes/source_a.json" in names
     finally:
         _jobs.pop(job_id, None)

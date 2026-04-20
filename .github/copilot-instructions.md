@@ -83,6 +83,8 @@ Each run uses a directory with these subdirectories:
 - `plan/plan.json` — essay plan (Pydantic `EssayPlan`); each section may set `requires_full_context` for intro/conclusion/synthesis sections that should be drafted after the rest of the essay, and `deferred_order` to control the writing sequence among deferred sections
 - `plan/source_assignments.json` — source-to-section assignments (Pydantic `SourceAssignmentPlan`; long-path only)
 - `sources/registry.json` — source metadata (from `run_research()`)
+- `sources/triage.json` — title+abstract triage decisions for scorable API candidates (`triage_relevant` per source)
+- `sources/scores.json` — final 1–5 relevance scores for scored candidates plus `selected_for_writing`
 - `sources/notes/{source_id}.json` — reader notes for selected sources only (Pydantic `SourceNote`)
 - `sources/selected.json` — best N sources selected for the essay
 - `sources/user/` — user-provided source files and their extracted text

@@ -847,6 +847,50 @@ def _read_registry(registry_path: Path) -> dict[str, dict]:
     return json.loads(registry_path.read_text(encoding="utf-8"))
 
 
+def _write_source_decision_artifacts(
+    run_dir: Path,
+    registry: dict[str, dict],
+    triage_decisions: dict[str, bool],
+    scores: dict[str, int],
+    selected_ids: list[str],
+    *,
+    min_relevance_score: int,
+) -> None:
+    """Persist triage and scoring outputs as run artifacts under sources/."""
+    sources_dir = run_dir / "sources"
+    selected_id_set = set(selected_ids)
+
+    triage_payload = {
+        source_id: {
+            "title": (registry.get(source_id) or {}).get("title", ""),
+            "doi": (registry.get(source_id) or {}).get("doi", ""),
+            "triage_relevant": is_relevant,
+        }
+        for source_id, is_relevant in sorted(triage_decisions.items())
+    }
+    (sources_dir / "triage.json").write_text(
+        json.dumps(triage_payload, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+
+    score_payload = {
+        "min_relevance_score": min_relevance_score,
+        "scores": {
+            source_id: {
+                "title": (registry.get(source_id) or {}).get("title", ""),
+                "doi": (registry.get(source_id) or {}).get("doi", ""),
+                "relevance_score": score,
+                "selected_for_writing": source_id in selected_id_set,
+            }
+            for source_id, score in sorted(scores.items())
+        },
+    }
+    (sources_dir / "scores.json").write_text(
+        json.dumps(score_payload, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+
+
 def make_read_sources(
     target_sources: int,
     fetch_sources: int,
@@ -912,6 +956,7 @@ async def _async_read_sources_orchestration(
     # -- Orchestration -------------------------------------------------
 
     recovery_done = False
+    triage_decisions: dict[str, bool] = {}
     registry = _read_registry(registry_path)
 
     # Separate user sources from API sources
@@ -950,6 +995,12 @@ async def _async_read_sources_orchestration(
             tracker=ctx.tracker,
             batch_size=triage_batch_size,
             sections=plan_sections,
+        )
+        triage_decisions.update(
+            {
+                source["source_id"]: source["source_id"] in triaged_ids
+                for source in scorable
+            }
         )
         triaged = [source for source in scorable if source["source_id"] in triaged_ids]
         logger.info(
@@ -1089,6 +1140,12 @@ async def _async_read_sources_orchestration(
                     tracker=ctx.tracker,
                     batch_size=triage_batch_size,
                     sections=plan_sections,
+                )
+                triage_decisions.update(
+                    {
+                        source["source_id"]: source["source_id"] in triaged_new_ids
+                        for source in new_scorable
+                    }
                 )
                 new_scorable = [
                     source
@@ -1255,6 +1312,15 @@ async def _async_read_sources_orchestration(
             for sid, note in reread_results:
                 if note is not None and note.is_accessible and sid not in selected_ids:
                     selected_ids.append(sid)
+
+    _write_source_decision_artifacts(
+        ctx.run_dir,
+        registry,
+        triage_decisions,
+        scores,
+        selected_ids,
+        min_relevance_score=min_relevance_score,
+    )
 
     # Build selected registry subset and save
     selected_registry = {sid: registry[sid] for sid in selected_ids if sid in registry}
