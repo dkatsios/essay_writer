@@ -780,16 +780,19 @@
       optionalPdfUploaded = {};
       let html = clarificationsHistoryHtml;
       html += '<h3>Optional: upload full-text PDFs</h3>';
-      html += '<p class="hint">These sources were used with metadata or abstract only. Add a PDF from your device or paste a direct PDF link (e.g. open access). Optional.</p>';
+      html += '<p class="hint">These sources were used with metadata or abstract only. Download the PDF from one of the links below, then upload it here or paste a direct PDF URL. Optional.</p>';
       html += '<div class="clarification-pending optional-pdf-pending">';
       items.forEach((row, idx) => {
         const title = esc(row.title || row.source_id);
-        const doiUrl = row.doi_url ? esc(row.doi_url) : '';
-        const doiLabel = row.doi ? esc(row.doi) : '';
+        const articleUrl = row.article_url ? esc(row.article_url) : '';
+        const pdfUrl = row.pdf_url ? esc(row.pdf_url) : '';
         html += `<div class="optional-pdf-row" data-idx="${idx}">`;
         html += `<h4>${title}</h4>`;
-        if (doiUrl) {
-          html += `<div class="doi-line"><a href="${doiUrl}" target="_blank" rel="noopener noreferrer">DOI: ${doiLabel || doiUrl}</a></div>`;
+        if (articleUrl) {
+          html += `<div class="doi-line"><strong>Article page:</strong> <a href="${articleUrl}" target="_blank" rel="noopener noreferrer">${articleUrl}</a></div>`;
+        }
+        if (pdfUrl) {
+          html += `<div class="doi-line"><strong>PDF URL:</strong> <a href="${pdfUrl}" target="_blank" rel="noopener noreferrer">${pdfUrl}</a></div>`;
         }
         html += `<div class="upload-row">`;
         html += `<input type="file" accept=".pdf,application/pdf" class="opt-pdf-file" data-idx="${idx}" title="PDF file" />`;

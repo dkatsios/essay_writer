@@ -119,6 +119,40 @@ def _doi_href(doi: str) -> str | None:
     return f"https://doi.org/{doi_value}"
 
 
+def _article_href(doi: str, url: str, pdf_url: str) -> str | None:
+    doi_url = _doi_href(doi)
+    if doi_url:
+        return doi_url
+
+    article_url = (url or "").strip()
+    direct_pdf_url = (pdf_url or "").strip()
+    if article_url and article_url != direct_pdf_url:
+        host = urlparse(article_url).netloc.lower()
+        if host != "openalex.org":
+            return article_url
+
+    if not direct_pdf_url:
+        return article_url or None
+
+    parsed = urlparse(direct_pdf_url)
+    host = parsed.netloc.lower()
+    path = parsed.path
+    if host.endswith("onlinelibrary.wiley.com"):
+        for prefix in ("/doi/pdfdirect/", "/doi/pdf/", "/doi/epdf/"):
+            if path.startswith(prefix):
+                return (
+                    f"{parsed.scheme}://{parsed.netloc}/doi/{path.removeprefix(prefix)}"
+                )
+    if host.endswith("tandfonline.com"):
+        for prefix in ("/doi/pdf/", "/doi/epdf/"):
+            if path.startswith(prefix):
+                return f"{parsed.scheme}://{parsed.netloc}/doi/full/{path.removeprefix(prefix)}"
+    if host.endswith("journals.sagepub.com") and path.startswith("/doi/pdf/"):
+        return f"{parsed.scheme}://{parsed.netloc}/doi/{path.removeprefix('/doi/pdf/')}"
+
+    return article_url or None
+
+
 def _source_note_with_fulltext_flag(
     note: SourceNote, had_substantive_body: bool
 ) -> SourceNote:
@@ -560,12 +594,22 @@ def _build_optional_pdf_prompt_payload(
     items: list[dict] = []
     for source_id, meta, note, _, _ in chosen:
         raw_doi = (meta.get("doi", "") or note.doi or "").strip()
+        raw_pdf_url = (
+            meta.get("pdf_url", "") or meta.get("url", "") or note.url or ""
+        ).strip()
+        raw_article_url = _article_href(
+            raw_doi,
+            str(meta.get("url", "") or note.url or ""),
+            raw_pdf_url,
+        )
         items.append(
             {
                 "source_id": source_id,
                 "title": (meta.get("title") or note.title or source_id).strip(),
                 "doi": raw_doi,
                 "doi_url": _doi_href(raw_doi),
+                "pdf_url": raw_pdf_url or None,
+                "article_url": raw_article_url,
             }
         )
     return items, [item[0] for item in chosen]
@@ -584,6 +628,10 @@ def _log_optional_pdf_hint(run_dir: Path, items: list[dict]) -> None:
         logger.info("  • %s", f"{item.get('title', item['source_id'])}"[:200])
         if item.get("doi_url"):
             logger.info("    %s", item["doi_url"])
+        if item.get("article_url"):
+            logger.info("    article=%s", item["article_url"])
+        if item.get("pdf_url"):
+            logger.info("    pdf=%s", item["pdf_url"])
         logger.info("    id=%s", item["source_id"])
 
 
