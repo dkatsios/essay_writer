@@ -48,11 +48,11 @@ Write the COMPLETE essay following the plan structure above.
 - Write LONG, detailed paragraphs. Develop every argument fully.
 - Each section MUST meet its individual word target from the plan.
 
-{% include 'style_common.j2' %}
-
 ## Minimum distinct sources — CRITICAL
 - You MUST cite **at least {{ min_sources }}** different sources from the catalog (based on the selected usable source pool; still prefer citing **all** ids where relevant).
 - Spread citations across all sections — do NOT cluster them in one place.
+
+{% include 'style_common.j2' %}
 
 ## Writing Rules
 - Follow the section structure from the plan.
@@ -60,7 +60,7 @@ Write the COMPLETE essay following the plan structure above.
 - Preserve the plan's section boundaries and cover each planned section explicitly.
 - Headings must be plain text with `#` markers only — do NOT wrap headings in `**bold**` or `*italic*`.
 {% if language and 'Greek' in language %}
-- For **Greek** section headings, use sentence-style capitalisation (see *Greek — titles and `#` headings* above), not English Title Case — correct the plan’s headings if they look like the latter.
+- For **Greek** section headings, use sentence-style capitalisation (see the *Greek — titles and `#` headings* section), not English Title Case — correct the plan's headings if they look like the latter.
 {% endif %}
 - Use `[[source_id]]` citation markers: `Σύμφωνα με [[smith2020]], ...`
 - Page references: `[[source_id|σ. 45]]`
