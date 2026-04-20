@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import ast
 import json
+import re
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
@@ -28,6 +29,65 @@ def _parse_stringified_list_value(v: object) -> object:
         except (ValueError, SyntaxError):
             pass
     return v
+
+
+_GREEK_CHAR_RE = re.compile(r"[\u0370-\u03ff\u1f00-\u1fff]")
+_CONTEXT_DEPENDENT_OPTION_PATTERNS = (
+    re.compile(
+        r"^(?:all|both|either|same|combination|mix|mixed|hybrid)(?:\s+of)?(?:\s+the)?\s+(?:above|previous|these|those)\b",
+        re.IGNORECASE,
+    ),
+    re.compile(r"^(?:all|both)\b.*\b(?:above|previous)\b", re.IGNORECASE),
+    re.compile(
+        r"^(?:όλα|ολα|και\s+τα\s+δύο|και\s+τα\s+δυο|συνδυασμός|συνδυασμοσ|μίξη|μιξη|μεικτό|μεικτο|μεικτή|μεικτη)\b.*\b(?:παραπάνω|παραπανω|ανωτέρω|ανωτερω|προηγούμενα|προηγουμενα|προηγούμενο|προηγουμενο)\b",
+        re.IGNORECASE,
+    ),
+    re.compile(r"^(?:και\s+τα\s+δύο|και\s+τα\s+δυο)$", re.IGNORECASE),
+)
+
+
+def _is_context_dependent_option(text: str) -> bool:
+    normalized = " ".join((text or "").strip().split())
+    if not normalized:
+        return False
+    return any(
+        pattern.search(normalized) for pattern in _CONTEXT_DEPENDENT_OPTION_PATTERNS
+    )
+
+
+def _expand_context_dependent_option(
+    answer: str,
+    options: list[str],
+    *,
+    selected_index: int | None = None,
+) -> str:
+    normalized_answer = (answer or "").strip()
+    if not normalized_answer or not _is_context_dependent_option(normalized_answer):
+        return normalized_answer
+
+    if selected_index is None:
+        answer_key = " ".join(normalized_answer.casefold().split())
+        for index, option in enumerate(options):
+            option_key = " ".join((option or "").strip().casefold().split())
+            if option_key == answer_key:
+                selected_index = index
+                break
+
+    if selected_index is None or selected_index <= 0:
+        return normalized_answer
+
+    prior_options = [
+        (option or "").strip()
+        for option in options[:selected_index]
+        if (option or "").strip() and not _is_context_dependent_option(option)
+    ]
+    if len(prior_options) < 2:
+        return normalized_answer
+
+    separator = " / "
+    if any(_GREEK_CHAR_RE.search(option) for option in prior_options):
+        separator = " / "
+    return separator.join(prior_options)
 
 
 # -- Brief -----------------------------------------------------------------
@@ -86,6 +146,16 @@ class ValidationQuestion(BaseModel):
         default=0,
         description="0-based index into options for the recommended default.",
     )
+
+    @field_validator("options")
+    @classmethod
+    def _validate_options_are_standalone(cls, options: list[str]) -> list[str]:
+        for option in options:
+            if _is_context_dependent_option(option):
+                raise ValueError(
+                    "validation options must be standalone; avoid references like 'all of the above' or 'Συνδυασμός των παραπάνω'"
+                )
+        return options
 
     @model_validator(mode="after")
     def _clamp_suggested_option_index(self) -> ValidationQuestion:

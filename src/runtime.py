@@ -8,7 +8,11 @@ import re
 from collections.abc import Callable
 from pathlib import Path
 
-from src.schemas import Clarification, ValidationQuestion
+from src.schemas import (
+    Clarification,
+    ValidationQuestion,
+    _expand_context_dependent_option,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -381,10 +385,18 @@ def parse_validation_answers(
             continue
 
         resolved_answer = raw_answer
+        selected_option_index: int | None = None
         label = raw_answer[:1].lower()
         option_index = ord(label) - ord("a")
         if len(raw_answer) == 1 and 0 <= option_index < len(question.options):
             resolved_answer = question.options[option_index]
+            selected_option_index = option_index
+
+        resolved_answer = _expand_context_dependent_option(
+            resolved_answer,
+            question.options,
+            selected_index=selected_option_index,
+        )
 
         clarifications.append(
             Clarification(question=question.question, answer=resolved_answer)

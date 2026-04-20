@@ -801,6 +801,19 @@ class TestValidationQuestionSuggestedIndex:
         )
         assert q2.suggested_option_index == 0
 
+    def test_rejects_context_dependent_options(self):
+        from src.schemas import ValidationQuestion
+
+        with pytest.raises(ValueError, match="standalone"):
+            ValidationQuestion(
+                question="Σε ποιο επίπεδο;",
+                options=[
+                    "Μακρο-επίπεδο",
+                    "Μικρο-επίπεδο",
+                    "Συνδυασμός των παραπάνω",
+                ],
+            )
+
 
 class TestValidationClarifications:
     def test_parse_validation_answers_maps_letter_choices(self):
@@ -841,6 +854,33 @@ class TestValidationClarifications:
 
         assert len(clarifications) == 1
         assert clarifications[0].answer == "Focus on public policy implications"
+
+    def test_parse_validation_answers_expands_legacy_context_dependent_choice(self):
+        from src.runtime import parse_validation_answers
+        from src.schemas import _expand_context_dependent_option
+
+        question = type(
+            "LegacyValidationQuestion",
+            (),
+            {
+                "question": "Choose scope",
+                "options": ["Macro", "Micro", "Combination of the above"],
+            },
+        )()
+
+        clarifications = parse_validation_answers([question], "1. c")
+
+        assert len(clarifications) == 1
+        assert clarifications[0].answer == "Macro / Micro"
+
+        assert (
+            _expand_context_dependent_option(
+                "Συνδυασμός των παραπάνω",
+                ["Μακρο-επίπεδο", "Μικρο-επίπεδο", "Συνδυασμός των παραπάνω"],
+                selected_index=2,
+            )
+            == "Μακρο-επίπεδο / Μικρο-επίπεδο"
+        )
 
 
 class TestPricing:

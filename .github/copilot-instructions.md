@@ -150,7 +150,7 @@ No `default.yaml` exists; field defaults in `schemas.py` are canonical.
 - **Custom AI endpoint** — when `AI_BASE_URL` is set in `.env`, all models route through an OpenAI-compatible endpoint using `AI_API_KEY` and `AI_MODEL`.
 - **Deterministic export** — step 8 calls `build_document()` directly from Python. No LLM involved. Prefers `reviewed.md`, falls back to `draft.md`.
 - **Markdown table support** — `_parse_and_add_content()` detects standard markdown tables (pipe-delimited with `|---|` separator) and renders them as native Word tables via `doc.add_table()`. Writing templates instruct the LLM to use tables sparingly when they improve clarity.
-- **Validate step** — after intake, the worker evaluates the brief for significant gaps. If found, the `on_questions` callback receives those questions and the chosen answers are stored as structured `clarifications` in `assignment.json`, one entry per answered question.
+- **Validate step** — after intake, the worker evaluates the brief for significant gaps. If found, the `on_questions` callback receives those questions and the chosen answers are stored as structured `clarifications` in `assignment.json`, one entry per answered question. Validation options and persisted clarification answers must be standalone and self-explanatory; do not use options like "all of the above" / "Συνδυασμός των παραπάνω" that lose meaning once stored without the full choice list.
 - **Structured outputs** — brief, validation, plan, and source notes are JSON files validated by Pydantic models in `src/schemas.py`. Essays remain markdown.
 
 ### Test Fixtures
