@@ -103,7 +103,6 @@ def make_write_full(
 
         essay = await _async_text_call(
             ctx.async_writer,
-            f"You are an expert academic writer producing essays in {language}.",
             prompt,
             ctx.tracker,
         )
@@ -157,7 +156,6 @@ def make_review_full(
 
         reviewed = await _async_text_call(
             ctx.async_reviewer,
-            f"You are an expert academic editor polishing essays in {language}.",
             prompt,
             ctx.tracker,
         )
@@ -333,7 +331,6 @@ async def _write_section_draft(
     start = monotonic()
     text = await _async_text_call(
         ctx.async_writer,
-        f"You are an expert academic writer producing essays in {language}.",
         prompt,
         ctx.tracker,
     )
@@ -557,7 +554,6 @@ def make_review_sections(
             start = monotonic()
             reviewed = await _async_text_call(
                 ctx.async_reviewer,
-                f"You are an expert academic editor polishing essays in {language}.",
                 prompt,
                 ctx.tracker,
             )

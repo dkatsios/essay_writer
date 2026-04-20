@@ -780,7 +780,7 @@ class TestConfigBackedBehavior:
             language="English",
         )
 
-        assert "at least" in prompt.lower()
+        assert "at least" in prompt.user.lower()
 
 
 class TestValidationQuestionSuggestedIndex:
@@ -958,19 +958,23 @@ class TestExtractDocxText:
 
 
 class TestRendering:
-    def test_render_prompt_returns_string(self):
-        from src.rendering import render_prompt
+    def test_render_prompt_returns_prompt_pair(self):
+        from src.rendering import render_prompt, PromptPair
 
         # Test new per-task templates
         result = render_prompt(
             "intake.j2", extracted_text="Test content", extra_prompt=None
         )
-        assert isinstance(result, str)
-        assert len(result) > 0
+        assert isinstance(result, PromptPair)
+        assert result.system is not None
+        assert len(result.user) > 0
 
-        result = render_prompt("validate.j2", brief_json='{"topic": "test"}')
-        assert isinstance(result, str)
-        assert len(result) > 0
+        result = render_prompt(
+            "validate.j2", brief_json='{"topic": "test"}', language="English"
+        )
+        assert isinstance(result, PromptPair)
+        assert result.system is not None
+        assert len(result.user) > 0
 
     def test_cached_env_is_same_object(self):
         from src.rendering import _get_env
@@ -1099,7 +1103,7 @@ class TestSelectedSourceNotes:
 
         monkeypatch.setattr("src.pipeline_writing.render_prompt", fake_render_prompt)
 
-        async def _fake_async_text_call(_client, _system, _prompt, _tracker=None):
+        async def _fake_async_text_call(_client, _prompt, _tracker=None):
             return "essay body"
 
         monkeypatch.setattr(

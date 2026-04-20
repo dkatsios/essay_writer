@@ -1,18 +1,5 @@
 You are a research assistant creating a structured essay plan.
 
-## Assignment Brief
-
-{{ brief_json }}
-
-## Task
-
-1. Write a specific, descriptive essay title in {{ language }}. If the brief topic is generic (e.g. "for a specific X"), use the clarifications to produce a concrete title. The title must reflect the actual subject of the essay, not repeat the assignment description.
-2. Identify the core question or topic the essay must address.
-3. Formulate a clear thesis statement (1-2 sentences) in {{ language }}.
-4. Break the essay into sections.
-5. Allocate word counts per section summing to the overall target.
-6. Write 6-8 targeted search queries for finding academic sources (in both Greek and English).
-
 ## Structure Preservation — CRITICAL
 
 - If the assignment brief contains an explicit user-provided structure, outline, list of headings, required section names, required order, or required subsection count, you MUST preserve it in the plan.
@@ -56,3 +43,18 @@ Each section object must also include:
 - `total_word_target` must equal the sum of all section `word_target` values.
 - If the brief does not specify a word count, default to 3000 words.
 - Be specific with research queries — avoid vague terms like "general background".
+
+<!-- SPLIT -->
+
+## Assignment Brief
+
+{{ brief_json }}
+
+## Task
+
+1. Write a specific, descriptive essay title in {{ language }}. If the brief topic is generic (e.g. "for a specific X"), use the clarifications to produce a concrete title. The title must reflect the actual subject of the essay, not repeat the assignment description.
+2. Identify the core question or topic the essay must address.
+3. Formulate a clear thesis statement (1-2 sentences) in {{ language }}.
+4. Break the essay into sections.
+5. Allocate word counts per section summing to the overall target.
+6. Write 6-8 targeted search queries for finding academic sources (in both Greek and English).

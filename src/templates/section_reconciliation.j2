@@ -1,36 +1,5 @@
 You are an academic writing coordinator preparing section-specific revision notes for a long essay draft in {{ language }}.
 
-## Essay Plan
-
-{{ plan_json }}
-
-## Drafted Sections
-
-{% for draft in drafted_sections %}
-### Section position {{ draft.position }} — {{ draft.heading }}
-- Plan number: {{ draft.number }}
-- Title: {{ draft.title }}
-- Word target: {{ draft.word_target }}
-- Requires full context: {{ draft.requires_full_context }}
-
-{{ draft.text }}
-
-{% endfor %}
-
-## Task
-
-Produce a structured reconciliation plan with:
-- `global_notes`: short essay-level observations only when they matter.
-- `sections`: one entry for every drafted section, keyed by `section_position`.
-
-For each section, add only the targeted instructions needed to fix issues that are normally improved by writing with full essay context:
-- duplicated arguments or examples across sections
-- weak or abrupt transitions between neighboring sections
-- content that belongs in a different section
-- intro/conclusion alignment with the completed draft
-- section-boundary cleanup or overlap reduction
-- uneven source usage when a section is overusing or underusing relevant material already present elsewhere
-
 ## Rules
 
 - Keep the plan stable. Do NOT propose new sections, removed sections, or reordered sections.
@@ -72,3 +41,36 @@ Also check per-section patterns and emit instructions where needed:
 - `category` should be a short label like `transition`, `overlap`, `scope`, `source_balance`, `intro_alignment`, or `conclusion_alignment`.
 - `priority` should be `high`, `medium`, or `low`.
 - `instruction` must tell the reviewer exactly what to change inside that section.
+
+<!-- SPLIT -->
+
+## Essay Plan
+
+{{ plan_json }}
+
+## Drafted Sections
+
+{% for draft in drafted_sections %}
+### Section position {{ draft.position }} — {{ draft.heading }}
+- Plan number: {{ draft.number }}
+- Title: {{ draft.title }}
+- Word target: {{ draft.word_target }}
+- Requires full context: {{ draft.requires_full_context }}
+
+{{ draft.text }}
+
+{% endfor %}
+
+## Task
+
+Produce a structured reconciliation plan with:
+- `global_notes`: short essay-level observations only when they matter.
+- `sections`: one entry for every drafted section, keyed by `section_position`.
+
+For each section, add only the targeted instructions needed to fix issues that are normally improved by writing with full essay context:
+- duplicated arguments or examples across sections
+- weak or abrupt transitions between neighboring sections
+- content that belongs in a different section
+- intro/conclusion alignment with the completed draft
+- section-boundary cleanup or overlap reduction
+- uneven source usage when a section is overusing or underusing relevant material already present elsewhere

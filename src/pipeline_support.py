@@ -23,6 +23,7 @@ from src.agent import (
     extract_text,
     extract_usage,
 )
+from src.rendering import PromptPair
 from src.schemas import AssignmentBrief, EssayPlan, SourceNote
 
 if TYPE_CHECKING:
@@ -144,6 +145,17 @@ async def _execute(
         running_idx += 1
 
 
+def _build_messages(prompt: str | PromptPair) -> list[dict]:
+    """Build a chat messages list from a plain string or PromptPair."""
+    if isinstance(prompt, PromptPair):
+        msgs: list[dict] = []
+        if prompt.system:
+            msgs.append({"role": "system", "content": prompt.system})
+        msgs.append({"role": "user", "content": prompt.user})
+        return msgs
+    return [{"role": "user", "content": prompt}]
+
+
 def _record_usage(tracker: object | None, response) -> None:
     if tracker is None or response is None:
         return
@@ -156,19 +168,20 @@ def _record_usage(tracker: object | None, response) -> None:
 
 def _structured_call(
     client: ModelClient,
-    prompt: str,
+    prompt: str | PromptPair,
     schema: type[BaseModel],
     tracker: object | None = None,
     retries: int = _STRUCTURED_RETRIES,
 ) -> BaseModel:
     """Call a model with structured output."""
+    messages = _build_messages(prompt)
 
     def _do_call():
         return client.client.chat.completions.create(
             model=client.model,
             response_model=schema,
             max_retries=retries,
-            messages=[{"role": "user", "content": prompt}],
+            messages=messages,
         )
 
     result = _retry_with_backoff(_do_call)
@@ -180,19 +193,20 @@ def _structured_call(
 
 async def _async_structured_call(
     client: AsyncModelClient,
-    prompt: str,
+    prompt: str | PromptPair,
     schema: type[BaseModel],
     tracker: object | None = None,
     retries: int = _STRUCTURED_RETRIES,
 ) -> BaseModel:
     """Async version of _structured_call."""
+    messages = _build_messages(prompt)
 
     async def _do_call():
         return await client.client.chat.completions.create(
             model=client.model,
             response_model=schema,
             max_retries=retries,
-            messages=[{"role": "user", "content": prompt}],
+            messages=messages,
         )
 
     result = await _retry_with_backoff(_do_call, is_async=True)
@@ -204,20 +218,17 @@ async def _async_structured_call(
 
 def _text_call(
     client: ModelClient,
-    system_prompt: str,
-    user_prompt: str,
+    prompt: PromptPair,
     tracker: object | None = None,
 ) -> str:
     """Call a model for free-form text output."""
+    messages = _build_messages(prompt)
 
     def _do_call():
         return client.client.chat.completions.create(
             model=client.model,
             response_model=None,
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt},
-            ],
+            messages=messages,
         )
 
     response = _retry_with_backoff(_do_call)
@@ -227,20 +238,17 @@ def _text_call(
 
 async def _async_text_call(
     client: AsyncModelClient,
-    system_prompt: str,
-    user_prompt: str,
+    prompt: PromptPair,
     tracker: object | None = None,
 ) -> str:
     """Async version of _text_call."""
+    messages = _build_messages(prompt)
 
     async def _do_call():
         return await client.client.chat.completions.create(
             model=client.model,
             response_model=None,
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt},
-            ],
+            messages=messages,
         )
 
     response = await _retry_with_backoff(_do_call, is_async=True)

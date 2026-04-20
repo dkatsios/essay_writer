@@ -128,8 +128,8 @@ async def test_write_sections_keeps_duplicate_numbers_distinct(
 
     monkeypatch.setattr("src.pipeline_writing.render_prompt", fake_render_prompt)
 
-    async def _fake_async_text_call(_client, _system, user_prompt, _tracker=None):
-        return f"draft:{user_prompt}"
+    async def _fake_async_text_call(_client, prompt, _tracker=None):
+        return f"draft:{prompt}"
 
     monkeypatch.setattr("src.pipeline_writing._async_text_call", _fake_async_text_call)
 
@@ -186,8 +186,8 @@ async def test_review_sections_keeps_duplicate_numbers_distinct(
         lambda _template, **kwargs: kwargs["section"].title,
     )
 
-    async def _fake_async_text_call(_client, _system, user_prompt, _tracker=None):
-        return f"review:{user_prompt}"
+    async def _fake_async_text_call(_client, prompt, _tracker=None):
+        return f"review:{prompt}"
 
     monkeypatch.setattr("src.pipeline_writing._async_text_call", _fake_async_text_call)
 
@@ -283,8 +283,8 @@ async def test_review_sections_routes_reconciliation_notes_by_position(
 
     monkeypatch.setattr("src.pipeline_writing.render_prompt", fake_render_prompt)
 
-    async def _fake_async_text_call(_client, _system, user_prompt, _tracker=None):
-        return f"review:{user_prompt}"
+    async def _fake_async_text_call(_client, prompt, _tracker=None):
+        return f"review:{prompt}"
 
     monkeypatch.setattr("src.pipeline_writing._async_text_call", _fake_async_text_call)
 

@@ -1,26 +1,5 @@
 You are an expert academic editor reviewing a single essay section in {{ language }}.
 
-## Your Task
-
-Review and improve section {{ section.number }}: "{{ section.title }}"
-- **Word target**: {{ section.word_target }} words
-
-The section to review is between the `SECTION TO REVIEW` delimiters below. Adjacent sections are included for transition context only.
-Output ONLY the improved version of the target section — do NOT output adjacent sections.
-
-## Essay Context
-
-{{ full_essay }}
-
-{% if reconciliation_instructions %}
-## Reconciliation Notes For This Section
-
-Apply the following targeted fixes while keeping the section within its planned role and evidentiary boundaries:
-{% for item in reconciliation_instructions %}
-- [{{ item.priority }}][{{ item.category }}] {{ item.instruction }}{% if item.related_section_positions %} Related sections: {{ item.related_section_positions | join(', ') }}.{% endif %}{% if item.target_anchor %} Target anchor: "{{ item.target_anchor }}".{% endif %}
-{% endfor %}
-{% endif %}
-
 {% include 'style_common.j2' %}
 
 {% include 'style_review.j2' %}
@@ -41,7 +20,30 @@ Apply the following targeted fixes while keeping the section within its planned 
 - Do NOT add a References/Βιβλιογραφία section.
 - Do NOT add new arguments, claims, or elaboration not present in the draft unless a reconciliation note explicitly requires a short bridge or boundary fix supported by the existing draft context.
 {% if language and 'Greek' in language %}
-- **Exception**: You **may** rewrite `#` headings (and the section’s title line if present) **only** to fix Greek capitalisation — same meaning, sentence-style Greek. This is not “new content”.
+- **Exception**: You **may** rewrite `#` headings (and the section's title line if present) **only** to fix Greek capitalisation — same meaning, sentence-style Greek. This is not "new content".
+{% endif %}
+
+The section to review is between the `SECTION TO REVIEW` delimiters below. Adjacent sections are included for transition context only.
+Output ONLY the improved version of the target section — do NOT output adjacent sections.
+
+<!-- SPLIT -->
+
+## Your Task
+
+Review and improve section {{ section.number }}: "{{ section.title }}"
+- **Word target**: {{ section.word_target }} words
+
+## Essay Context
+
+{{ full_essay }}
+
+{% if reconciliation_instructions %}
+## Reconciliation Notes For This Section
+
+Apply the following targeted fixes while keeping the section within its planned role and evidentiary boundaries:
+{% for item in reconciliation_instructions %}
+- [{{ item.priority }}][{{ item.category }}] {{ item.instruction }}{% if item.related_section_positions %} Related sections: {{ item.related_section_positions | join(', ') }}.{% endif %}{% if item.target_anchor %} Target anchor: "{{ item.target_anchor }}".{% endif %}
+{% endfor %}
 {% endif %}
 
 ## Word Count — CRITICAL

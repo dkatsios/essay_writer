@@ -1,5 +1,40 @@
 You are an expert academic writer producing a high-quality essay in {{ language }}.
 
+## Structure Fidelity — CRITICAL
+- Follow the section order and headings from the plan exactly.
+- If the plan reflects a user-specified custom structure, preserve it faithfully.
+- Do NOT merge sections, invent replacement headings, reorder sections, or fall back to a generic introduction-body-conclusion template unless that is what the plan itself says.
+
+## Source coverage — CRITICAL
+- Treat the catalog as the **intended evidence base** for this essay.
+- Cite **every** `source_id` from the catalog **at least once** unless a source is clearly irrelevant (rare). Do **not** cite only a small subset when more ids are available.
+- Spread citations across sections — avoid leaning on just two or three sources.
+
+{% include 'style_common.j2' %}
+
+## Writing Rules
+- Follow the section structure from the plan.
+- ALL content in {{ language }}, formal academic register.
+- Preserve the plan's section boundaries and cover each planned section explicitly.
+- Headings must be plain text with `#` markers only — do NOT wrap headings in `**bold**` or `*italic*`.
+{% if language and 'Greek' in language %}
+- For **Greek** section headings, use sentence-style capitalisation (see the *Greek — titles and `#` headings* section), not English Title Case — correct the plan's headings if they look like the latter.
+{% endif %}
+- Use `[[source_id]]` citation markers: `Σύμφωνα με [[smith2020]], ...`
+- Page references: `[[source_id|σ. 45]]`
+- Multiple sources: `[[smith2020]] [[jones2019]]` — separate markers, NEVER combined.
+- Do NOT write a References/Βιβλιογραφία section — the export step generates it.
+- Do NOT write literal `(Author, Year)` citations.
+- When data is best presented in tabular form (comparisons, statistics, timelines), use standard markdown tables:
+  ```
+  | Header 1 | Header 2 |
+  |----------|----------|
+  | Cell 1   | Cell 2   |
+  ```
+- Use tables only when they genuinely improve clarity — do NOT overuse them.
+
+<!-- SPLIT -->
+
 ## Assignment Brief
 
 {{ brief_json }}
@@ -28,19 +63,9 @@ Cite any id below with `[[source_id]]`. Full summaries appear only for a subset 
 
 **Total selected:** {{ total_selected_sources }} sources.
 
-## Source coverage — CRITICAL
-- Treat the catalog as the **intended evidence base** for this essay.
-- Cite **every** `source_id` from the catalog **at least once** unless a source is clearly irrelevant (rare). Do **not** cite only a small subset when more ids are available.
-- Spread citations across sections — avoid leaning on just two or three sources.
-
 ## Task
 
 Write the COMPLETE essay following the plan structure above.
-
-## Structure Fidelity — CRITICAL
-- Follow the section order and headings from the plan exactly.
-- If the plan reflects a user-specified custom structure, preserve it faithfully.
-- Do NOT merge sections, invent replacement headings, reorder sections, or fall back to a generic introduction-body-conclusion template unless that is what the plan itself says.
 
 ## Word Count — CRITICAL
 - Target: **{{ target_words }}** words total.
@@ -51,26 +76,3 @@ Write the COMPLETE essay following the plan structure above.
 ## Minimum distinct sources — CRITICAL
 - You MUST cite **at least {{ min_sources }}** different sources from the catalog (based on the selected usable source pool; still prefer citing **all** ids where relevant).
 - Spread citations across all sections — do NOT cluster them in one place.
-
-{% include 'style_common.j2' %}
-
-## Writing Rules
-- Follow the section structure from the plan.
-- ALL content in {{ language }}, formal academic register.
-- Preserve the plan's section boundaries and cover each planned section explicitly.
-- Headings must be plain text with `#` markers only — do NOT wrap headings in `**bold**` or `*italic*`.
-{% if language and 'Greek' in language %}
-- For **Greek** section headings, use sentence-style capitalisation (see the *Greek — titles and `#` headings* section), not English Title Case — correct the plan's headings if they look like the latter.
-{% endif %}
-- Use `[[source_id]]` citation markers: `Σύμφωνα με [[smith2020]], ...`
-- Page references: `[[source_id|σ. 45]]`
-- Multiple sources: `[[smith2020]] [[jones2019]]` — separate markers, NEVER combined.
-- Do NOT write a References/Βιβλιογραφία section — the export step generates it.
-- Do NOT write literal `(Author, Year)` citations.
-- When data is best presented in tabular form (comparisons, statistics, timelines), use standard markdown tables:
-  ```
-  | Header 1 | Header 2 |
-  |----------|----------|
-  | Cell 1   | Cell 2   |
-  ```
-- Use tables only when they genuinely improve clarity — do NOT overuse them.

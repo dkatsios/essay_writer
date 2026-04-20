@@ -57,7 +57,7 @@ All tool calls (research, URL fetching, PDF reading) are plain Python functions 
 
 ### Templates (per-task Jinja2)
 
-11 templates in `src/templates/`, one per pipeline task. Each template receives specific context variables and renders the complete prompt for that step:
+11 templates in `src/templates/`, one per pipeline task. Each template contains a `<!-- SPLIT -->` marker that separates **system instructions** (role identity, behavioral rules, style guidelines) from **user content** (variable data, task description). `render_prompt()` returns a `PromptPair(system, user)` namedtuple; the pipeline helpers route these into separate `system` and `user` messages in the API call. Templates without a marker produce `system=None` (user-only message).
 
 | Template | Context variables | Output |
 |----------|-------------------|--------|
@@ -120,8 +120,8 @@ No `default.yaml` exists; field defaults in `schemas.py` are canonical.
 ### Key Invariants
 
 - **Deterministic pipeline** — `src/pipeline.py` builds and runs the step sequence, while `src/pipeline_support.py`, `src/pipeline_sources.py`, and `src/pipeline_writing.py` hold the shared helpers and phase-specific implementations. No LLM decides the flow. Steps 1–5 use the worker model; step 6 uses the writer model; step 7 uses the reviewer model; step 8 is pure Python.
-- **Direct model calls** — no agent framework. `_structured_call()` uses Instructor `client.chat.completions.create(response_model=Schema)` for JSON steps with auto-retry on validation failure. `_text_call()` uses OpenAI SDK `client.chat.completions.create()` for text steps.
-- **Jinja2 templates** (`src/templates/*.j2`) render prompts. 11 templates, one per pipeline task.
+- **Direct model calls** — no agent framework. `_structured_call()` uses Instructor `client.chat.completions.create(response_model=Schema)` for JSON steps with auto-retry on validation failure. `_text_call()` uses OpenAI SDK `client.chat.completions.create()` for text steps. Both accept a `PromptPair` (or plain `str`) and route `system`/`user` into separate messages via `_build_messages()`.
+- **Jinja2 templates** (`src/templates/*.j2`) render prompts. 11 templates, one per pipeline task. Each uses a `<!-- SPLIT -->` marker to separate system instructions from user content; `render_prompt()` returns `PromptPair(system, user)`. `style_common.j2` and `style_review.j2` are shared partials included in the system portion of writer/reviewer templates.
 - **Explicit structure preservation** — when the user provides a concrete outline, named headings, or required section order in the prompt or assignment materials, intake should capture it and planning/writing/review prompts should preserve it rather than normalizing it into a generic essay template.
 - **Plain function tools** — `run_research()`, `fetch_url_content()`, `read_pdf_text()`, `read_docx_text()` are plain Python functions called by the pipeline. No `@tool` decorators.
 - **Retry logic** — `_retry_with_backoff()` in `src/agent.py` handles transient 429/503 API errors and timeouts with exponential backoff. All clients are created with a 300-second request timeout (`_REQUEST_TIMEOUT`) to prevent hung connections. Instructor handles validation retries.
