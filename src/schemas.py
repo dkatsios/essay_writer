@@ -9,7 +9,7 @@ from __future__ import annotations
 import ast
 import json
 
-from pydantic import BaseModel, field_validator, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 
 def _parse_stringified_list_value(v: object) -> object:
@@ -43,17 +43,34 @@ class Clarification(BaseModel):
 class AssignmentBrief(BaseModel):
     """Structured assignment brief — /brief/assignment.json."""
 
-    topic: str
-    word_count: str | None = None
-    academic_level: str | None = None
-    language: str = "Greek (Δημοτική)"
+    topic: str = Field(description="Main essay topic or title.")
+    word_count: str | None = Field(
+        default=None,
+        description="Target word count as a string, or null if not specified.",
+    )
+    academic_level: str | None = Field(
+        default=None,
+        description='One of "undergraduate", "postgraduate", or null.',
+    )
+    language: str = Field(
+        default="Greek (Δημοτική)",
+        description="Language the essay should be written in. Detect from assignment documents.",
+    )
     course: str | None = None
     professor: str | None = None
     student: str | None = None
     institution: str | None = None
-    description: str
-    special_instructions: str | None = None
-    min_sources: int | None = None
+    description: str = Field(
+        description="Comprehensive prose description of the assignment task. Do not copy cover-sheet metadata here."
+    )
+    special_instructions: str | None = Field(
+        default=None,
+        description="Extra requirements including any explicit structure, headings, or section order.",
+    )
+    min_sources: int | None = Field(
+        default=None,
+        description="Minimum number of academic sources as an integer, or null if not specified.",
+    )
     clarifications: list[Clarification] | None = None
 
 
@@ -64,9 +81,11 @@ class ValidationQuestion(BaseModel):
     """A single validation question with answer options."""
 
     question: str
-    options: list[str]
-    suggested_option_index: int = 0
-    """0-based index into ``options`` for the recommended default if the user does not change it."""
+    options: list[str] = Field(description="2–4 answer options.")
+    suggested_option_index: int = Field(
+        default=0,
+        description="0-based index into options for the recommended default.",
+    )
 
     @model_validator(mode="after")
     def _clamp_suggested_option_index(self) -> ValidationQuestion:
@@ -83,8 +102,12 @@ class ValidationQuestion(BaseModel):
 class ValidationResult(BaseModel):
     """Validation output — /brief/validation.json."""
 
-    is_pass: bool
-    questions: list[ValidationQuestion] | None = None
+    is_pass: bool = Field(
+        description="True if the brief is complete enough; false if questions are needed."
+    )
+    questions: list[ValidationQuestion] | None = Field(
+        default=None, description="Clarification questions when is_pass is false."
+    )
 
 
 # -- Plan ------------------------------------------------------------------
@@ -93,14 +116,27 @@ class ValidationResult(BaseModel):
 class PlanSection(BaseModel):
     """A section entry in the essay plan."""
 
-    number: int
-    title: str
-    heading: str
-    word_target: int
-    key_points: str = ""
-    content_outline: str = ""
-    requires_full_context: bool = False
-    deferred_order: int | None = None
+    number: int = Field(description="Unique sequential section number for display.")
+    title: str = Field(description="Section title in the essay language.")
+    heading: str = Field(
+        description="Exact markdown heading text to use (e.g. '## 1. Εισαγωγή')."
+    )
+    word_target: int = Field(description="Target word count for this section.")
+    key_points: str = Field(
+        default="", description="Key arguments or sub-topics to develop."
+    )
+    content_outline: str = Field(
+        default="",
+        description="Detailed outline: arguments, evidence types, examples, relation to thesis.",
+    )
+    requires_full_context: bool = Field(
+        default=False,
+        description="True for sections (intro, conclusion, synthesis) that should be drafted after body sections.",
+    )
+    deferred_order: int | None = Field(
+        default=None,
+        description="Writing order among deferred sections (lower = earlier). Required when requires_full_context is true.",
+    )
 
     @model_validator(mode="after")
     def _validate_deferred_order(self) -> PlanSection:
@@ -117,11 +153,20 @@ class PlanSection(BaseModel):
 class EssayPlan(BaseModel):
     """Structured essay plan — /plan/plan.json."""
 
-    title: str
-    thesis: str
+    title: str = Field(
+        description="Specific, descriptive essay title in the essay language."
+    )
+    thesis: str = Field(
+        description="Clear thesis statement (1–2 sentences) in the essay language."
+    )
     sections: list[PlanSection] = []
-    research_queries: list[str] = []
-    total_word_target: int = 0
+    research_queries: list[str] = Field(
+        default=[],
+        description="6–8 targeted search queries in both the essay language and English.",
+    )
+    total_word_target: int = Field(
+        default=0, description="Sum of all section word_target values."
+    )
 
     @field_validator("sections", "research_queries", mode="before")
     @classmethod
@@ -178,8 +223,10 @@ class RegistryEntry(BaseModel):
 class SourceNote(BaseModel):
     """Reader notes for a single source — /sources/notes/{id}.json."""
 
-    source_id: str
-    is_accessible: bool
+    source_id: str = Field(description="Exact source_id from the input metadata.")
+    is_accessible: bool = Field(
+        description="True if any useful content could be extracted."
+    )
     # Usable notes may still be abstract-only; fetched_fulltext means we had substantive body text.
     fetched_fulltext: bool = False
     title: str = ""
@@ -188,9 +235,17 @@ class SourceNote(BaseModel):
     year: str | None = None
     doi: str | None = None
     source_type: str | None = None
-    summary: str = ""
-    relevant_extracts: list[str] = []
-    relevance_score: int = 0
+    summary: str = Field(
+        default="",
+        description="Concise summary of the source and its relevance to the essay topic.",
+    )
+    relevant_extracts: list[str] = Field(
+        default=[],
+        description="Key quotes, data points, and arguments (200–500 words total).",
+    )
+    relevance_score: int = Field(
+        default=0, description="Topic-fit score 1–5 (5 = core source)."
+    )
     inaccessible_reason: str | None = None
     url: str | None = None
 
@@ -230,8 +285,10 @@ class SourceNote(BaseModel):
 class SourceScoreItem(BaseModel):
     """Relevance score for a single source — used in batch scoring."""
 
-    source_id: str
-    relevance_score: int
+    source_id: str = Field(description="Exact source_id from the input list.")
+    relevance_score: int = Field(
+        description="Integer 1–5 (5 = directly addresses the essay topic)."
+    )
 
 
 class SourceScoreBatch(BaseModel):
@@ -251,8 +308,10 @@ class SourceScoreBatch(BaseModel):
 class SectionSourceAssignment(BaseModel):
     """Maps a section position (plan order) to its assigned source IDs."""
 
-    section_position: int
-    source_ids: list[str]
+    section_position: int = Field(
+        description="Section position from the essay plan (plan order, not display number)."
+    )
+    source_ids: list[str] = Field(description="Source IDs assigned to this section.")
 
 
 class SourceAssignmentPlan(BaseModel):
@@ -267,11 +326,20 @@ class SourceAssignmentPlan(BaseModel):
 class ReconciliationInstruction(BaseModel):
     """A single section-scoped revision instruction from the reconciliation pass."""
 
-    category: str
-    priority: str = "medium"
-    instruction: str
-    related_section_positions: list[int] = []
-    target_anchor: str | None = None
+    category: str = Field(
+        description="Short label: transition, overlap, scope, source_balance, intro_alignment, conclusion_alignment, or phrase_frequency."
+    )
+    priority: str = Field(default="medium", description="high, medium, or low.")
+    instruction: str = Field(
+        description="Concrete instruction telling the reviewer exactly what to change."
+    )
+    related_section_positions: list[int] = Field(
+        default=[], description="Positions of other sections involved, if any."
+    )
+    target_anchor: str | None = Field(
+        default=None,
+        description="Short phrase from the section text to locate the fix, if helpful.",
+    )
 
     @field_validator("related_section_positions", mode="before")
     @classmethod
@@ -282,9 +350,14 @@ class ReconciliationInstruction(BaseModel):
 class SectionReconciliationNotes(BaseModel):
     """Reconciliation notes for one section — keyed by internal section position."""
 
-    section_position: int
+    section_position: int = Field(
+        description="Section position from the drafted sections list."
+    )
     title: str
-    instructions: list[ReconciliationInstruction] = []
+    instructions: list[ReconciliationInstruction] = Field(
+        default=[],
+        description="Targeted revision instructions. Empty list if no changes needed.",
+    )
 
     @field_validator("instructions", mode="before")
     @classmethod
