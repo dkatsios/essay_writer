@@ -21,6 +21,7 @@ from src.schemas import (
     SourceAssignmentPlan,
     SourceNote,
     SourceScoreBatch,
+    SourceTriageBatch,
 )
 from src.tools.author_names import surname_from_author_string
 from src.tools.research_sources import run_research
@@ -45,7 +46,7 @@ _MIN_ABSTRACT_WORDS = 20
 _USER_SOURCE_PREFIX = "user_"
 _USER_ID_HASH_LENGTH = 8
 _SOURCE_READ_CONCURRENCY = 6
-_MIN_RELEVANCE_SCORE = 2
+_MIN_RELEVANCE_SCORE = 3
 _MIN_TOKEN_LENGTH = 4
 
 
@@ -525,21 +526,100 @@ async def _async_batch_score_sources(
     return scores
 
 
+async def _async_batch_triage_sources(
+    scorable: list[dict],
+    essay_topic: str,
+    thesis: str,
+    async_worker,
+    tracker: object | None = None,
+    batch_size: int = 30,
+    sections: list[dict] | None = None,
+) -> set[str]:
+    """Cheap relevance triage on title + abstract before fetching/scoring."""
+    if not scorable:
+        return set()
+
+    batches = [
+        scorable[i : i + batch_size] for i in range(0, len(scorable), batch_size)
+    ]
+    num_batches = len(batches)
+    if tracker is not None:
+        tracker.set_sub_total(num_batches)
+
+    async def _triage_batch(batch: list[dict]) -> set[str]:
+        prompt = render_prompt(
+            "source_triage.j2",
+            essay_topic=essay_topic,
+            thesis=thesis,
+            sources=batch,
+            sections=sections or [],
+        )
+        result = await _async_structured_call(
+            async_worker, prompt, SourceTriageBatch, tracker
+        )
+        decisions = {item.source_id: item.is_relevant for item in result.decisions}
+        return {
+            source["source_id"]
+            for source in batch
+            if decisions.get(source["source_id"], True)
+        }
+
+    relevant_ids: set[str] = set()
+    for batch in batches:
+        try:
+            relevant_ids.update(await _triage_batch(batch))
+        except Exception:
+            logger.warning(
+                "Batch triage failed for %d sources; retrying once…",
+                len(batch),
+            )
+            try:
+                relevant_ids.update(await _triage_batch(batch))
+            except Exception:
+                if len(batch) <= 1:
+                    logger.warning(
+                        "Single-source triage failed for %s; keeping source",
+                        batch[0]["source_id"] if batch else "?",
+                    )
+                    for source in batch:
+                        relevant_ids.add(source["source_id"])
+                else:
+                    logger.warning(
+                        "Batch triage retry failed; falling back to individual triage for %d sources",
+                        len(batch),
+                    )
+                    for source in batch:
+                        try:
+                            relevant_ids.update(await _triage_batch([source]))
+                        except Exception:
+                            logger.warning(
+                                "Individual triage failed for %s; keeping source",
+                                source["source_id"],
+                            )
+                            relevant_ids.add(source["source_id"])
+        finally:
+            if tracker is not None:
+                tracker.increment_sub_done()
+
+    return relevant_ids
+
+
 def _select_top_sources(
     scores: dict[str, int],
     registry: dict[str, dict],
     target_sources: int,
     fetch_results: dict[str, str],
     min_body_words: int = 50,
+    min_relevance_score: int = _MIN_RELEVANCE_SCORE,
 ) -> list[str]:
     """Rank scored sources and return the top *target_sources* IDs.
 
-    Filters out sources with relevance_score < ``_MIN_RELEVANCE_SCORE``.
+    Filters out sources with relevance_score below ``min_relevance_score``.
     """
     filtered_low = 0
     candidates: list[tuple[str, int]] = []
     for source_id, score in scores.items():
-        if score < _MIN_RELEVANCE_SCORE:
+        if score < min_relevance_score:
             filtered_low += 1
             logger.info("Filtering source %s (relevance_score=%d)", source_id, score)
             continue
@@ -549,7 +629,7 @@ def _select_top_sources(
         logger.info(
             "Filtered %d low-relevance sources (score < %d)",
             filtered_low,
-            _MIN_RELEVANCE_SCORE,
+            min_relevance_score,
         )
 
     def _sort_key(item: tuple[str, int]) -> tuple:
@@ -797,7 +877,9 @@ async def _async_read_sources_orchestration(
     """
 
     min_body = ctx.config.search.optional_pdf_min_body_words
+    triage_batch_size = ctx.config.search.triage_batch_size
     batch_size = ctx.config.search.batch_score_size
+    min_relevance_score = ctx.config.search.min_relevance_score
     top_n = ctx.config.search.optional_pdf_prompt_top_n
     sources_dir = str(ctx.run_dir / "sources")
     notes_dir = ctx.run_dir / "sources" / "notes"
@@ -840,20 +922,46 @@ async def _async_read_sources_orchestration(
         (sid, meta) for sid, meta in registry.items() if not meta.get("user_provided")
     ]
 
-    # Phase 2: filter API sources by abstract BEFORE fetching PDFs
+    # Phase 2: filter API sources by abstract before any LLM work
     if ctx.tracker is not None:
         ctx.tracker.set_current_step("read_sources:score")
     scorable = _filter_scorable_sources({sid: meta for sid, meta in api_pairs})
-    scorable_ids = {s["source_id"] for s in scorable}
     logger.info(
         "Filtered to %d scorable API sources (of %d total API)",
         len(scorable),
         len(api_pairs),
     )
 
-    # Phase 1: fetch PDFs only for scorable API sources + user sources
+    # Phase 3: cheap title+abstract triage before fetching PDFs
+    triaged = scorable
+    if scorable:
+        if ctx.tracker is not None:
+            ctx.tracker.set_current_step("read_sources:triage")
+        logger.info(
+            "Batch-triaging %d scorable sources (batch_size=%d)...",
+            len(scorable),
+            triage_batch_size,
+        )
+        triaged_ids = await _async_batch_triage_sources(
+            scorable,
+            essay_topic,
+            thesis,
+            async_worker,
+            tracker=ctx.tracker,
+            batch_size=triage_batch_size,
+            sections=plan_sections,
+        )
+        triaged = [source for source in scorable if source["source_id"] in triaged_ids]
+        logger.info(
+            "Triage kept %d of %d scorable API sources",
+            len(triaged),
+            len(scorable),
+        )
+
+    # Phase 4: fetch PDFs only for triaged API sources + user sources
+    triaged_ids = {source["source_id"] for source in triaged}
     fetch_pairs = [
-        (sid, meta) for sid, meta in api_pairs if sid in scorable_ids
+        (sid, meta) for sid, meta in api_pairs if sid in triaged_ids
     ] + user_pairs
     if not fetch_pairs and not scorable:
         logger.info("No sources to read (no scorable API and no user-provided).")
@@ -865,16 +973,16 @@ async def _async_read_sources_orchestration(
         fetch_pairs, sources_dir, tracker=ctx.tracker, min_body_words=min_body
     )
 
-    # Phase 3: batch-score scorable API sources
+    # Phase 5: batch-score triaged API sources
     if ctx.tracker is not None:
         ctx.tracker.set_current_step("read_sources:score")
     logger.info(
-        "Batch-scoring %d scorable sources (batch_size=%d)...",
-        len(scorable),
+        "Batch-scoring %d triaged sources (batch_size=%d)...",
+        len(triaged),
         batch_size,
     )
     scores: dict[str, int] = await _async_batch_score_sources(
-        scorable,
+        triaged,
         essay_topic,
         thesis,
         async_worker,
@@ -883,15 +991,20 @@ async def _async_read_sources_orchestration(
         sections=plan_sections,
     )
 
-    # Phase 4: select top T from API sources
-    above_threshold = sum(1 for s in scores.values() if s >= _MIN_RELEVANCE_SCORE)
+    # Phase 6: select top T from API sources
+    above_threshold = sum(1 for s in scores.values() if s >= min_relevance_score)
     selected_ids = _select_top_sources(
-        scores, registry, target_sources, fetch_results, min_body
+        scores,
+        registry,
+        target_sources,
+        fetch_results,
+        min_body,
+        min_relevance_score,
     )
     logger.info(
         "Selected %d API sources from %d scored candidates (%d above threshold)",
         len(selected_ids),
-        len(scorable),
+        len(triaged),
         above_threshold,
     )
 
@@ -962,6 +1075,28 @@ async def _async_read_sources_orchestration(
         if new_api:
             new_scorable = _filter_scorable_sources(new_api)
             if new_scorable:
+                if ctx.tracker is not None:
+                    ctx.tracker.set_current_step("read_sources:triage")
+                logger.info(
+                    "Batch-triaging %d new sources after recovery...",
+                    len(new_scorable),
+                )
+                triaged_new_ids = await _async_batch_triage_sources(
+                    new_scorable,
+                    essay_topic,
+                    thesis,
+                    async_worker,
+                    tracker=ctx.tracker,
+                    batch_size=triage_batch_size,
+                    sections=plan_sections,
+                )
+                new_scorable = [
+                    source
+                    for source in new_scorable
+                    if source["source_id"] in triaged_new_ids
+                ]
+
+            if new_scorable:
                 new_scorable_ids = {s["source_id"] for s in new_scorable}
                 new_fetch_pairs = [
                     (sid, meta)
@@ -1001,9 +1136,14 @@ async def _async_read_sources_orchestration(
                 scores.update(new_scores)
 
         # Recompute above_threshold after merging recovery scores
-        above_threshold = sum(1 for s in scores.values() if s >= _MIN_RELEVANCE_SCORE)
+        above_threshold = sum(1 for s in scores.values() if s >= min_relevance_score)
         selected_ids = _select_top_sources(
-            scores, registry, target_sources, fetch_results, min_body
+            scores,
+            registry,
+            target_sources,
+            fetch_results,
+            min_body,
+            min_relevance_score,
         )
 
     # Phase 5: full extraction on selected API sources
@@ -1141,6 +1281,7 @@ async def _async_read_sources_orchestration(
                     "usable_sources": len(selected_registry),
                     "target_sources": target_sources,
                     "scorable_candidates": len(scorable),
+                    "triaged_candidates": len(triaged),
                     "above_threshold": above_threshold,
                     "total_candidates": len(api_pairs) + len(user_pairs),
                     "recovery_attempted": recovery_done,

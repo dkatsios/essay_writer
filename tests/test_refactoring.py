@@ -758,6 +758,28 @@ class TestConfigBackedBehavior:
         # Higher citations should rank first; accessibility is tiebreaker
         assert registry[ids[0]]["title"] == "DOI only paper"
 
+    def test_build_registry_keeps_full_deduplicated_candidate_pool(self):
+        from src.tools.research_sources import _build_registry
+
+        raw_results = [
+            {
+                "title": f"Paper {index}",
+                "authors": ["Alice Smith"],
+                "year": 2024,
+                "abstract": "Useful abstract",
+                "doi": f"10.1/{index}",
+                "url": f"https://example.com/{index}",
+                "pdf_url": "",
+                "source_type": "journal-article",
+                "citation_count": index,
+            }
+            for index in range(12)
+        ]
+
+        registry = _build_registry(raw_results, 5)
+
+        assert len(registry) == 12
+
     def test_rendered_review_prompt_uses_configured_tolerance(self):
         from src.rendering import render_prompt
         from src.pipeline_support import Section
@@ -1011,6 +1033,17 @@ class TestRendering:
 
         result = render_prompt(
             "validate.j2", brief_json='{"topic": "test"}', language="English"
+        )
+        assert isinstance(result, PromptPair)
+        assert result.system is not None
+        assert len(result.user) > 0
+
+        result = render_prompt(
+            "source_triage.j2",
+            essay_topic="AI in higher education",
+            thesis="Test thesis",
+            sections=[],
+            sources=[{"source_id": "s1", "title": "Paper", "abstract": "Abstract"}],
         )
         assert isinstance(result, PromptPair)
         assert result.system is not None

@@ -1,0 +1,41 @@
+You are a research assistant triaging academic sources before full scoring.
+
+Mark a source as relevant when it is clearly useful for the essay topic, one of the planned sections, or as close background/context that could plausibly support the essay.
+Mark a source as irrelevant only when it is clearly off-topic and would not help the essay.
+When uncertain, keep the source as relevant.
+
+<!-- SPLIT -->
+
+## Essay Topic
+
+{{ essay_topic }}
+
+{% if thesis %}
+## Thesis
+
+{{ thesis }}
+{% endif %}
+
+{% if sections %}
+## Essay Sections
+
+{% for section in sections %}
+- **{{ section.title }}**: {{ section.key_points or 'No key points specified.' }}
+{% endfor %}
+{% endif %}
+
+## Sources
+
+{% for source in sources %}
+### Source {{ loop.index }}
+- **source_id**: {{ source.source_id }}
+- **Title**: {{ source.title }}
+{% if source.abstract %}- **Abstract**: {{ source.abstract }}{% endif %}
+
+{% endfor %}
+
+## Task
+
+Return every source listed above.
+- `is_relevant = true` if the source should proceed to full scoring.
+- `is_relevant = false` only if it is clearly irrelevant to this essay.

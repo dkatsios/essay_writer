@@ -108,8 +108,12 @@ class SearchConfig(BaseModel):
     """Offer optional PDF upload for up to this many API sources without full text (0 = off)."""
     optional_pdf_min_body_words: int = 50
     """Minimum word count of fetched/local body text to count as full text (not abstract-only)."""
+    triage_batch_size: int = 30
+    """Maximum number of title+abstract candidates per triage LLM call."""
     batch_score_size: int = 50
     """Maximum number of sources per batch-scoring LLM call."""
+    min_relevance_score: int = 3
+    """Minimum 1–5 relevance score required for final source selection."""
 
 
 class EssayWriterConfig(BaseSettings):

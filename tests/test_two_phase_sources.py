@@ -3,13 +3,15 @@
 from __future__ import annotations
 
 import asyncio
+from types import SimpleNamespace
 
 from src.pipeline_sources import (
+    _async_batch_triage_sources,
     _async_fetch_pdf_content,
     _filter_scorable_sources,
     _select_top_sources,
 )
-from src.schemas import SourceScoreBatch
+from src.schemas import SourceScoreBatch, SourceTriageBatch
 
 
 # -- _filter_scorable_sources -----------------------------------------------
@@ -78,7 +80,7 @@ class TestFilterScorableSources:
 
 class TestSelectTopSources:
     def test_filters_low_relevance(self):
-        scores = {"s1": 4, "s2": 1, "s3": 3}
+        scores = {"s1": 4, "s2": 2, "s3": 3}
         registry = {
             "s1": {"authors": ["A"], "citation_count": 10},
             "s2": {"authors": ["B"], "citation_count": 20},
@@ -120,6 +122,57 @@ class TestSelectTopSources:
             scores, registry, 2, fetch_results, min_body_words=50
         )
         assert result[0] == "s1"  # has fulltext → ranked higher
+
+
+# -- _async_batch_triage_sources -------------------------------------------
+
+
+class TestAsyncBatchTriageSources:
+    def test_batches_and_keeps_only_relevant(self, monkeypatch):
+        scorable = [
+            {
+                "source_id": "keep",
+                "title": "AI in higher education",
+                "abstract": "Useful",
+            },
+            {
+                "source_id": "drop",
+                "title": "Network intrusion detection",
+                "abstract": "Security",
+            },
+        ]
+        rendered_templates: list[str] = []
+
+        def fake_render_prompt(template: str, **kwargs):
+            rendered_templates.append(template)
+            return "PROMPT"
+
+        async def fake_async_structured_call(_worker, _prompt, schema, _tracker=None):
+            assert schema is SourceTriageBatch
+            return SourceTriageBatch(
+                decisions=[
+                    {"source_id": "keep", "is_relevant": True},
+                    {"source_id": "drop", "is_relevant": False},
+                ]
+            )
+
+        monkeypatch.setattr("src.pipeline_sources.render_prompt", fake_render_prompt)
+        monkeypatch.setattr(
+            "src.pipeline_sources._async_structured_call", fake_async_structured_call
+        )
+
+        kept = asyncio.run(
+            _async_batch_triage_sources(
+                scorable,
+                "AI in Greek higher education",
+                "Policy thesis",
+                async_worker=SimpleNamespace(),
+                batch_size=30,
+            )
+        )
+
+        assert kept == {"keep"}
+        assert rendered_templates == ["source_triage.j2"]
 
 
 # -- _async_fetch_pdf_content -----------------------------------------------

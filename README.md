@@ -11,7 +11,7 @@ AI-powered academic essay generator for Greek university students. Uses a determ
 - Interactive validation: catches incomplete assignments and prompts for missing info before proceeding
 - Preserves explicit user-provided essay structure and headings more strongly when they appear in the prompt or assignment materials
 - Deterministic academic source research via Semantic Scholar, OpenAlex, and Crossref
-- Two-phase source reading: fetches PDFs, batch-scores candidates for relevance, selects the best sources, then runs full LLM extraction on the selected set only
+- Staged source filtering: batch-triages title+abstract candidates first, then batch-scores the remaining sources before full extraction
 - If usable selected sources fall below the target, runs one broader recovery search pass before asking whether to continue with fewer sources
 - Long essays draft most body sections in parallel, defer introduction/synthesis/conclusion sections until full context is available, then run a reconciliation pass before review
 - Input extraction writes a single `input/extracted.md` artifact directly into each run directory
@@ -40,7 +40,7 @@ Open http://localhost:8000. Upload assignment files, optionally upload your own 
 
 The browser UI downloads the ZIP first and then asks the server to clean up that completed job, which keeps failed or interrupted transfers retryable. Jobs that are never cleaned up are removed after **24 hours** by default (temp directory and in-memory job record). Override with `ESSAY_WEB_JOB_TTL_SECONDS` (seconds; set to `0` to disable only this automatic cleanup). Sweeps run every **300** seconds by default (`ESSAY_WEB_JOB_SWEEP_INTERVAL_SECONDS`, not below **60**). If a job is waiting on clarification answers or optional PDF input, it times out after **1800** seconds by default (`ESSAY_WEB_INTERACTION_TIMEOUT_SECONDS`).
 
-Source handling is intentionally two-stage: the system first fetches a broad candidate pool, then keeps only sources with usable full text or a usable abstract for downstream writing. The final selected set is usable-only; if the usable pool is smaller than the original target, the writer and reviewer prompts are capped to the actually available selected sources.
+Source handling is intentionally staged: the system first builds a broad candidate pool, then uses a cheap title+abstract triage pass to discard clearly irrelevant papers, then batch-scores the remaining candidates for relevance before fetching/extracting the final selected set. The final selected set is usable-only; if the usable pool is smaller than the original target, the writer and reviewer prompts are capped to the actually available selected sources.
 
 If the first source-reading pass still produces too few usable selected sources, the pipeline performs one automatic recovery rerun with a larger fetch budget and full-text-biased filters where the upstream APIs support them. If the usable selected pool is still below target after that recovery pass, the app pauses and asks whether to continue with the smaller evidence set.
 

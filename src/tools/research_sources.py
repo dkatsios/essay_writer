@@ -192,7 +192,11 @@ def _build_registry(
     raw_results: list[dict],
     max_sources: int,
 ) -> dict[str, dict]:
-    """Deduplicate, filter, sort by accessibility, and build the registry."""
+    """Deduplicate, filter, sort, and build the registry.
+
+    ``max_sources`` is preserved for call-site compatibility, but trimming now
+    happens after LLM relevance triage and scoring rather than here.
+    """
     seen_titles: set[str] = set()
     seen_dois: set[str] = set()
     candidates: list[dict] = []
@@ -274,9 +278,6 @@ def _build_registry(
         )
         registry[source_id] = entry.model_dump(exclude_none=True)
 
-        if len(registry) >= max_sources:
-            break
-
     return registry
 
 
@@ -291,8 +292,9 @@ def run_research(
     """Search academic databases and build a source registry.
 
     Fans out *queries* across Semantic Scholar, OpenAlex, and Crossref
-    in parallel.  Deduplicates by DOI and title, writes the registry to
-    *sources_dir*/registry.json, and returns it.
+    in parallel. Deduplicates by DOI and title, writes the full candidate
+    registry to *sources_dir*/registry.json, and returns it. Final trimming
+    happens later after LLM triage and scoring.
     """
     sources_path = Path(sources_dir) if sources_dir else None
 
