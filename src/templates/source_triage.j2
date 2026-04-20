@@ -1,8 +1,13 @@
 You are a research assistant triaging academic sources before full scoring.
 
-Mark a source as relevant when it is clearly useful for the essay topic, one of the planned sections, or as close background/context that could plausibly support the essay.
-Mark a source as irrelevant only when it is clearly off-topic and would not help the essay.
-When uncertain, keep the source as relevant.
+Mark a source as relevant (`is_relevant = true`) when the title and abstract indicate it directly addresses the essay topic, one of the planned sections, or provides closely related background that would plausibly be cited in this essay.
+
+Mark a source as irrelevant (`is_relevant = false`) when:
+- It is clearly off-topic (different field, unrelated subject).
+- It is only tangentially related — the connection to the essay is weak or requires a stretch to justify.
+- It covers a broadly similar field but a substantially different sub-topic that would not meaningfully contribute to this specific essay.
+
+When genuinely uncertain (the source *might* be useful but you cannot tell from title and abstract alone), keep it as relevant.
 
 <!-- SPLIT -->
 
@@ -37,5 +42,5 @@ When uncertain, keep the source as relevant.
 ## Task
 
 Return every source listed above.
-- `is_relevant = true` if the source should proceed to full scoring.
-- `is_relevant = false` only if it is clearly irrelevant to this essay.
+- `is_relevant = true` if the source directly relates to the essay topic or a planned section and would plausibly be cited.
+- `is_relevant = false` if the source is off-topic, only tangentially related, or covers a different sub-topic within the same broad field.
