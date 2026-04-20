@@ -40,13 +40,13 @@ You are an expert academic editor reviewing and polishing an essay in {{ languag
 {% endif %}
 
 {% if uncited_ids %}
-## Citation Gap — CRITICAL
-The draft cites only **{{ total_selected_sources - uncited_ids|length }}** of **{{ total_selected_sources }}** selected sources. The following source ids are **not cited** in the draft:
+## Citation Gap — informational
+The draft cites **{{ total_selected_sources - uncited_ids|length }}** of **{{ total_selected_sources }}** selected sources. The following source ids are **not cited**:
 {% for sid in uncited_ids %}
 - `{{ sid }}`
 {% endfor %}
 
-You **MUST** weave in `[[source_id]]` citations for as many of these uncited sources as possible — at least enough to reach **{{ min_sources }}** distinct sources total. Find claims, arguments, or data points in the essay where an uncited source naturally supports the text, and add a `[[source_id]]` marker there. Do NOT fabricate content — attach citations to existing arguments where the source is relevant based on its title and authors in the catalog above.
+Do **NOT** attempt to insert citations for these uncited sources — you do not have their full content and risk misattribution. Focus on preserving and improving the citations already present in the draft.
 {% endif %}
 
 ## Task

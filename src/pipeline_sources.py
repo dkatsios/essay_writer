@@ -416,6 +416,7 @@ async def _async_batch_score_sources(
     async_worker,
     tracker: object | None = None,
     batch_size: int = 50,
+    sections: list[dict] | None = None,
 ) -> dict[str, int]:
     """Score sources in batches via the LLM.
 
@@ -439,6 +440,7 @@ async def _async_batch_score_sources(
             essay_topic=essay_topic,
             thesis=thesis,
             sources=batch,
+            sections=sections or [],
         )
         result = await _async_structured_call(
             async_worker, prompt, SourceScoreBatch, tracker
@@ -763,10 +765,15 @@ async def _async_read_sources_orchestration(
         except Exception:
             pass
     plan_path = ctx.run_dir / "plan" / "plan.json"
+    plan_sections: list[dict] = []
     if plan_path.exists():
         try:
             plan_data = json.loads(plan_path.read_text(encoding="utf-8"))
             thesis = plan_data.get("thesis", "")
+            plan_sections = [
+                {"title": s.get("title", ""), "key_points": s.get("key_points", "")}
+                for s in plan_data.get("sections", [])
+            ]
         except Exception:
             pass
 
@@ -825,6 +832,7 @@ async def _async_read_sources_orchestration(
         async_worker,
         tracker=ctx.tracker,
         batch_size=batch_size,
+        sections=plan_sections,
     )
 
     # Phase 4: select top T from API sources
@@ -940,6 +948,7 @@ async def _async_read_sources_orchestration(
                     async_worker,
                     tracker=ctx.tracker,
                     batch_size=batch_size,
+                    sections=plan_sections,
                 )
                 scores.update(new_scores)
 

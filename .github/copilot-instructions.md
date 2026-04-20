@@ -64,7 +64,7 @@ All tool calls (research, URL fetching, PDF reading) are plain Python functions 
 | `intake.j2` | `extracted_text`, `extra_prompt` | `AssignmentBrief` JSON |
 | `validate.j2` | `brief_json` | `ValidationResult` JSON |
 | `plan.j2` | `brief_json` | `EssayPlan` JSON |
-| `source_scoring.j2` | `essay_topic`, `thesis`, `sources` (list of {source_id, title, authors, year, doi, abstract, content_snippet}) | `SourceScoreBatch` JSON |
+| `source_scoring.j2` | `essay_topic`, `thesis`, `sections` (list of {title, key_points}), `sources` (list of {source_id, title, authors, year, doi, abstract, content_snippet}) | `SourceScoreBatch` JSON |
 | `source_reading.j2` | `source_id`, `title`, `authors`, `year`, `doi`, `abstract`, `content`, `essay_topic` | `SourceNote` JSON |
 | `source_assignment.j2` | `sections`, `source_notes`, `min_per_section` | `SourceAssignmentPlan` JSON |
 | `essay_writing.j2` | `brief_json`, `plan_json`, `source_notes`, `target_words` | Essay markdown |
