@@ -101,9 +101,9 @@ async def test_write_sections_keeps_duplicate_numbers_distinct(
         json.dumps(
             {
                 "assignments": [
-                    {"section_number": 1, "source_ids": ["intro-source"]},
-                    {"section_number": 2, "source_ids": ["body-a-source"]},
-                    {"section_number": 2, "source_ids": ["body-b-source"]},
+                    {"section_position": 1, "source_ids": ["intro-source"]},
+                    {"section_position": 2, "source_ids": ["body-a-source"]},
+                    {"section_position": 3, "source_ids": ["body-b-source"]},
                 ]
             }
         ),
@@ -233,7 +233,6 @@ async def test_review_sections_routes_reconciliation_notes_by_position(
                 "sections": [
                     {
                         "section_position": 1,
-                        "section_number": 1,
                         "title": "Intro",
                         "instructions": [
                             {
@@ -246,7 +245,6 @@ async def test_review_sections_routes_reconciliation_notes_by_position(
                     },
                     {
                         "section_position": 2,
-                        "section_number": 2,
                         "title": "Body A",
                         "instructions": [
                             {
@@ -259,7 +257,6 @@ async def test_review_sections_routes_reconciliation_notes_by_position(
                     },
                     {
                         "section_position": 3,
-                        "section_number": 2,
                         "title": "Body B",
                         "instructions": [
                             {

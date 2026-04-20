@@ -1,8 +1,13 @@
 You are an expert academic research assistant.
 
-## Essay Plan
+## Essay Sections
 
-{{ plan_json }}
+{% for section in sections %}
+### Section position {{ section.position }} — {{ section.heading }}
+- Title: {{ section.title }}
+- Key points: {{ section.key_points }}
+{% if section.content_outline %}- Content outline: {{ section.content_outline }}{% endif %}
+{% endfor %}
 
 ## Available Sources (with summaries)
 
@@ -23,4 +28,4 @@ Rules:
 - Introduction and conclusion sections typically need fewer sources than body sections — but still assign at least {{ min_per_section }} to each.
 - Assign based on **content fit** — the source's topic must genuinely support the section's key points and content outline. Do not assign a source to a section where it has no relevance.
 
-Return a JSON object with an `assignments` array. Each element has `section_number` (int) and `source_ids` (list of source id strings).
+Return a JSON object with an `assignments` array. Each element has `section_position` (int, matching the section positions above) and `source_ids` (list of source id strings).

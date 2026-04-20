@@ -249,9 +249,9 @@ class SourceScoreBatch(BaseModel):
 
 
 class SectionSourceAssignment(BaseModel):
-    """Maps a section number to its assigned source IDs."""
+    """Maps a section position (plan order) to its assigned source IDs."""
 
-    section_number: int
+    section_position: int
     source_ids: list[str]
 
 
@@ -283,7 +283,6 @@ class SectionReconciliationNotes(BaseModel):
     """Reconciliation notes for one section — keyed by internal section position."""
 
     section_position: int
-    section_number: int
     title: str
     instructions: list[ReconciliationInstruction] = []
 

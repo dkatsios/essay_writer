@@ -6,7 +6,6 @@ import asyncio
 import json
 import logging
 import re
-from collections import defaultdict, deque
 from collections.abc import Callable
 from pathlib import Path
 from time import monotonic
@@ -59,22 +58,11 @@ def _load_source_assignments(
         plan = SourceAssignmentPlan.model_validate_json(
             path.read_text(encoding="utf-8")
         )
-        buckets: dict[int, deque[list[str]]] = defaultdict(deque)
-        for assignment in plan.assignments:
-            buckets[assignment.section_number].append(assignment.source_ids)
-
+        position_set = {section.position for section in sections}
         aligned: dict[int, list[str]] = {}
-        for section in sections:
-            assigned_ids = buckets.get(section.number)
-            if assigned_ids:
-                aligned[section.position] = assigned_ids.popleft()
-
-        unmatched = sum(len(bucket) for bucket in buckets.values())
-        if unmatched:
-            logger.warning(
-                "Ignored %d unmatched source assignment entries after aligning by section order",
-                unmatched,
-            )
+        for assignment in plan.assignments:
+            if assignment.section_position in position_set:
+                aligned[assignment.section_position] = assignment.source_ids
         return aligned
     except Exception:
         logger.warning("Failed to load source assignments")
@@ -264,7 +252,6 @@ def _normalize_reconciliation_plan(
             section.position,
             SectionReconciliationNotes(
                 section_position=section.position,
-                section_number=section.number,
                 title=section.title,
                 instructions=[],
             ),

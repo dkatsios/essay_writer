@@ -66,7 +66,7 @@ All tool calls (research, URL fetching, PDF reading) are plain Python functions 
 | `plan.j2` | `brief_json` | `EssayPlan` JSON |
 | `source_scoring.j2` | `essay_topic`, `thesis`, `sources` (list of {source_id, title, authors, year, doi, abstract, content_snippet}) | `SourceScoreBatch` JSON |
 | `source_reading.j2` | `source_id`, `title`, `authors`, `year`, `doi`, `abstract`, `content`, `essay_topic` | `SourceNote` JSON |
-| `source_assignment.j2` | `plan_json`, `source_notes`, `min_per_section` | `SourceAssignmentPlan` JSON |
+| `source_assignment.j2` | `sections`, `source_notes`, `min_per_section` | `SourceAssignmentPlan` JSON |
 | `essay_writing.j2` | `brief_json`, `plan_json`, `source_notes`, `target_words` | Essay markdown |
 | `essay_review.j2` | `brief_json`, `plan_json`, `draft_text`, `target_words` | Reviewed markdown |
 | `section_writing.j2` | `plan_json`, `source_notes`, `section`, `assigned_source_ids`, `has_full_context`, `essay_context` | Section markdown |
@@ -144,7 +144,7 @@ No `default.yaml` exists; field defaults in `schemas.py` are canonical.
 - **Source assignment (long path)** — after source reading, the worker assigns each selected source to the sections where it is most relevant (`source_assignment.j2` → `SourceAssignmentPlan`). During section writing, assigned sources are boosted to the top of the detail window so the writer sees their full summaries, and the template requires citing each assigned source at least once.
 - **Hybrid long-essay drafting** — body sections without `requires_full_context` are drafted in parallel. Sections marked `requires_full_context` are drafted afterward sorted by `deferred_order` (ascending, then by position) so later sections see more context. Both fields are set by the LLM in the plan — no heuristic overrides.
 - **Long-essay reconciliation** — after drafting, the worker emits `essay/reconciliation.json` with section-position-keyed notes for overlap, transition, scope, and intro/conclusion alignment fixes. Reviewers receive only the current section’s note bundle.
-- **Long-path identifiers** — use `Section.position` (plan order) as the runtime key for section draft files, review files, and reconciliation routing. `section.number` may repeat in user-visible headings and must not be used as the unique runtime identifier.
+- **Long-path identifiers** — use `Section.position` (plan order) as the runtime key for section draft files, review files, source assignment routing, and reconciliation routing. `section.number` may repeat in user-visible headings and must not be used as the unique runtime identifier. LLM-facing templates (`source_assignment.j2`, `section_reconciliation.j2`) expose and request `section_position`, not `section_number`.
 - **Bounded review context** — section review includes only adjacent sections with the current section delimited. Deferred writing may see the full current draft; review remains section-local.
 - **Config-backed word tolerance** — `writing.word_count_tolerance` (default 10%) controls the under-target tolerance in writing and review prompts. `writing.word_count_tolerance_over` (default 20%) controls the over-target tolerance for reviewers only. Reviewers use asymmetric thresholds: they are told to cut only when significantly over the target, and always see a hard floor forbidding output below `target × (1 - word_count_tolerance)`. Writers still use symmetric tolerance.
 - **Custom AI endpoint** — when `AI_BASE_URL` is set in `.env`, all models route through an OpenAI-compatible endpoint using `AI_API_KEY` and `AI_MODEL`.

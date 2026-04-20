@@ -32,7 +32,6 @@ from src.pipeline_support import (
     _load_selected_source_notes,
     _note_lexical_score,
     _parse_sections,
-    _read_text,
     _write_json,
 )
 
@@ -1097,7 +1096,6 @@ async def _async_read_sources_orchestration(
 
 
 async def do_assign_sources(ctx: PipelineContext) -> None:
-    plan_json = _read_text(ctx.run_dir / "plan" / "plan.json")
     source_notes = _load_selected_source_notes(ctx.run_dir)
     if not source_notes:
         logger.warning("No source notes available for assignment")
@@ -1107,7 +1105,7 @@ async def do_assign_sources(ctx: PipelineContext) -> None:
     min_per_section = max(2, len(source_notes) // (len(sections) or 1))
     prompt = render_prompt(
         "source_assignment.j2",
-        plan_json=plan_json,
+        sections=sections,
         source_notes=source_notes,
         min_per_section=min_per_section,
     )
@@ -1125,16 +1123,16 @@ async def do_assign_sources(ctx: PipelineContext) -> None:
     ]
     if missing_ids and sections and result.assignments:
         section_corpora: list[tuple[object, set[str]]] = []
-        buckets: dict[int, list[object]] = {}
+        assignment_by_position: dict[int, object] = {}
         for assignment in result.assignments:
-            buckets.setdefault(assignment.section_number, []).append(assignment)
+            assignment_by_position.setdefault(assignment.section_position, assignment)
         for section in sections:
-            matching = buckets.get(section.number)
+            matching = assignment_by_position.get(section.position)
             if not matching:
                 continue
             section_corpora.append(
                 (
-                    matching.pop(0),
+                    matching,
                     _corpus_tokens(
                         f"{section.title} {section.key_points} {section.content_outline or ''}"
                     ),
