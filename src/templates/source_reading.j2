@@ -24,8 +24,8 @@ Rate how relevant this source is to the essay topic on a 1–5 scale and set `re
 - Include `inaccessible_reason`
 
 ### When NOTHING useful can be extracted (API sources)
-- Still set `is_accessible` to true (the pipeline has already validated this source)
-- Write a minimal summary from whatever metadata is available
+- The pipeline guarantees at least metadata is available for API sources, so `is_accessible` is always `true`.
+- Write a minimal summary from whatever metadata is available.
 
 Do NOT fabricate content. Only include what is actually in the source.
 

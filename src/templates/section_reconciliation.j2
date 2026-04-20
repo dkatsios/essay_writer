@@ -16,18 +16,7 @@ You are an academic writing coordinator preparing section-specific revision note
 
 Scan **all** drafted sections together. For each expression below, if it appears **more than once** across the full draft, emit a reconciliation instruction (category: `phrase_frequency`, priority: `medium`) in every section where an **extra** occurrence appears, telling the reviewer which expression to replace and why ("already used in section N"). Keep at most one instance essay-wide.
 
-- «Είναι σημαντικό να σημειωθεί» / «Αξίζει να σημειωθεί/αναφερθεί/τονιστεί»
-- «Εν κατακλείδι» / «Συμπερασματικά» — allowed only in the final section; flag any earlier occurrence
-- «Λαμβάνοντας υπόψη τα παραπάνω»
-- «Υπό αυτό το πρίσμα» / «Υπό το πρίσμα»
-- «Σε αυτό το πλαίσιο» / «Στο πλαίσιο αυτό»
-- «Είναι γεγονός ότι» / «Είναι προφανές ότι»
-- «Με άλλα λόγια»
-- «Όπως αναφέρθηκε παραπάνω» / «Όπως ήδη αναφέρθηκε» — prefer 0 total
-- «Ιδιαίτερα σημαντικό είναι» / «Εξίσου σημαντικό είναι»
-- «σε μεγάλο βαθμό»
-- «στη σύγχρονη εποχή» / «στον σύγχρονο κόσμο»
-- «καθίσταται σαφές/φανερό» / «γίνεται αντιληπτό»
+{% include 'style_greek_frequency.j2' %}
 
 Also check per-section patterns and emit instructions where needed:
 - **Paragraph-opener monotony**: two+ consecutive paragraphs in a section starting with the same pattern → instruction to vary.
