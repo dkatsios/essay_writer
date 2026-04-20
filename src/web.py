@@ -12,7 +12,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, Form, UploadFile
+from fastapi import FastAPI, Form, Query, UploadFile
 from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from jinja2 import Environment, FileSystemLoader
 
@@ -361,8 +361,8 @@ async def source_shortfall_decision(job_id: str, decision: str = Form("")):
 
 
 @app.get("/download/{job_id}")
-async def download(job_id: str):
-    """Return the result zip without deleting it so failed transfers can retry."""
+async def download(job_id: str, format: str | None = Query(None)):
+    """Return the result zip or just the docx."""
     job = _jobs.get(job_id)
     if not job:
         return JSONResponse({"error": "Job not found"}, status_code=404)
@@ -370,8 +370,27 @@ async def download(job_id: str):
         return JSONResponse({"error": "Job not ready"}, status_code=400)
 
     with run_id_context(job_id):
-        logger.info("Job %s download requested", job_id)
-        buffer = web_jobs.build_zip(job.run_dir)
+        logger.info("Job %s download requested (format=%s)", job_id, format or "zip")
+
+    if format == "docx":
+        docx_path = job.run_dir / "essay.docx"
+        if not docx_path.is_file():
+            return JSONResponse({"error": "Docx file not found"}, status_code=404)
+
+        def _iter_docx():
+            with open(docx_path, "rb") as fh:
+                while chunk := fh.read(64 * 1024):
+                    yield chunk
+
+        return StreamingResponse(
+            _iter_docx(),
+            media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            headers={
+                "Content-Disposition": f"attachment; filename=essay_{job_id}.docx"
+            },
+        )
+
+    buffer = web_jobs.build_zip(job.run_dir)
 
     def _iter_zip():
         try:

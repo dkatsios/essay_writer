@@ -565,8 +565,9 @@
         statusArea.innerHTML =
           clarificationsHistoryHtml +
           '<p>✅ Essay generated!</p>' +
-          '<button type="button" class="download-link" id="download-btn">Download ZIP</button>' +
-          '<p class="hint">You can re-download as many times as you need. The server removes this package automatically after a timeout.</p>';
+          '<label style="display:block;margin-bottom:.5rem;cursor:pointer"><input type="checkbox" id="docx-only" checked> Download .docx only</label>' +
+          '<button type="button" class="download-link" id="download-btn">Download Essay</button>' +
+          '<p class="hint">Uncheck the box above to download a ZIP with all run files instead.</p>';
         submitBtn.disabled = false;
         const dl = document.getElementById('download-btn');
         if (dl) dl.addEventListener('click', () => { void downloadZip(); });
@@ -937,12 +938,17 @@
       downloadInProgress = true;
       const currentJobId = jobId;
       const btn = document.getElementById('download-btn');
+      const docxOnly = document.getElementById('docx-only');
+      const wantDocx = docxOnly && docxOnly.checked;
       if (btn) {
         btn.disabled = true;
         btn.textContent = 'Preparing…';
       }
       try {
-        const res = await fetch(`/download/${currentJobId}`);
+        const url = wantDocx
+          ? `/download/${currentJobId}?format=docx`
+          : `/download/${currentJobId}`;
+        const res = await fetch(url);
         if (res.status === 404) {
           showJobGone(
             'Download is no longer available. The job may have expired or was already downloaded.'
@@ -954,25 +960,23 @@
           return;
         }
         const blob = await res.blob();
-        const url = URL.createObjectURL(blob);
+        const blobUrl = URL.createObjectURL(blob);
         const a = document.createElement('a');
-        a.href = url;
-        a.download = 'essay_' + currentJobId + '.zip';
+        a.href = blobUrl;
+        a.download = wantDocx
+          ? 'essay_' + currentJobId + '.docx'
+          : 'essay_' + currentJobId + '.zip';
         a.rel = 'noopener';
         document.body.appendChild(a);
         a.click();
         a.remove();
-        /* Don't revoke the blob URL or call cleanup immediately —
-           a.click() only opens the save dialog; the user may cancel.
-           Keep the download button active so they can re-download.
-           Server-side TTL sweep handles eventual artifact cleanup. */
       } catch (err) {
         showError('Download failed: ' + err.message);
       } finally {
         downloadInProgress = false;
         if (btn && document.body.contains(btn)) {
           btn.disabled = false;
-          btn.textContent = 'Download ZIP';
+          btn.textContent = 'Download Essay';
         }
       }
     }
