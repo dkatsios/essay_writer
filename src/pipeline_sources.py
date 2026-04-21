@@ -891,6 +891,40 @@ def _write_source_decision_artifacts(
     )
 
 
+def _build_dedup_sets(
+    source_ids: set[str], registry: dict[str, dict]
+) -> tuple[set[str], set[str]]:
+    """Build DOI and normalized-title sets from source IDs for deduplication."""
+    dois: set[str] = set()
+    titles: set[str] = set()
+    for sid in source_ids:
+        meta = registry.get(sid, {})
+        doi = (meta.get("doi") or "").strip().lower()
+        if doi:
+            dois.add(doi)
+        title = (meta.get("title") or "").strip()
+        if title:
+            norm = re.sub(r"[\W_]+", "", title.casefold(), flags=re.UNICODE)
+            if norm:
+                titles.add(norm)
+    return dois, titles
+
+
+def _is_content_duplicate(
+    meta: dict, known_dois: set[str], known_titles: set[str]
+) -> bool:
+    """Check if a source matches a known DOI or normalized title."""
+    doi = (meta.get("doi") or "").strip().lower()
+    if doi and doi in known_dois:
+        return True
+    title = (meta.get("title") or "").strip()
+    if title:
+        norm = re.sub(r"[\W_]+", "", title.casefold(), flags=re.UNICODE)
+        if norm and norm in known_titles:
+            return True
+    return False
+
+
 def make_read_sources(
     target_sources: int,
     fetch_sources: int,
@@ -1009,6 +1043,91 @@ async def _async_read_sources_orchestration(
             len(scorable),
         )
 
+    # Triage recovery: if triaged pool is already below target, recover early
+    if len(triaged) < target_sources:
+        recovery_fetch_sources = max(
+            fetch_sources + 1,
+            int(fetch_sources * ctx.config.search.recovery_overfetch_multiplier),
+        )
+        recovery_fetch_per_api = max(
+            ctx.config.search.fetch_per_api + 1,
+            int(
+                ctx.config.search.fetch_per_api
+                * ctx.config.search.recovery_fetch_per_api_multiplier
+            ),
+        )
+        logger.info(
+            "Triaged pool below target (%d/%d) — rerunning research with "
+            "max_sources=%d fetch_per_api=%d prefer_fulltext=%s",
+            len(triaged),
+            target_sources,
+            recovery_fetch_sources,
+            recovery_fetch_per_api,
+            ctx.config.search.recovery_prefer_fulltext,
+        )
+        await asyncio.to_thread(
+            _run_research_pass,
+            ctx,
+            recovery_fetch_sources,
+            fetch_per_api=recovery_fetch_per_api,
+            prefer_fulltext=ctx.config.search.recovery_prefer_fulltext,
+        )
+        recovery_done = True
+        registry = _read_registry(registry_path)
+
+        known_ids = set(triage_decisions.keys())
+        known_dois, known_titles = _build_dedup_sets(known_ids, registry)
+
+        new_api = {
+            sid: meta
+            for sid, meta in registry.items()
+            if not meta.get("user_provided")
+            and sid not in known_ids
+            and not _is_content_duplicate(meta, known_dois, known_titles)
+        }
+        if new_api:
+            new_scorable = _filter_scorable_sources(new_api)
+            if new_scorable:
+                if ctx.tracker is not None:
+                    ctx.tracker.set_current_step("read_sources:triage")
+                logger.info(
+                    "Batch-triaging %d new sources after triage recovery...",
+                    len(new_scorable),
+                )
+                triaged_new_ids = await _async_batch_triage_sources(
+                    new_scorable,
+                    essay_topic,
+                    thesis,
+                    async_worker,
+                    tracker=ctx.tracker,
+                    batch_size=triage_batch_size,
+                    sections=plan_sections,
+                )
+                triage_decisions.update(
+                    {
+                        source["source_id"]: source["source_id"] in triaged_new_ids
+                        for source in new_scorable
+                    }
+                )
+                new_triaged = [
+                    source
+                    for source in new_scorable
+                    if source["source_id"] in triaged_new_ids
+                ]
+                triaged.extend(new_triaged)
+                logger.info(
+                    "Triage recovery added %d sources (total triaged: %d)",
+                    len(new_triaged),
+                    len(triaged),
+                )
+
+        # Update api_pairs so later phases see the expanded registry
+        api_pairs = [
+            (sid, meta)
+            for sid, meta in registry.items()
+            if not meta.get("user_provided")
+        ]
+
     # Phase 4: fetch PDFs only for triaged API sources + user sources
     triaged_ids = {source["source_id"] for source in triaged}
     fetch_pairs = [
@@ -1060,7 +1179,7 @@ async def _async_read_sources_orchestration(
     )
 
     # Recovery pass if below target (API sources only)
-    if len(selected_ids) < target_sources:
+    if len(selected_ids) < target_sources and not recovery_done:
         recovery_fetch_sources = max(
             fetch_sources + 1,
             int(fetch_sources * ctx.config.search.recovery_overfetch_multiplier),
@@ -1090,38 +1209,17 @@ async def _async_read_sources_orchestration(
         recovery_done = True
         registry = _read_registry(registry_path)
 
-        # Build DOI/title sets from already-scored sources for dedup
-        scored_dois: set[str] = set()
-        scored_titles: set[str] = set()
-        for sid in scores:
-            meta = registry.get(sid, {})
-            doi = (meta.get("doi") or "").strip().lower()
-            if doi:
-                scored_dois.add(doi)
-            title = (meta.get("title") or "").strip()
-            if title:
-                norm = re.sub(r"[\W_]+", "", title.casefold(), flags=re.UNICODE)
-                if norm:
-                    scored_titles.add(norm)
-
-        def _is_duplicate(meta: dict) -> bool:
-            doi = (meta.get("doi") or "").strip().lower()
-            if doi and doi in scored_dois:
-                return True
-            title = (meta.get("title") or "").strip()
-            if title:
-                norm = re.sub(r"[\W_]+", "", title.casefold(), flags=re.UNICODE)
-                if norm and norm in scored_titles:
-                    return True
-            return False
+        # Dedup against all previously triaged sources (accepted + rejected)
+        known_ids = set(triage_decisions.keys()) | set(scores.keys())
+        known_dois, known_titles = _build_dedup_sets(known_ids, registry)
 
         # Filter + fetch new API candidates only (skip ID and content dupes)
         new_api = {
             sid: meta
             for sid, meta in registry.items()
             if not meta.get("user_provided")
-            and sid not in scores
-            and not _is_duplicate(meta)
+            and sid not in known_ids
+            and not _is_content_duplicate(meta, known_dois, known_titles)
         }
         if new_api:
             new_scorable = _filter_scorable_sources(new_api)
