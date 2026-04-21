@@ -289,9 +289,8 @@ async def run_pipeline(
         )
 
     logger.info(
-        "Sources: target=%d fetch=%d citation_minimum=%d",
+        "Sources: target=%d citation_minimum=%d",
         target_sources,
-        fetch_sources,
         citation_min_sources,
     )
 

@@ -318,9 +318,9 @@ def run_research(
         max_sources,
     )
     logger.info(
-        "Research results: raw=%d registry=%d",
-        len(all_results),
+        "Sources registered: %d (raw=%d)",
         len(registry),
+        len(all_results),
     )
 
     if sources_path:

@@ -714,6 +714,27 @@ def _log_optional_pdf_hint(run_dir: Path, items: list[dict]) -> None:
         logger.info("    id=%s", item["source_id"])
 
 
+def _selected_source_detail_counts(
+    selected_ids: list[str],
+    notes_dir: Path,
+) -> tuple[int, int]:
+    full_text = 0
+    abstract_only = 0
+    for source_id in selected_ids:
+        note_path = notes_dir / f"{source_id}.json"
+        if not note_path.exists():
+            continue
+        try:
+            note = SourceNote.model_validate_json(note_path.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        if note.fetched_fulltext:
+            full_text += 1
+        else:
+            abstract_only += 1
+    return full_text, abstract_only
+
+
 # ---------------------------------------------------------------------------
 # Extracted phases — each takes explicit inputs, returns explicit outputs.
 # ---------------------------------------------------------------------------
@@ -999,13 +1020,13 @@ async def _async_read_sources_orchestration(
         target_sources,
     )
     logger.info(
-        "Source pretrim: kept=%d/%d scorable_api_sources",
+        "Sources scored: %d (from %d scorable)",
         len(scorable),
         initial_scorable_count,
     )
     if len(scorable) < initial_scorable_count:
         logger.info(
-            "Source pretrim: removed=%d before_triage",
+            "Source pretrim: removed=%d before scoring",
             initial_scorable_count - len(scorable),
         )
 
@@ -1015,7 +1036,7 @@ async def _async_read_sources_orchestration(
         if ctx.tracker is not None:
             ctx.tracker.set_current_step("read_sources:score")
         logger.info(
-            "Source triage: scoring=%d api_sources batch_size=%d",
+            "Source scoring: candidates=%d batch_size=%d",
             len(scorable),
             triage_batch_size,
         )
@@ -1035,9 +1056,8 @@ async def _async_read_sources_orchestration(
             if scores.get(source["source_id"], 0) >= min_relevance_score
         ]
         logger.info(
-            "Source triage: kept=%d/%d api_sources min_relevance_score=%d",
+            "Sources above threshold: %d (score >= %d)",
             len(triaged),
-            len(scorable),
             min_relevance_score,
         )
 
@@ -1095,14 +1115,14 @@ async def _async_read_sources_orchestration(
             if new_scorable:
                 if len(new_scorable) < initial_new_scorable_count:
                     logger.info(
-                        "Source pretrim recovery: kept=%d/%d scorable_api_sources",
+                        "Sources scored recovery: %d (from %d scorable)",
                         len(new_scorable),
                         initial_new_scorable_count,
                     )
                 if ctx.tracker is not None:
                     ctx.tracker.set_current_step("read_sources:score")
                 logger.info(
-                    "Source triage recovery: scoring=%d api_sources",
+                    "Source scoring recovery: candidates=%d",
                     len(new_scorable),
                 )
                 new_scores = await _async_batch_triage_sources(
@@ -1122,7 +1142,7 @@ async def _async_read_sources_orchestration(
                 ]
                 triaged.extend(new_triaged)
                 logger.info(
-                    "Source triage recovery: added=%d above_threshold total=%d",
+                    "Sources above threshold recovery: added=%d total=%d",
                     len(new_triaged),
                     len(triaged),
                 )
@@ -1145,9 +1165,8 @@ async def _async_read_sources_orchestration(
     if ctx.tracker is not None:
         ctx.tracker.set_current_step("read_sources:fetch")
     logger.info(
-        "Source fetch: candidates=%d triaged_api=%d user=%d",
+        "Source fetch: candidates=%d user=%d",
         len(fetch_pairs),
-        len(triaged_ids),
         len(user_pairs),
     )
     fetch_results: dict[str, str] = await _fetch_all_pdfs(
@@ -1165,11 +1184,9 @@ async def _async_read_sources_orchestration(
         min_relevance_score,
     )
     logger.info(
-        "Source selection: selected=%d target=%d above_threshold=%d triaged=%d",
+        "Sources available for writing: %d (target=%d)",
         len(selected_ids),
         target_sources,
-        above_threshold,
-        len(triaged),
     )
 
     # Recovery pass if below target (API sources only)
@@ -1227,14 +1244,13 @@ async def _async_read_sources_orchestration(
             if new_scorable:
                 if len(new_scorable) < initial_new_scorable_count:
                     logger.info(
-                        "Pretrimmed recovery API sources from %d to %d before LLM triage",
-                        initial_new_scorable_count,
-                        len(new_scorable),
+                        "Source pretrim recovery: removed=%d before scoring",
+                        initial_new_scorable_count - len(new_scorable),
                     )
                 if ctx.tracker is not None:
                     ctx.tracker.set_current_step("read_sources:score")
                 logger.info(
-                    "Scoring %d new sources after recovery...",
+                    "Source scoring recovery: candidates=%d",
                     len(new_scorable),
                 )
                 new_scores = await _async_batch_triage_sources(
@@ -1264,7 +1280,7 @@ async def _async_read_sources_orchestration(
                         if ctx.tracker is not None:
                             ctx.tracker.set_current_step("read_sources:fetch")
                         logger.info(
-                            "Fetching PDF content for %d new candidates after recovery...",
+                            "Source fetch recovery: candidates=%d",
                             len(new_fetch_pairs),
                         )
                         new_fetches = await _fetch_all_pdfs(
@@ -1411,10 +1427,19 @@ async def _async_read_sources_orchestration(
         encoding="utf-8",
     )
     logger.info(
-        "Source selection: usable=%d target=%d",
+        "Sources available for writing: %d",
         len(selected_registry),
-        target_sources,
     )
+    selected_full_text, selected_abstract_only = _selected_source_detail_counts(
+        selected_ids,
+        notes_dir,
+    )
+    if selected_full_text or selected_abstract_only:
+        logger.info(
+            "Selected source detail: %d full text / %d abstract-only",
+            selected_full_text,
+            selected_abstract_only,
+        )
 
     if len(selected_registry) < target_sources:
         logger.warning(
