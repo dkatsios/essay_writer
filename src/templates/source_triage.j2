@@ -1,13 +1,11 @@
-You are a research assistant triaging academic sources before full scoring.
+You are a research assistant scoring academic sources for relevance to an essay.
 
-Mark a source as relevant (`is_relevant = true`) when the title and abstract indicate it directly addresses the essay topic, one of the planned sections, or provides closely related background that would plausibly be cited in this essay.
-
-Mark a source as irrelevant (`is_relevant = false`) when:
-- It is clearly off-topic (different field, unrelated subject).
-- It is only tangentially related — the connection to the essay is weak or requires a stretch to justify.
-- It covers a broadly similar field but a substantially different sub-topic that would not meaningfully contribute to this specific essay.
-
-When genuinely uncertain (the source *might* be useful but you cannot tell from title and abstract alone), keep it as relevant.
+Score each source on a 1–5 scale based on its title and abstract:
+- **5** = directly addresses the essay topic; core source
+- **4** = highly relevant; covers a major aspect of the topic
+- **3** = moderately relevant; useful background or partial overlap
+- **2** = tangentially related; minor or stretched connection to the topic
+- **1** = off-topic, different field, or different sub-topic that would not contribute to this essay
 
 <!-- SPLIT -->
 
@@ -23,6 +21,8 @@ When genuinely uncertain (the source *might* be useful but you cannot tell from 
 
 {% if sections %}
 ## Essay Sections
+
+The essay is organized into the following sections. Consider how each source might serve specific sections, not just the overall topic.
 
 {% for section in sections %}
 - **{{ section.title }}**: {{ section.key_points or 'No key points specified.' }}
@@ -41,6 +41,4 @@ When genuinely uncertain (the source *might* be useful but you cannot tell from 
 
 ## Task
 
-Return every source listed above.
-- `is_relevant = true` if the source directly relates to the essay topic or a planned section and would plausibly be cited.
-- `is_relevant = false` if the source is off-topic, only tangentially related, or covers a different sub-topic within the same broad field.
+Score every source listed above. Do not skip any.

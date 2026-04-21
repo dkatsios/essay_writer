@@ -353,7 +353,7 @@ class SourceNote(BaseModel):
 
 
 class SourceScoreItem(BaseModel):
-    """Relevance score for a single source — used in batch scoring."""
+    """Relevance score for a single source."""
 
     source_id: str = Field(description="Exact source_id from the input list.")
     relevance_score: int = Field(
@@ -369,26 +369,6 @@ class SourceScoreBatch(BaseModel):
     @field_validator("scores", mode="before")
     @classmethod
     def _parse_stringified_scores(cls, v: object) -> object:
-        return _parse_stringified_list_value(v)
-
-
-class SourceTriageItem(BaseModel):
-    """Cheap pre-scoring relevance decision for a single source."""
-
-    source_id: str = Field(description="Exact source_id from the input list.")
-    is_relevant: bool = Field(
-        description="True when the source should proceed to full scoring; false only when clearly irrelevant."
-    )
-
-
-class SourceTriageBatch(BaseModel):
-    """Batch triage result — per-source keep/drop decisions."""
-
-    decisions: list[SourceTriageItem]
-
-    @field_validator("decisions", mode="before")
-    @classmethod
-    def _parse_stringified_decisions(cls, v: object) -> object:
         return _parse_stringified_list_value(v)
 
 

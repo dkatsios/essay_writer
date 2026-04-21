@@ -13,7 +13,7 @@ from src.pipeline_sources import (
     _select_top_sources,
     _write_source_decision_artifacts,
 )
-from src.schemas import SourceScoreBatch, SourceTriageBatch
+from src.schemas import SourceScoreBatch
 
 
 # -- _filter_scorable_sources -----------------------------------------------
@@ -130,7 +130,7 @@ class TestSelectTopSources:
 
 
 class TestAsyncBatchTriageSources:
-    def test_batches_and_keeps_only_relevant(self, monkeypatch):
+    def test_batches_and_scores_sources(self, monkeypatch):
         scorable = [
             {
                 "source_id": "keep",
@@ -150,11 +150,11 @@ class TestAsyncBatchTriageSources:
             return "PROMPT"
 
         async def fake_async_structured_call(_worker, _prompt, schema, _tracker=None):
-            assert schema is SourceTriageBatch
-            return SourceTriageBatch(
-                decisions=[
-                    {"source_id": "keep", "is_relevant": True},
-                    {"source_id": "drop", "is_relevant": False},
+            assert schema is SourceScoreBatch
+            return SourceScoreBatch(
+                scores=[
+                    {"source_id": "keep", "relevance_score": 5},
+                    {"source_id": "drop", "relevance_score": 1},
                 ]
             )
 
@@ -163,17 +163,17 @@ class TestAsyncBatchTriageSources:
             "src.pipeline_sources._async_structured_call", fake_async_structured_call
         )
 
-        kept = asyncio.run(
+        result = asyncio.run(
             _async_batch_triage_sources(
                 scorable,
                 "AI in Greek higher education",
                 "Policy thesis",
                 async_worker=SimpleNamespace(),
-                batch_size=30,
+                batch_size=50,
             )
         )
 
-        assert kept == {"keep"}
+        assert result == {"keep": 5, "drop": 1}
         assert rendered_templates == ["source_triage.j2"]
 
 
@@ -181,7 +181,7 @@ class TestAsyncBatchTriageSources:
 
 
 class TestWriteSourceDecisionArtifacts:
-    def test_writes_triage_and_score_artifacts(self, tmp_path):
+    def test_writes_score_artifacts(self, tmp_path):
         run_dir = tmp_path / "run"
         sources_dir = run_dir / "sources"
         sources_dir.mkdir(parents=True)
@@ -193,20 +193,18 @@ class TestWriteSourceDecisionArtifacts:
         _write_source_decision_artifacts(
             run_dir,
             registry,
-            {"keep": True, "drop": False},
-            {"keep": 5},
+            {"keep": 5, "drop": 1},
             ["keep"],
             min_relevance_score=3,
         )
 
-        triage = json.loads((sources_dir / "triage.json").read_text(encoding="utf-8"))
         scores = json.loads((sources_dir / "scores.json").read_text(encoding="utf-8"))
 
-        assert triage["keep"]["triage_relevant"] is True
-        assert triage["drop"]["triage_relevant"] is False
         assert scores["min_relevance_score"] == 3
         assert scores["scores"]["keep"]["relevance_score"] == 5
         assert scores["scores"]["keep"]["selected_for_writing"] is True
+        assert scores["scores"]["drop"]["relevance_score"] == 1
+        assert scores["scores"]["drop"]["selected_for_writing"] is False
 
 
 # -- _async_fetch_pdf_content -----------------------------------------------
