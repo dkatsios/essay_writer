@@ -17,6 +17,15 @@ from src.schemas import (
 logger = logging.getLogger(__name__)
 
 
+def _read_json(path: Path) -> dict | list | None:
+    if not path.exists():
+        return None
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, ValueError):
+        return None
+
+
 def _calc_cost(
     model: str,
     input_tokens: int,
@@ -222,8 +231,7 @@ class TokenTracker:
         draft_words = _count_words(run_dir / "essay" / "draft.md")
         reviewed_words = _count_words(run_dir / "essay" / "reviewed.md")
         target_words = _parse_target_words(run_dir / "plan" / "plan.json")
-        sources_count = _count_sources(run_dir / "sources" / "registry.json")
-        usable_count = _count_accessible_notes(run_dir / "sources" / "notes")
+        source_metrics = _summarize_source_report_metrics(run_dir)
         selected_count = _count_sources(run_dir / "sources" / "selected.json")
         essay_path = run_dir / "essay" / "reviewed.md"
         if not essay_path.exists():
@@ -239,12 +247,26 @@ class TokenTracker:
             f"| Total cost | ${total_cost:.4f} |",
             f"| Tokens (in / out / think) | {total_in:,} / {total_out:,} / {total_think:,} |",
         ]
-        if sources_count:
-            lines.append(f"| Sources fetched | {sources_count} |")
-        if usable_count:
-            lines.append(f"| Sources usable | {usable_count} |")
+        if source_metrics["registered"]:
+            lines.append(f"| Sources registered | {source_metrics['registered']} |")
+        if source_metrics["scored"]:
+            lines.append(f"| Sources scored | {source_metrics['scored']} |")
+        if source_metrics["above_threshold"]:
+            threshold = source_metrics["min_relevance_score"]
+            lines.append(
+                f"| Sources above threshold | {source_metrics['above_threshold']} (score >= {threshold}) |"
+            )
         if selected_count:
-            lines.append(f"| Sources selected | {selected_count} |")
+            lines.append(f"| Sources available for writing | {selected_count} |")
+        if (
+            source_metrics["selected_with_fulltext"]
+            or source_metrics["selected_abstract_only"]
+        ):
+            lines.append(
+                "| Selected source detail | "
+                f"{source_metrics['selected_with_fulltext']} full text / "
+                f"{source_metrics['selected_abstract_only']} abstract-only |"
+            )
         if cited_count:
             lines.append(f"| Sources cited | {cited_count} |")
         if target_words:
@@ -322,29 +344,82 @@ def _count_words(path: Path) -> int:
 
 
 def _count_sources(path: Path) -> int:
-    if not path.exists():
-        return 0
-    try:
-        return len(json.loads(path.read_text(encoding="utf-8")))
-    except (json.JSONDecodeError, ValueError):
-        return 0
+    data = _read_json(path)
+    if isinstance(data, dict) or isinstance(data, list):
+        return len(data)
+    return 0
 
 
-def _count_accessible_notes(notes_dir: Path) -> int:
-    if not notes_dir.exists():
-        return 0
+def _summarize_score_metrics(path: Path) -> dict[str, int]:
+    data = _read_json(path)
+    if not isinstance(data, dict):
+        return {
+            "scored": 0,
+            "above_threshold": 0,
+            "min_relevance_score": 0,
+        }
 
-    count = 0
-    for path in notes_dir.iterdir():
-        if path.suffix != ".json":
+    raw_scores = data.get("scores")
+    if not isinstance(raw_scores, dict):
+        return {
+            "scored": 0,
+            "above_threshold": 0,
+            "min_relevance_score": 0,
+        }
+
+    min_relevance_score = data.get("min_relevance_score", 0)
+    if not isinstance(min_relevance_score, int):
+        min_relevance_score = 0
+
+    above_threshold = 0
+    for source in raw_scores.values():
+        if not isinstance(source, dict):
             continue
-        try:
-            data = json.loads(path.read_text(encoding="utf-8"))
-        except (json.JSONDecodeError, ValueError):
+        relevance_score = source.get("relevance_score", 0)
+        if isinstance(relevance_score, int) and relevance_score >= min_relevance_score:
+            above_threshold += 1
+
+    return {
+        "scored": len(raw_scores),
+        "above_threshold": above_threshold,
+        "min_relevance_score": min_relevance_score,
+    }
+
+
+def _summarize_selected_note_metrics(run_dir: Path) -> dict[str, int]:
+    selected = _read_json(run_dir / "sources" / "selected.json")
+    if not isinstance(selected, dict) or not selected:
+        return {
+            "selected_with_fulltext": 0,
+            "selected_abstract_only": 0,
+        }
+    notes_dir = run_dir / "sources" / "notes"
+    selected_with_fulltext = 0
+    selected_abstract_only = 0
+
+    for source_id in selected:
+        note = _read_json(notes_dir / f"{source_id}.json")
+        if not isinstance(note, dict):
             continue
-        if isinstance(data, dict) and data.get("is_accessible"):
-            count += 1
-    return count
+        if note.get("fetched_fulltext"):
+            selected_with_fulltext += 1
+        else:
+            selected_abstract_only += 1
+
+    return {
+        "selected_with_fulltext": selected_with_fulltext,
+        "selected_abstract_only": selected_abstract_only,
+    }
+
+
+def _summarize_source_report_metrics(run_dir: Path) -> dict[str, int]:
+    score_metrics = _summarize_score_metrics(run_dir / "sources" / "scores.json")
+    selected_metrics = _summarize_selected_note_metrics(run_dir)
+    return {
+        "registered": _count_sources(run_dir / "sources" / "registry.json"),
+        **score_metrics,
+        **selected_metrics,
+    }
 
 
 def _count_cited_sources(path: Path) -> int:
