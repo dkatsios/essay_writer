@@ -199,6 +199,29 @@ def _article_href(doi: str, url: str, pdf_url: str) -> str | None:
     return article_url or None
 
 
+def _compact_fetch_error(exc: Exception) -> str:
+    """Return a short, stable summary for fetch failures."""
+    if isinstance(exc, httpx.HTTPStatusError):
+        status = exc.response.status_code
+        phrase = exc.response.reason_phrase or ""
+        return f"HTTP {status}{f' {phrase}' if phrase else ''}"
+
+    message = " ".join(str(exc).split())
+    lowered = message.lower()
+    if "certificate_verify_failed" in lowered or "certificate verify failed" in lowered:
+        if "hostname mismatch" in lowered:
+            return "SSL verify failed (hostname mismatch)"
+        return "SSL verify failed"
+    if (
+        "nodename nor servname provided" in lowered
+        or "name or service not known" in lowered
+    ):
+        return "DNS resolution failed"
+    if message:
+        return message[:160]
+    return type(exc).__name__
+
+
 def _source_note_with_fulltext_flag(
     note: SourceNote, had_substantive_body: bool
 ) -> SourceNote:
@@ -445,11 +468,19 @@ async def _async_fetch_pdf_content(
             fetched = fetched[:50_000] + "\n\n[... truncated ...]"
         return source_id, fetched
     except httpx.HTTPStatusError as exc:
-        logger.warning("Failed to fetch PDF %s: %s", pdf_url, exc)
+        logger.warning(
+            "PDF fetch failed: url=%s reason=%s",
+            pdf_url,
+            _compact_fetch_error(exc),
+        )
         if exc.response.status_code == 429 and domain_tracker:
             domain_tracker.record_failure(pdf_url)
     except (httpx.RequestError, Exception) as exc:
-        logger.warning("Failed to fetch PDF %s: %s", pdf_url, exc)
+        logger.warning(
+            "PDF fetch failed: url=%s reason=%s",
+            pdf_url,
+            _compact_fetch_error(exc),
+        )
     return source_id, ""
 
 
@@ -489,10 +520,13 @@ def _filter_scorable_sources(
             }
         )
 
-    if dropped_abstract:
-        logger.info("Dropped %d sources with no usable abstract", dropped_abstract)
-    if dropped_authors:
-        logger.info("Dropped %d sources with no authors", dropped_authors)
+    logger.info(
+        "Source screening: api_total=%d scorable=%d dropped_no_abstract=%d dropped_no_authors=%d",
+        len(registry),
+        len(scorable),
+        dropped_abstract,
+        dropped_authors,
+    )
     return scorable
 
 
@@ -972,15 +1006,14 @@ async def _async_read_sources_orchestration(
         target_sources,
     )
     logger.info(
-        "Filtered to %d scorable API sources (of %d total API)",
+        "Source pretrim: kept=%d/%d scorable_api_sources",
         len(scorable),
-        len(api_pairs),
+        initial_scorable_count,
     )
     if len(scorable) < initial_scorable_count:
         logger.info(
-            "Pretrimmed scorable API sources from %d to %d before LLM triage",
-            initial_scorable_count,
-            len(scorable),
+            "Source pretrim: removed=%d before_triage",
+            initial_scorable_count - len(scorable),
         )
 
     # Phase 3: score title+abstract relevance before fetching PDFs
@@ -989,7 +1022,7 @@ async def _async_read_sources_orchestration(
         if ctx.tracker is not None:
             ctx.tracker.set_current_step("read_sources:score")
         logger.info(
-            "Scoring %d scorable sources (batch_size=%d)...",
+            "Source triage: scoring=%d api_sources batch_size=%d",
             len(scorable),
             triage_batch_size,
         )
@@ -1009,7 +1042,7 @@ async def _async_read_sources_orchestration(
             if scores.get(source["source_id"], 0) >= min_relevance_score
         ]
         logger.info(
-            "Scoring kept %d of %d scorable API sources (score >= %d)",
+            "Source triage: kept=%d/%d api_sources min_relevance_score=%d",
             len(triaged),
             len(scorable),
             min_relevance_score,
@@ -1069,14 +1102,14 @@ async def _async_read_sources_orchestration(
             if new_scorable:
                 if len(new_scorable) < initial_new_scorable_count:
                     logger.info(
-                        "Pretrimmed recovery API sources from %d to %d before LLM triage",
-                        initial_new_scorable_count,
+                        "Source pretrim recovery: kept=%d/%d scorable_api_sources",
                         len(new_scorable),
+                        initial_new_scorable_count,
                     )
                 if ctx.tracker is not None:
                     ctx.tracker.set_current_step("read_sources:score")
                 logger.info(
-                    "Scoring %d new sources after recovery...",
+                    "Source triage recovery: scoring=%d api_sources",
                     len(new_scorable),
                 )
                 new_scores = await _async_batch_triage_sources(
@@ -1096,7 +1129,7 @@ async def _async_read_sources_orchestration(
                 ]
                 triaged.extend(new_triaged)
                 logger.info(
-                    "Recovery added %d sources above threshold (total triaged: %d)",
+                    "Source triage recovery: added=%d above_threshold total=%d",
                     len(new_triaged),
                     len(triaged),
                 )
@@ -1118,7 +1151,12 @@ async def _async_read_sources_orchestration(
         return
     if ctx.tracker is not None:
         ctx.tracker.set_current_step("read_sources:fetch")
-    logger.info("Fetching PDF content for %d source candidates...", len(fetch_pairs))
+    logger.info(
+        "Source fetch: candidates=%d triaged_api=%d user=%d",
+        len(fetch_pairs),
+        len(triaged_ids),
+        len(user_pairs),
+    )
     fetch_results: dict[str, str] = await _fetch_all_pdfs(
         fetch_pairs, sources_dir, tracker=ctx.tracker, min_body_words=min_body
     )
@@ -1134,10 +1172,11 @@ async def _async_read_sources_orchestration(
         min_relevance_score,
     )
     logger.info(
-        "Selected %d API sources from %d scored candidates (%d above threshold)",
+        "Source selection: selected=%d target=%d above_threshold=%d triaged=%d",
         len(selected_ids),
-        len(triaged),
+        target_sources,
         above_threshold,
+        len(triaged),
     )
 
     # Recovery pass if below target (API sources only)
@@ -1379,7 +1418,7 @@ async def _async_read_sources_orchestration(
         encoding="utf-8",
     )
     logger.info(
-        "Selected %d usable sources (target %d)",
+        "Source selection: usable=%d target=%d",
         len(selected_registry),
         target_sources,
     )

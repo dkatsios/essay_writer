@@ -228,6 +228,39 @@ def _is_retryable(exc: Exception) -> bool:
     return bool(code and (code == 429 or 500 <= code < 600))
 
 
+def _compact_retry_error(exc: Exception) -> str:
+    """Return a short, single-line summary for retryable API errors."""
+    message = " ".join(str(exc).split())
+    lowered = message.lower()
+
+    if (
+        "resource_exhausted" in lowered
+        or " 429 " in f" {lowered} "
+        or lowered.startswith("429")
+    ):
+        return "429 RESOURCE_EXHAUSTED"
+    if (
+        "unavailable" in lowered
+        or " 503 " in f" {lowered} "
+        or lowered.startswith("503")
+    ):
+        return "503 UNAVAILABLE"
+    if "timed out" in lowered or "timeout" in lowered:
+        return "timeout"
+
+    status_code = getattr(exc, "status_code", None)
+    if isinstance(status_code, int):
+        return f"HTTP {status_code}"
+    if message:
+        return message[:160]
+    return type(exc).__name__
+
+
+def _should_log_retry_warning(attempt: int) -> bool:
+    """Log the first retry and the final retry; suppress the middle ones."""
+    return attempt == 0 or attempt == _RETRY_MAX - 1
+
+
 def _retry_with_backoff(fn, *, is_async: bool = False):
     """Run a sync or async callable with exponential backoff on transient errors."""
     if is_async:
@@ -239,13 +272,14 @@ def _retry_with_backoff(fn, *, is_async: bool = False):
                     return await fn()
                 except Exception as exc:
                     if attempt < _RETRY_MAX and _is_retryable(exc):
-                        logger.warning(
-                            "Transient API error (attempt %d/%d): %s — retrying in %.0fs",
-                            attempt + 1,
-                            _RETRY_MAX,
-                            exc,
-                            delay,
-                        )
+                        if _should_log_retry_warning(attempt):
+                            logger.warning(
+                                "Transient API error (attempt %d/%d): %s — retrying in %.0fs",
+                                attempt + 1,
+                                _RETRY_MAX,
+                                _compact_retry_error(exc),
+                                delay,
+                            )
                         await asyncio.sleep(delay)
                         delay = min(delay * 2, _RETRY_MAX_DELAY)
                         continue
@@ -259,13 +293,14 @@ def _retry_with_backoff(fn, *, is_async: bool = False):
             return fn()
         except Exception as exc:
             if attempt < _RETRY_MAX and _is_retryable(exc):
-                logger.warning(
-                    "Transient API error (attempt %d/%d): %s — retrying in %.0fs",
-                    attempt + 1,
-                    _RETRY_MAX,
-                    exc,
-                    delay,
-                )
+                if _should_log_retry_warning(attempt):
+                    logger.warning(
+                        "Transient API error (attempt %d/%d): %s — retrying in %.0fs",
+                        attempt + 1,
+                        _RETRY_MAX,
+                        _compact_retry_error(exc),
+                        delay,
+                    )
                 time.sleep(delay)
                 delay = min(delay * 2, _RETRY_MAX_DELAY)
                 continue

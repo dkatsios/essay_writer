@@ -298,7 +298,12 @@ def run_research(
     """
     sources_path = Path(sources_dir) if sources_dir else None
 
-    logger.info("run_research: %d queries, max_sources=%d", len(queries), max_sources)
+    logger.info(
+        "Research start: queries=%d fetch_per_api=%d registry_cap=%d",
+        len(queries),
+        fetch_per_api,
+        max_sources,
+    )
 
     reset_throttle()
 
@@ -313,9 +318,9 @@ def run_research(
         max_sources,
     )
     logger.info(
-        "run_research: %d sources registered from %d raw results",
-        len(registry),
+        "Research results: raw=%d registry=%d",
         len(all_results),
+        len(registry),
     )
 
     if sources_path:
