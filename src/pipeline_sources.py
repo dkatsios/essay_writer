@@ -417,11 +417,16 @@ def _filter_scorable_sources(
     Candidates without a useful abstract are dropped regardless of PDF body.
     """
     scorable: list[dict] = []
-    dropped = 0
+    dropped_abstract = 0
+    dropped_authors = 0
     for source_id, meta in registry.items():
         abstract = meta.get("abstract", "") or ""
         if not _is_useful_abstract(abstract):
-            dropped += 1
+            dropped_abstract += 1
+            continue
+        authors = meta.get("authors", [])
+        if not authors or all(not str(a).strip() for a in authors):
+            dropped_authors += 1
             continue
 
         authors = meta.get("authors", [])
@@ -438,8 +443,10 @@ def _filter_scorable_sources(
             }
         )
 
-    if dropped:
-        logger.info("Dropped %d sources with no usable abstract", dropped)
+    if dropped_abstract:
+        logger.info("Dropped %d sources with no usable abstract", dropped_abstract)
+    if dropped_authors:
+        logger.info("Dropped %d sources with no authors", dropped_authors)
     return scorable
 
 
@@ -558,7 +565,6 @@ def _select_top_sources(
         return (
             1 if meta.get("user_provided") else 0,
             score,
-            1 if any(author.strip() for author in meta.get("authors", [])) else 0,
             int(meta.get("citation_count", 0) or 0),
             1
             if _has_substantive_body(fetch_results.get(source_id, ""), min_body_words)

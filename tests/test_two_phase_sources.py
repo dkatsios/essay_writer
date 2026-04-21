@@ -76,6 +76,34 @@ class TestFilterScorableSources:
         assert len(result) == 1
         assert result[0]["abstract"] == abstract
 
+    def test_drops_source_with_no_authors(self):
+        abstract = " ".join(["abstract"] * 25)
+        registry = {
+            "s5": {
+                "title": "Paper E",
+                "abstract": abstract,
+                "authors": [],
+                "year": "2022",
+                "doi": "10.1234/test",
+            }
+        }
+        result = _filter_scorable_sources(registry)
+        assert len(result) == 0
+
+    def test_drops_source_with_blank_authors(self):
+        abstract = " ".join(["abstract"] * 25)
+        registry = {
+            "s6": {
+                "title": "Paper F",
+                "abstract": abstract,
+                "authors": ["", "  "],
+                "year": "2022",
+                "doi": "10.1234/test",
+            }
+        }
+        result = _filter_scorable_sources(registry)
+        assert len(result) == 0
+
 
 # -- _select_top_sources ----------------------------------------------------
 
