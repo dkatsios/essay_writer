@@ -8,6 +8,9 @@ This is the canonical AI guidance file for the essay writer project. See `.githu
 # Install dependencies
 uv sync
 
+# Enable the repo-managed pre-push hook once per clone
+git config core.hooksPath .githooks
+
 # Run the web UI
 uv run uvicorn src.web:app --reload
 

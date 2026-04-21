@@ -46,6 +46,7 @@ _MIN_ABSTRACT_WORDS = 20
 _USER_SOURCE_PREFIX = "user_"
 _USER_ID_HASH_LENGTH = 8
 _SOURCE_READ_CONCURRENCY = 6
+_SOURCE_TRIAGE_CONCURRENCY = 4
 _MIN_RELEVANCE_SCORE = 3
 _MIN_TOKEN_LENGTH = 4
 _PRETRIM_MULTIPLIER = 5
@@ -559,41 +560,50 @@ async def _async_batch_triage_sources(
         return {item.source_id: item.relevance_score for item in result.scores}
 
     scores: dict[str, int] = {}
-    for batch in batches:
-        try:
-            scores.update(await _triage_batch(batch))
-        except Exception:
-            logger.warning(
-                "Batch triage failed for %d sources; retrying once…",
-                len(batch),
-            )
+    semaphore = asyncio.Semaphore(min(_SOURCE_TRIAGE_CONCURRENCY, num_batches))
+
+    async def _score_batch(batch: list[dict]) -> dict[str, int]:
+        async with semaphore:
             try:
-                scores.update(await _triage_batch(batch))
+                return await _triage_batch(batch)
             except Exception:
-                if len(batch) <= 1:
-                    logger.warning(
-                        "Single-source triage failed for %s; assigning score 0",
-                        batch[0]["source_id"] if batch else "?",
-                    )
-                    for source in batch:
-                        scores[source["source_id"]] = 0
-                else:
+                logger.warning(
+                    "Batch triage failed for %d sources; retrying once…",
+                    len(batch),
+                )
+                try:
+                    return await _triage_batch(batch)
+                except Exception:
+                    if len(batch) <= 1:
+                        logger.warning(
+                            "Single-source triage failed for %s; assigning score 0",
+                            batch[0]["source_id"] if batch else "?",
+                        )
+                        return {source["source_id"]: 0 for source in batch}
+
                     logger.warning(
                         "Batch triage retry failed; falling back to individual triage for %d sources",
                         len(batch),
                     )
+                    batch_scores: dict[str, int] = {}
                     for source in batch:
                         try:
-                            scores.update(await _triage_batch([source]))
+                            batch_scores.update(await _triage_batch([source]))
                         except Exception:
                             logger.warning(
                                 "Individual triage failed for %s; assigning score 0",
                                 source["source_id"],
                             )
-                            scores[source["source_id"]] = 0
-        finally:
-            if tracker is not None:
-                tracker.increment_sub_done()
+                            batch_scores[source["source_id"]] = 0
+                    return batch_scores
+            finally:
+                if tracker is not None:
+                    tracker.increment_sub_done()
+
+    for batch_scores in await asyncio.gather(
+        *(_score_batch(batch) for batch in batches)
+    ):
+        scores.update(batch_scores)
 
     # Fill in any sources the LLM missed with score 0
     for source in scorable:

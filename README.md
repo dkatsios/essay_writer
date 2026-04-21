@@ -33,6 +33,9 @@ AI-powered academic essay generator for Greek university students. Uses a determ
 # Install dependencies
 uv sync
 
+# Enable the repo-managed pre-push hook once per clone
+git config core.hooksPath .githooks
+
 # Run the web UI
 uv run uvicorn src.web:app --reload
 ```
@@ -50,6 +53,22 @@ If the first source-reading pass still produces too few usable selected sources,
 ```bash
 docker build -t essay-writer .
 docker run -p 8000:8000 --env-file .env essay-writer
+```
+
+## Local Git Hook
+
+This repo includes a tracked pre-push hook at `.githooks/pre-push` that runs the test suite locally before `git push`.
+
+Enable it once per clone:
+
+```bash
+git config core.hooksPath .githooks
+```
+
+After that, each push runs:
+
+```bash
+uv run python -m pytest tests/ -v
 ```
 
 ## Deployment

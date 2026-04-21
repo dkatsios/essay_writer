@@ -290,6 +290,54 @@ class TestAsyncBatchTriageSources:
         assert result == {"keep": 5, "drop": 1}
         assert rendered_templates == ["source_triage.j2"]
 
+    def test_processes_multiple_batches_concurrently(self, monkeypatch):
+        scorable = [
+            {
+                "source_id": "s1",
+                "title": "AI in higher education",
+                "abstract": "Useful",
+            },
+            {
+                "source_id": "s2",
+                "title": "AI policy",
+                "abstract": "Useful",
+            },
+        ]
+        started: list[str] = []
+        both_started = asyncio.Event()
+
+        def fake_render_prompt(template: str, **kwargs):
+            assert template == "source_triage.j2"
+            return kwargs["sources"][0]["source_id"]
+
+        async def fake_async_structured_call(_worker, prompt, schema, _tracker=None):
+            assert schema is SourceScoreBatch
+            started.append(prompt)
+            if len(started) == 2:
+                both_started.set()
+            await asyncio.wait_for(both_started.wait(), timeout=0.1)
+            return SourceScoreBatch(
+                scores=[{"source_id": prompt, "relevance_score": 4}]
+            )
+
+        monkeypatch.setattr("src.pipeline_sources.render_prompt", fake_render_prompt)
+        monkeypatch.setattr(
+            "src.pipeline_sources._async_structured_call", fake_async_structured_call
+        )
+
+        result = asyncio.run(
+            _async_batch_triage_sources(
+                scorable,
+                "AI in Greek higher education",
+                "Policy thesis",
+                async_worker=SimpleNamespace(),
+                batch_size=1,
+            )
+        )
+
+        assert result == {"s1": 4, "s2": 4}
+        assert sorted(started) == ["s1", "s2"]
+
 
 # -- _write_source_decision_artifacts --------------------------------------
 
@@ -329,17 +377,21 @@ class TestAsyncFetchPdfContent:
         content_file = tmp_path / "source.txt"
         content_file.write_text("This is user content.", encoding="utf-8")
         meta = {"user_provided": True, "content_path": str(content_file)}
-        sid, content = asyncio.run(
+        sid, content, did_fail = asyncio.run(
             _async_fetch_pdf_content("user_001", meta, str(tmp_path))
         )
         assert sid == "user_001"
         assert "user content" in content
+        assert did_fail is False
 
     def test_no_pdf_url_returns_empty(self):
         meta = {"url": "https://example.com/page", "pdf_url": ""}
-        sid, content = asyncio.run(_async_fetch_pdf_content("s1", meta, "/tmp/sources"))
+        sid, content, did_fail = asyncio.run(
+            _async_fetch_pdf_content("s1", meta, "/tmp/sources")
+        )
         assert sid == "s1"
         assert content == ""
+        assert did_fail is False
 
     def test_domain_throttled_returns_empty(self):
         from src.pipeline_sources import _DomainFailureTracker
@@ -348,10 +400,12 @@ class TestAsyncFetchPdfContent:
         tracker.record_failure("https://example.com/paper.pdf")
         tracker.record_failure("https://example.com/paper.pdf")
         meta = {"pdf_url": "https://example.com/paper.pdf"}
-        sid, content = asyncio.run(
+        sid, content, did_fail = asyncio.run(
             _async_fetch_pdf_content("s1", meta, "/tmp/sources", domain_tracker=tracker)
         )
+        assert sid == "s1"
         assert content == ""
+        assert did_fail is False
 
 
 # -- SourceScoreBatch schema ------------------------------------------------
