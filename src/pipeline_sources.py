@@ -6,6 +6,7 @@ import asyncio
 import hashlib
 import json
 import logging
+import math
 import re
 import threading
 from collections.abc import Callable
@@ -559,19 +560,22 @@ def _select_top_sources(
             min_relevance_score,
         )
 
-    def _sort_key(item: tuple[str, int]) -> tuple:
+    def _composite_score(item: tuple[str, int]) -> float:
         source_id, score = item
         meta = registry.get(source_id, {})
+        user_gate = 1_000_000 if meta.get("user_provided") else 0
+        citations = int(meta.get("citation_count", 0) or 0)
+        has_fulltext = _has_substantive_body(
+            fetch_results.get(source_id, ""), min_body_words
+        )
         return (
-            1 if meta.get("user_provided") else 0,
-            score,
-            int(meta.get("citation_count", 0) or 0),
-            1
-            if _has_substantive_body(fetch_results.get(source_id, ""), min_body_words)
-            else 0,
+            user_gate
+            + score * 100
+            + math.log2(1 + citations) * 10
+            + (3 if has_fulltext else 0)
         )
 
-    candidates.sort(key=_sort_key, reverse=True)
+    candidates.sort(key=_composite_score, reverse=True)
     return [source_id for source_id, _ in candidates[:target_sources]]
 
 

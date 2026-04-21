@@ -153,6 +153,16 @@ class TestSelectTopSources:
         )
         assert result[0] == "s1"  # has fulltext → ranked higher
 
+    def test_high_citations_compensate_lower_relevance(self):
+        """A score-4 source with many citations should outrank a score-5 with zero."""
+        scores = {"s1": 4, "s2": 5}
+        registry = {
+            "s1": {"authors": ["A"], "citation_count": 2000},
+            "s2": {"authors": ["B"], "citation_count": 0},
+        }
+        result = _select_top_sources(scores, registry, 2, {})
+        assert result[0] == "s1"  # citations compensate for 1-point gap
+
 
 # -- _async_batch_triage_sources -------------------------------------------
 
