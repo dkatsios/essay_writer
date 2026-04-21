@@ -48,6 +48,11 @@ _USER_ID_HASH_LENGTH = 8
 _SOURCE_READ_CONCURRENCY = 6
 _MIN_RELEVANCE_SCORE = 3
 _MIN_TOKEN_LENGTH = 4
+_PRETRIM_MULTIPLIER = 5
+_PRETRIM_TITLE_WEIGHT = 5
+_PRETRIM_ABSTRACT_WEIGHT = 1
+_PRETRIM_CITATION_WEIGHT = 3
+_PRETRIM_FULLTEXT_BONUS = 5
 
 
 class SourceShortfallAbort(RuntimeError):
@@ -108,6 +113,46 @@ def _optional_pdf_corpus_tokens(run_dir: Path) -> set[str]:
 def _lexical_relevance_score(corpus: set[str], title: str, abstract: str) -> int:
     doc_tokens = _tokenize_for_overlap(title) | _tokenize_for_overlap(abstract)
     return len(doc_tokens & corpus)
+
+
+def _metadata_pretrim_score(source: dict, meta: dict, corpus: set[str]) -> float:
+    title_overlap = len(_tokenize_for_overlap(source.get("title", "")) & corpus)
+    abstract_overlap = len(_tokenize_for_overlap(source.get("abstract", "")) & corpus)
+    citations = int(meta.get("citation_count", 0) or 0)
+    fulltext_bonus = _PRETRIM_FULLTEXT_BONUS if meta.get("pdf_url") else 0
+    return (
+        title_overlap * _PRETRIM_TITLE_WEIGHT
+        + abstract_overlap * _PRETRIM_ABSTRACT_WEIGHT
+        + math.log2(1 + citations) * _PRETRIM_CITATION_WEIGHT
+        + fulltext_bonus
+    )
+
+
+def _pretrim_scorable_sources(
+    scorable: list[dict],
+    registry: dict[str, dict],
+    corpus: set[str],
+    target_sources: int,
+) -> list[dict]:
+    if not scorable or not corpus or target_sources <= 0:
+        return scorable
+
+    keep_count = max(target_sources, target_sources * _PRETRIM_MULTIPLIER)
+    if len(scorable) <= keep_count:
+        return scorable
+
+    ranked = sorted(
+        scorable,
+        key=lambda source: (
+            -_metadata_pretrim_score(
+                source,
+                registry.get(source["source_id"], {}),
+                corpus,
+            ),
+            source["source_id"],
+        ),
+    )
+    return ranked[:keep_count]
 
 
 def _doi_href(doi: str) -> str | None:
@@ -901,6 +946,7 @@ async def _async_read_sources_orchestration(
             pass
 
     async_worker = ctx.async_worker
+    pretrim_corpus = _optional_pdf_corpus_tokens(ctx.run_dir)
 
     # -- Orchestration -------------------------------------------------
 
@@ -918,11 +964,24 @@ async def _async_read_sources_orchestration(
 
     # Phase 2: filter API sources by abstract before any LLM work
     scorable = _filter_scorable_sources({sid: meta for sid, meta in api_pairs})
+    initial_scorable_count = len(scorable)
+    scorable = _pretrim_scorable_sources(
+        scorable,
+        registry,
+        pretrim_corpus,
+        target_sources,
+    )
     logger.info(
         "Filtered to %d scorable API sources (of %d total API)",
         len(scorable),
         len(api_pairs),
     )
+    if len(scorable) < initial_scorable_count:
+        logger.info(
+            "Pretrimmed scorable API sources from %d to %d before LLM triage",
+            initial_scorable_count,
+            len(scorable),
+        )
 
     # Phase 3: score title+abstract relevance before fetching PDFs
     triaged = scorable
@@ -1000,7 +1059,20 @@ async def _async_read_sources_orchestration(
         }
         if new_api:
             new_scorable = _filter_scorable_sources(new_api)
+            initial_new_scorable_count = len(new_scorable)
+            new_scorable = _pretrim_scorable_sources(
+                new_scorable,
+                registry,
+                pretrim_corpus,
+                target_sources,
+            )
             if new_scorable:
+                if len(new_scorable) < initial_new_scorable_count:
+                    logger.info(
+                        "Pretrimmed recovery API sources from %d to %d before LLM triage",
+                        initial_new_scorable_count,
+                        len(new_scorable),
+                    )
                 if ctx.tracker is not None:
                     ctx.tracker.set_current_step("read_sources:score")
                 logger.info(
@@ -1113,7 +1185,20 @@ async def _async_read_sources_orchestration(
         }
         if new_api:
             new_scorable = _filter_scorable_sources(new_api)
+            initial_new_scorable_count = len(new_scorable)
+            new_scorable = _pretrim_scorable_sources(
+                new_scorable,
+                registry,
+                pretrim_corpus,
+                target_sources,
+            )
             if new_scorable:
+                if len(new_scorable) < initial_new_scorable_count:
+                    logger.info(
+                        "Pretrimmed recovery API sources from %d to %d before LLM triage",
+                        initial_new_scorable_count,
+                        len(new_scorable),
+                    )
                 if ctx.tracker is not None:
                     ctx.tracker.set_current_step("read_sources:score")
                 logger.info(
@@ -1311,7 +1396,8 @@ async def _async_read_sources_orchestration(
                 {
                     "usable_sources": len(selected_registry),
                     "target_sources": target_sources,
-                    "scorable_candidates": len(scorable),
+                    "scorable_candidates": initial_scorable_count,
+                    "scoring_candidates": len(scorable),
                     "triaged_candidates": len(triaged),
                     "above_threshold": above_threshold,
                     "total_candidates": len(api_pairs) + len(user_pairs),

@@ -10,6 +10,8 @@ from src.pipeline_sources import (
     _async_batch_triage_sources,
     _async_fetch_pdf_content,
     _filter_scorable_sources,
+    _metadata_pretrim_score,
+    _pretrim_scorable_sources,
     _select_top_sources,
     _write_source_decision_artifacts,
 )
@@ -103,6 +105,80 @@ class TestFilterScorableSources:
         }
         result = _filter_scorable_sources(registry)
         assert len(result) == 0
+
+
+# -- _select_top_sources ----------------------------------------------------
+
+
+class TestPretrimScorableSources:
+    def test_caps_candidate_pool_to_target_multiplier(self):
+        registry = {}
+        scorable = []
+        for index in range(11):
+            source_id = f"s{index:02d}"
+            registry[source_id] = {"citation_count": 0, "pdf_url": ""}
+            scorable.append(
+                {
+                    "source_id": source_id,
+                    "title": f"Cold war topic {index}",
+                    "abstract": "brief abstract",
+                }
+            )
+
+        result = _pretrim_scorable_sources(
+            scorable,
+            registry,
+            {"cold", "war"},
+            target_sources=2,
+        )
+
+        assert len(result) == 10
+        assert [source["source_id"] for source in result] == [
+            f"s{index:02d}" for index in range(10)
+        ]
+
+    def test_uses_abstract_overlap_when_title_is_generic(self):
+        corpus = {"cold", "war", "collapse", "europe"}
+        keep = {
+            "source_id": "keep",
+            "title": "Comparative study",
+            "abstract": "Cold war collapse eastern europe transitions comparative politics",
+        }
+        drop = {
+            "source_id": "drop",
+            "title": "Comparative study",
+            "abstract": "Marine biology coastal erosion fisheries ocean habitats",
+        }
+
+        keep_score = _metadata_pretrim_score(
+            keep, {"citation_count": 0, "pdf_url": ""}, corpus
+        )
+        drop_score = _metadata_pretrim_score(
+            drop, {"citation_count": 0, "pdf_url": ""}, corpus
+        )
+
+        assert keep_score > drop_score
+
+    def test_direct_pdf_bonus_breaks_tie(self):
+        corpus = {"cold", "war", "europe", "transitions"}
+        source = {
+            "source_id": "pdf",
+            "title": "Cold war transitions",
+            "abstract": "Eastern Europe comparative politics",
+        }
+
+        pdf_score = _metadata_pretrim_score(
+            source,
+            {"citation_count": 10, "pdf_url": "https://example.com/paper.pdf"},
+            corpus,
+        )
+        metadata_only_score = _metadata_pretrim_score(
+            source,
+            {"citation_count": 10, "pdf_url": ""},
+            corpus,
+        )
+
+        assert pdf_score > metadata_only_score
 
 
 # -- _select_top_sources ----------------------------------------------------
