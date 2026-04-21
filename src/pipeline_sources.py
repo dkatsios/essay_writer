@@ -572,7 +572,7 @@ def _select_top_sources(
             user_gate
             + score * 100
             + math.log2(1 + citations) * 10
-            + (3 if has_fulltext else 0)
+            + (50 if has_fulltext else 0)
         )
 
     candidates.sort(key=_composite_score, reverse=True)
