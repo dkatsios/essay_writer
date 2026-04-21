@@ -90,6 +90,7 @@ def fetch_url_content(url: str, sources_dir: str | None = None) -> str:
         max_retries=2,
         initial_backoff=1.0,
         request_name="web fetch",
+        log_retries=False,
     )
 
     content_type = resp.headers.get("content-type", "")

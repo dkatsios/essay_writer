@@ -428,7 +428,7 @@ async def _async_fetch_pdf_content(
     sources_dir: str,
     domain_tracker: _DomainFailureTracker | None = None,
     min_body_words: int = 50,
-) -> tuple[str, str]:
+) -> tuple[str, str, bool]:
     """Fetch PDF content for a single source (network I/O only, no LLM).
 
     For user-provided sources, loads content from ``content_path``.
@@ -450,38 +450,29 @@ async def _async_fetch_pdf_content(
             )
             if len(content) > 50_000:
                 content = content[:50_000] + "\n\n[... truncated ...]"
-            return source_id, content
-        return source_id, ""
+            return source_id, content, False
+        return source_id, "", False
 
     # API source: only fetch pdf_url
     pdf_url = meta.get("pdf_url", "")
     if not pdf_url:
-        return source_id, ""
+        return source_id, "", False
 
     if domain_tracker and domain_tracker.should_skip(pdf_url):
         logger.info("Skipping %s — domain throttled", pdf_url)
-        return source_id, ""
+        return source_id, "", False
 
     try:
         fetched = await asyncio.to_thread(fetch_url_content, pdf_url, sources_dir)
         if len(fetched) > 50_000:
             fetched = fetched[:50_000] + "\n\n[... truncated ...]"
-        return source_id, fetched
+        return source_id, fetched, False
     except httpx.HTTPStatusError as exc:
-        logger.warning(
-            "PDF fetch failed: url=%s reason=%s",
-            pdf_url,
-            _compact_fetch_error(exc),
-        )
         if exc.response.status_code == 429 and domain_tracker:
             domain_tracker.record_failure(pdf_url)
-    except (httpx.RequestError, Exception) as exc:
-        logger.warning(
-            "PDF fetch failed: url=%s reason=%s",
-            pdf_url,
-            _compact_fetch_error(exc),
-        )
-    return source_id, ""
+    except (httpx.RequestError, Exception):
+        pass
+    return source_id, "", True
 
 
 def _filter_scorable_sources(
@@ -628,7 +619,6 @@ def _select_top_sources(
     for source_id, score in scores.items():
         if score < min_relevance_score:
             filtered_low += 1
-            logger.info("Filtering source %s (relevance_score=%d)", source_id, score)
             continue
         candidates.append((source_id, score))
 
@@ -744,7 +734,7 @@ async def _fetch_all_pdfs(
     domain_tracker = _DomainFailureTracker()
     semaphore = asyncio.Semaphore(_SOURCE_READ_CONCURRENCY)
 
-    async def _fetch_one(source_id: str, meta: dict) -> tuple[str, str]:
+    async def _fetch_one(source_id: str, meta: dict) -> tuple[str, str, bool]:
         async with semaphore:
             try:
                 return await _async_fetch_pdf_content(
@@ -756,13 +746,16 @@ async def _fetch_all_pdfs(
                 )
             except Exception:
                 logger.exception("Failed to fetch PDF for %s", source_id)
-                return source_id, ""
+                return source_id, "", True
             finally:
                 if tracker is not None:
                     tracker.increment_sub_done()
 
     results = await asyncio.gather(*(_fetch_one(sid, meta) for sid, meta in pairs))
-    return dict(results)
+    failed_fetches = sum(1 for _, _, did_fail in results if did_fail)
+    if failed_fetches:
+        logger.info("PDF fetch failures: total=%d", failed_fetches)
+    return {source_id: content for source_id, content, _ in results}
 
 
 async def _extract_all(

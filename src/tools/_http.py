@@ -51,6 +51,7 @@ def http_get(
     initial_backoff: float = 1.0,
     retry_statuses: tuple[int, ...] = (429, 500, 502, 503, 504),
     request_name: str | None = None,
+    log_retries: bool = True,
 ) -> httpx.Response:
     """Issue a GET request with shared transport and optional retries."""
     client = get_http_client()
@@ -69,13 +70,14 @@ def http_get(
             )
         except httpx.RequestError:
             if attempt < max_retries:
-                logger.warning(
-                    "%s request failed (attempt %d/%d); retrying in %.1fs",
-                    label,
-                    attempt + 1,
-                    max_retries + 1,
-                    delay,
-                )
+                if log_retries:
+                    logger.warning(
+                        "%s request failed (attempt %d/%d); retrying in %.1fs",
+                        label,
+                        attempt + 1,
+                        max_retries + 1,
+                        delay,
+                    )
                 time.sleep(delay)
                 delay *= 2
                 continue
@@ -83,14 +85,15 @@ def http_get(
 
         last_response = response
         if response.status_code in retry_statuses and attempt < max_retries:
-            logger.warning(
-                "%s returned HTTP %d (attempt %d/%d); retrying in %.1fs",
-                label,
-                response.status_code,
-                attempt + 1,
-                max_retries + 1,
-                delay,
-            )
+            if log_retries:
+                logger.warning(
+                    "%s returned HTTP %d (attempt %d/%d); retrying in %.1fs",
+                    label,
+                    response.status_code,
+                    attempt + 1,
+                    max_retries + 1,
+                    delay,
+                )
             time.sleep(delay)
             delay *= 2
             continue
