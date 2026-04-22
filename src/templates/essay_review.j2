@@ -31,24 +31,6 @@ You are an expert academic editor reviewing and polishing an essay in {{ languag
 
 {{ draft_text }}
 
-{% if source_catalog %}
-## All selected sources (compact catalog)
-
-{{ source_catalog }}
-
-**Total selected:** {{ total_selected_sources }} sources.
-{% endif %}
-
-{% if uncited_ids %}
-## Citation Gap — informational
-The draft cites **{{ total_selected_sources - uncited_ids|length }}** of **{{ total_selected_sources }}** selected sources. The following source ids are **not cited**:
-{% for sid in uncited_ids %}
-- `{{ sid }}`
-{% endfor %}
-
-Do **NOT** attempt to insert citations for these uncited sources — you do not have their full content and risk misattribution. Focus on preserving and improving the citations already present in the draft.
-{% endif %}
-
 ## Task
 
 Review and improve the draft following the criteria above. Output the complete polished essay.

@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import re
 from collections.abc import Callable
 from pathlib import Path
 from time import monotonic
@@ -126,13 +125,6 @@ def make_review_full(
         language = _get_brief_language(ctx.run_dir)
         source_notes = _load_selected_source_notes(ctx.run_dir)
         min_sources = _effective_min_sources(citation_min_sources, source_notes)
-        catalog_md = _source_catalog_markdown(source_notes)
-        uncited_ids = [
-            note.source_id
-            for note in source_notes
-            if note.source_id
-            not in set(re.findall(r"\[\[([^|\]]+?)(?:\|[^\]]*?)?\]\]", draft))
-        ]
 
         prompt = render_prompt(
             "essay_review.j2",
@@ -149,9 +141,6 @@ def make_review_full(
             ),
             language=language,
             min_sources=min_sources,
-            source_catalog=catalog_md,
-            total_selected_sources=len(source_notes),
-            uncited_ids=uncited_ids,
         )
 
         reviewed = await _async_text_call(

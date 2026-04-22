@@ -804,6 +804,81 @@ class TestConfigBackedBehavior:
 
         assert "at least" in prompt.user.lower()
 
+    @pytest.mark.asyncio
+    async def test_make_review_full_does_not_pass_source_context(
+        self, tmp_path, monkeypatch
+    ):
+        from config.schemas import EssayWriterConfig
+        from src.pipeline_support import PipelineContext
+        from src.pipeline_writing import make_review_full
+
+        run_dir = tmp_path / "run"
+        (run_dir / "brief").mkdir(parents=True)
+        (run_dir / "plan").mkdir(parents=True)
+        (run_dir / "essay").mkdir(parents=True)
+        (run_dir / "sources" / "notes").mkdir(parents=True)
+        (run_dir / "brief" / "assignment.json").write_text("{}", encoding="utf-8")
+        (run_dir / "plan" / "plan.json").write_text("{}", encoding="utf-8")
+        (run_dir / "essay" / "draft.md").write_text(
+            "# Draft\n\nParagraph with [[s1]].",
+            encoding="utf-8",
+        )
+        (run_dir / "sources" / "selected.json").write_text(
+            json.dumps(["s1"]),
+            encoding="utf-8",
+        )
+        (run_dir / "sources" / "notes" / "s1.json").write_text(
+            json.dumps(
+                {
+                    "source_id": "s1",
+                    "title": "Source One",
+                    "authors": ["Author"],
+                    "summary": "Summary.",
+                    "is_accessible": True,
+                    "fetched_fulltext": True,
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        captured: dict[str, object] = {}
+
+        def fake_render_prompt(template: str, **kwargs):
+            captured["template"] = template
+            captured["kwargs"] = kwargs
+            return type("Prompt", (), {"system": None, "user": "prompt"})()
+
+        async def fake_async_text_call(_client, _prompt, _tracker=None):
+            return "Reviewed text"
+
+        monkeypatch.setattr("src.pipeline_writing.render_prompt", fake_render_prompt)
+        monkeypatch.setattr(
+            "src.pipeline_writing._async_text_call", fake_async_text_call
+        )
+        monkeypatch.setattr(
+            "src.pipeline_writing._get_brief_language",
+            lambda _run_dir: "English",
+        )
+
+        ctx = PipelineContext(
+            worker=None,
+            async_worker=None,
+            writer=None,
+            reviewer=None,
+            run_dir=run_dir,
+            config=EssayWriterConfig(),
+            async_writer=None,
+            async_reviewer=object(),
+        )
+
+        await make_review_full(target_words=1000, citation_min_sources=3)(ctx)
+
+        kwargs = captured["kwargs"]
+        assert captured["template"] == "essay_review.j2"
+        assert "source_catalog" not in kwargs
+        assert "uncited_ids" not in kwargs
+        assert "total_selected_sources" not in kwargs
+
 
 class TestValidationQuestionSuggestedIndex:
     def test_clamps_suggested_option_index_to_valid_range(self):
