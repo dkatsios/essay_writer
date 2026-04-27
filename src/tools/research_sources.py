@@ -191,15 +191,37 @@ def _citation_rank(hit: dict) -> int:
 def _build_registry(
     raw_results: list[dict],
     max_sources: int,
+    *,
+    existing_registry: dict[str, dict] | None = None,
 ) -> dict[str, dict]:
     """Deduplicate, filter, sort, and build the registry.
 
     ``max_sources`` is preserved for call-site compatibility, but trimming now
     happens after LLM relevance triage and scoring rather than here.
+
+    When *existing_registry* is provided (recovery pass), existing entries are
+    preserved and new entries are added only if they don't duplicate existing
+    DOIs or titles. Existing source IDs are reserved so new entries get unique
+    suffixes.
     """
     seen_titles: set[str] = set()
     seen_dois: set[str] = set()
     candidates: list[dict] = []
+
+    # Pre-seed dedup sets from existing registry entries.
+    used_ids: set[str] = set()
+    registry: dict[str, dict] = {}
+    if existing_registry:
+        for sid, meta in existing_registry.items():
+            used_ids.add(sid)
+            registry[sid] = meta
+            doi = (meta.get("doi") or "").strip()
+            if doi:
+                seen_dois.add(doi)
+            title = meta.get("title") or ""
+            norm = _normalise_title(title)
+            if norm:
+                seen_titles.add(norm)
 
     for hit in raw_results:
         title = hit.get("title", "") or ""
@@ -252,8 +274,7 @@ def _build_registry(
         )
     )
 
-    used_ids: set[str] = set()
-    registry: dict[str, dict] = {}
+    # used_ids and registry were initialised above from existing_registry.
 
     for hit in candidates:
         authors = hit.get("authors", [])
@@ -313,9 +334,20 @@ def run_research(
         prefer_fulltext=prefer_fulltext,
     )
 
+    # Load existing registry so recovery passes preserve previously-scored IDs.
+    existing_registry: dict[str, dict] | None = None
+    if sources_path:
+        reg_path = sources_path / "registry.json"
+        if reg_path.exists():
+            try:
+                existing_registry = json.loads(reg_path.read_text(encoding="utf-8"))
+            except Exception:
+                existing_registry = None
+
     registry = _build_registry(
         all_results,
         max_sources,
+        existing_registry=existing_registry,
     )
     logger.info(
         "Sources registered: %d (raw=%d)",

@@ -1116,7 +1116,9 @@ async def _async_read_sources_orchestration(
         recovery_done = True
         registry = _read_registry(registry_path)
 
-        known_ids = set(scores.keys())
+        # Exclude all IDs from the initial pass — both scored and unscorable
+        # (no abstract / no authors) — so recovery only processes truly new entries.
+        known_ids = {sid for sid, _ in api_pairs} | set(scores.keys())
         known_dois, known_titles = _build_dedup_sets(known_ids, registry)
 
         new_api = {
@@ -1243,8 +1245,8 @@ async def _async_read_sources_orchestration(
         recovery_done = True
         registry = _read_registry(registry_path)
 
-        # Dedup against all previously scored sources
-        known_ids = set(scores.keys())
+        # Dedup against all previously seen API sources (scored + unscorable)
+        known_ids = {sid for sid, _ in api_pairs} | set(scores.keys())
         known_dois, known_titles = _build_dedup_sets(known_ids, registry)
 
         # Filter + fetch new API candidates only (skip ID and content dupes)
