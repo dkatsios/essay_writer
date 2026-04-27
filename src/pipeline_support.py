@@ -24,7 +24,7 @@ from src.agent import (
     extract_usage,
 )
 from src.rendering import PromptPair
-from src.schemas import AssignmentBrief, EssayPlan, SourceNote
+from src.schemas import AssignmentBrief, EssayPlan, PlanSection, SourceNote
 
 if TYPE_CHECKING:
     from config.schemas import EssayWriterConfig
@@ -290,12 +290,53 @@ def _get_target_words(run_dir: Path) -> int:
     return plan.total_word_target
 
 
+def _normalize_section_word_targets(sections: list[Section], total_target: int) -> None:
+    """Scale section word targets so they sum to *total_target*, rounding to tens."""
+    section_sum = sum(s.word_target for s in sections)
+    if section_sum <= 0 or total_target <= 0 or section_sum == total_target:
+        return
+    ratio = total_target / section_sum
+    for section in sections:
+        section.word_target = max(10, round(section.word_target * ratio / 10) * 10)
+    # Distribute any residual rounding error into the largest section.
+    adjusted_sum = sum(s.word_target for s in sections)
+    delta = total_target - adjusted_sum
+    if delta and sections:
+        largest = max(sections, key=lambda s: s.word_target)
+        largest.word_target = max(10, largest.word_target + delta)
+    logger.info(
+        "Normalized section word targets: %d -> %d (total_target=%d)",
+        section_sum,
+        sum(s.word_target for s in sections),
+        total_target,
+    )
+
+
 def _parse_sections(run_dir: Path) -> list[Section]:
     plan_path = run_dir / "plan" / "plan.json"
     if not plan_path.exists():
         return []
 
-    plan = EssayPlan.model_validate_json(plan_path.read_text(encoding="utf-8"))
+    try:
+        plan = EssayPlan.model_validate_json(plan_path.read_text(encoding="utf-8"))
+    except ValueError:
+        # Plan on disk may predate the word-target consistency validator
+        # (e.g. checkpoint resume). Fall back to lenient loading.
+        import json as _json
+
+        raw = _json.loads(plan_path.read_text(encoding="utf-8"))
+        plan = EssayPlan.model_construct(
+            title=raw.get("title", ""),
+            thesis=raw.get("thesis", ""),
+            sections=[PlanSection.model_validate(s) for s in raw.get("sections", [])],
+            research_queries=raw.get("research_queries", []),
+            total_word_target=raw.get("total_word_target", 0)
+            or sum(s.get("word_target", 0) for s in raw.get("sections", [])),
+        )
+        logger.warning(
+            "Plan loaded with lenient parsing (word-target validator failed); "
+            "normalization will correct section targets"
+        )
     sections: list[Section] = []
     duplicate_numbers = [
         number
@@ -324,6 +365,8 @@ def _parse_sections(run_dir: Path) -> list[Section]:
                 deferred_order=section.deferred_order,
             )
         )
+
+    _normalize_section_word_targets(sections, plan.total_word_target)
     return sections
 
 

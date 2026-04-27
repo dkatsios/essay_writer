@@ -257,6 +257,16 @@ class EssayPlan(BaseModel):
             issues.append("total_word_target must be a positive integer")
         if any(section.word_target <= 0 for section in self.sections):
             issues.append("each section.word_target must be a positive integer")
+        if self.sections and self.total_word_target > 0:
+            section_sum = sum(s.word_target for s in self.sections)
+            if (
+                abs(section_sum - self.total_word_target)
+                > self.total_word_target * 0.05
+            ):
+                issues.append(
+                    f"sum of section word_target values ({section_sum}) must be "
+                    f"within 5% of total_word_target ({self.total_word_target})"
+                )
         if issues:
             raise ValueError("; ".join(issues))
         return self
