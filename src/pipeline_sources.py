@@ -48,6 +48,7 @@ _USER_ID_HASH_LENGTH = 8
 _SOURCE_READ_CONCURRENCY = 6
 _SOURCE_TRIAGE_CONCURRENCY = 4
 _MIN_RELEVANCE_SCORE = 3
+_MAX_EXTRACTION_BACKFILL_ROUNDS = 2
 _MIN_TOKEN_LENGTH = 4
 _PRETRIM_MULTIPLIER = 5
 _PRETRIM_TITLE_WEIGHT = 5
@@ -612,6 +613,28 @@ async def _async_batch_triage_sources(
     return scores
 
 
+def _source_composite_score(
+    source_id: str,
+    score: int,
+    registry: dict[str, dict],
+    fetch_results: dict[str, str],
+    min_body_words: int = 50,
+) -> float:
+    """Compute ranking score for a single source candidate."""
+    meta = registry.get(source_id, {})
+    user_gate = 1_000_000 if meta.get("user_provided") else 0
+    citations = int(meta.get("citation_count", 0) or 0)
+    has_fulltext = _has_substantive_body(
+        fetch_results.get(source_id, ""), min_body_words
+    )
+    return (
+        user_gate
+        + score * 100
+        + math.log2(1 + citations) * 10
+        + (50 if has_fulltext else 0)
+    )
+
+
 def _select_top_sources(
     scores: dict[str, int],
     registry: dict[str, dict],
@@ -639,22 +662,12 @@ def _select_top_sources(
             min_relevance_score,
         )
 
-    def _composite_score(item: tuple[str, int]) -> float:
-        source_id, score = item
-        meta = registry.get(source_id, {})
-        user_gate = 1_000_000 if meta.get("user_provided") else 0
-        citations = int(meta.get("citation_count", 0) or 0)
-        has_fulltext = _has_substantive_body(
-            fetch_results.get(source_id, ""), min_body_words
-        )
-        return (
-            user_gate
-            + score * 100
-            + math.log2(1 + citations) * 10
-            + (50 if has_fulltext else 0)
-        )
-
-    candidates.sort(key=_composite_score, reverse=True)
+    candidates.sort(
+        key=lambda item: _source_composite_score(
+            item[0], item[1], registry, fetch_results, min_body_words
+        ),
+        reverse=True,
+    )
     return [source_id for source_id, _ in candidates[:target_sources]]
 
 
@@ -1354,6 +1367,74 @@ async def _async_read_sources_orchestration(
             and not registry.get(sid, {}).get("user_provided")
         ]
         selected_ids = user_accessible_ids + api_extracted_ids
+
+    # Backfill from unused above-threshold candidates if extraction failures
+    # reduced the usable set below target.
+    extracted_set = set(selected_ids)
+    # Include all IDs that went through extraction (even failures)
+    for sid, _note in results if all_extract_pairs else []:
+        extracted_set.add(sid)
+    above_threshold_ids = {
+        sid for sid, sc in scores.items() if sc >= min_relevance_score
+    }
+    backfill_round = 0
+    while (
+        len(selected_ids) < target_sources
+        and backfill_round < _MAX_EXTRACTION_BACKFILL_ROUNDS
+    ):
+        backfill_pool = [
+            (sid, scores[sid])
+            for sid in above_threshold_ids
+            if sid not in extracted_set and sid in registry
+        ]
+        if not backfill_pool:
+            break
+        deficit = target_sources - len(selected_ids)
+        backfill_pool.sort(
+            key=lambda item: _source_composite_score(
+                item[0], item[1], registry, fetch_results, min_body
+            ),
+            reverse=True,
+        )
+        backfill_batch = [sid for sid, _ in backfill_pool[:deficit]]
+        logger.info(
+            "Extraction backfill round %d: extracting %d replacement "
+            "candidates (deficit=%d, pool=%d)",
+            backfill_round + 1,
+            len(backfill_batch),
+            deficit,
+            len(backfill_pool),
+        )
+        if ctx.tracker is not None:
+            ctx.tracker.set_current_step("read_sources:extract_backfill")
+        backfill_pairs = [(sid, registry[sid]) for sid in backfill_batch]
+        backfill_results = await _extract_all(
+            backfill_pairs,
+            fetch_results,
+            async_worker,
+            sources_dir,
+            notes_dir,
+            essay_topic=essay_topic,
+            tracker=ctx.tracker,
+            min_body_words=min_body,
+        )
+        registry = _backfill_registry(registry, backfill_results, registry_path)
+        for sid, note in backfill_results:
+            extracted_set.add(sid)
+            if (
+                note is not None
+                and note.is_accessible
+                and not registry.get(sid, {}).get("user_provided")
+            ):
+                selected_ids.append(sid)
+        backfill_round += 1
+        if backfill_round < _MAX_EXTRACTION_BACKFILL_ROUNDS:
+            logger.info(
+                "After backfill round %d: %d usable sources (target %d)",
+                backfill_round,
+                len(selected_ids),
+                target_sources,
+            )
 
     # Optional PDF prompt for selected sources without fulltext
     task_ids = set(selected_ids)
