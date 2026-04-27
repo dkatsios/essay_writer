@@ -5,8 +5,6 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-import pytest
-
 from src.schemas import EssayPlan
 
 
@@ -47,12 +45,15 @@ class TestEssayPlanWordTargetValidator:
         plan = EssayPlan.model_validate(_plan_dict(_sections([400, 600]), total=1040))
         assert plan.total_word_target == 1040
 
-    def test_over_5_percent_rejected(self):
-        # sum=1000, total=2000 → 100% off → rejected
-        with pytest.raises(ValueError, match="sum of section word_target"):
-            EssayPlan.model_validate(_plan_dict(_sections([400, 600]), total=2000))
+    def test_over_5_percent_auto_corrected(self):
+        # sum=1000, total=2000 → 100% off → auto-corrected
+        plan = EssayPlan.model_validate(_plan_dict(_sections([400, 600]), total=2000))
+        assert plan.total_word_target == 2000
+        assert sum(s.word_target for s in plan.sections) == 2000
+        for s in plan.sections:
+            assert s.word_target % 10 == 0
 
-    def test_real_world_double_counting_rejected(self):
+    def test_real_world_double_counting_auto_corrected(self):
         """Reproduces the actual bug: 24 sections summing to ~43k vs total 24k."""
         targets = [
             2160,
@@ -81,8 +82,11 @@ class TestEssayPlanWordTargetValidator:
             2160,
         ]
         assert sum(targets) == 43680
-        with pytest.raises(ValueError, match="sum of section word_target"):
-            EssayPlan.model_validate(_plan_dict(_sections(targets), total=24000))
+        plan = EssayPlan.model_validate(_plan_dict(_sections(targets), total=24000))
+        assert sum(s.word_target for s in plan.sections) == 24000
+        for s in plan.sections:
+            assert s.word_target % 10 == 0
+            assert s.word_target >= 10
 
     def test_zero_total_auto_derived(self):
         plan = EssayPlan.model_validate(_plan_dict(_sections([300, 700]), total=0))
@@ -179,9 +183,8 @@ class TestNormalizeSectionWordTargets:
         """Integration: _parse_sections applies normalization even for mismatched plans."""
         from src.pipeline_support import _parse_sections
 
-        # This plan has sum(600+400)=1000 but total=500.
-        # The strict validator would reject it, so _parse_sections falls back
-        # to lenient loading + normalization.
+        # sum(600+400)=1000 but total=500 → validator auto-corrects,
+        # then _parse_sections normalizes again (no-op since already fixed).
         plan = {
             "title": "Test",
             "thesis": "Thesis",

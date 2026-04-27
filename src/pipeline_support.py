@@ -24,7 +24,7 @@ from src.agent import (
     extract_usage,
 )
 from src.rendering import PromptPair
-from src.schemas import AssignmentBrief, EssayPlan, PlanSection, SourceNote
+from src.schemas import AssignmentBrief, EssayPlan, SourceNote
 
 if TYPE_CHECKING:
     from config.schemas import EssayWriterConfig
@@ -317,26 +317,7 @@ def _parse_sections(run_dir: Path) -> list[Section]:
     if not plan_path.exists():
         return []
 
-    try:
-        plan = EssayPlan.model_validate_json(plan_path.read_text(encoding="utf-8"))
-    except ValueError:
-        # Plan on disk may predate the word-target consistency validator
-        # (e.g. checkpoint resume). Fall back to lenient loading.
-        import json as _json
-
-        raw = _json.loads(plan_path.read_text(encoding="utf-8"))
-        plan = EssayPlan.model_construct(
-            title=raw.get("title", ""),
-            thesis=raw.get("thesis", ""),
-            sections=[PlanSection.model_validate(s) for s in raw.get("sections", [])],
-            research_queries=raw.get("research_queries", []),
-            total_word_target=raw.get("total_word_target", 0)
-            or sum(s.get("word_target", 0) for s in raw.get("sections", [])),
-        )
-        logger.warning(
-            "Plan loaded with lenient parsing (word-target validator failed); "
-            "normalization will correct section targets"
-        )
+    plan = EssayPlan.model_validate_json(plan_path.read_text(encoding="utf-8"))
     sections: list[Section] = []
     duplicate_numbers = [
         number

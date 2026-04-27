@@ -263,10 +263,17 @@ class EssayPlan(BaseModel):
                 abs(section_sum - self.total_word_target)
                 > self.total_word_target * 0.05
             ):
-                issues.append(
-                    f"sum of section word_target values ({section_sum}) must be "
-                    f"within 5% of total_word_target ({self.total_word_target})"
-                )
+                # Auto-correct: scale section targets proportionally, round to tens.
+                ratio = self.total_word_target / section_sum
+                for section in self.sections:
+                    section.word_target = max(
+                        10, round(section.word_target * ratio / 10) * 10
+                    )
+                adjusted_sum = sum(s.word_target for s in self.sections)
+                delta = self.total_word_target - adjusted_sum
+                if delta:
+                    largest = max(self.sections, key=lambda s: s.word_target)
+                    largest.word_target = max(10, largest.word_target + delta)
         if issues:
             raise ValueError("; ".join(issues))
         return self
