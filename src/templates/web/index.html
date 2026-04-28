@@ -260,7 +260,7 @@
     .borderline-table th, .borderline-table td { padding: .35rem .5rem; text-align: left; border-bottom: 1px solid #e2e8f0; }
     .borderline-table th { font-weight: 600; color: var(--text-muted); font-size: .78rem; text-transform: uppercase; letter-spacing: .03em; }
     .borderline-table tr:hover { background: #f8fafc; }
-    .borderline-table td.bl-title { max-width: 22rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .borderline-table td.bl-title { max-width: 22rem; word-break: break-word; }
     .borderline-table .bl-badge { display: inline-block; padding: .1rem .4rem; border-radius: 3px; font-size: .72rem; font-weight: 600; }
     .borderline-table .bl-badge.ft-yes { background: #dcfce7; color: #166534; }
     .borderline-table .bl-badge.ft-no { background: #f1f5f9; color: #64748b; }
@@ -777,9 +777,8 @@
         html += '</tr></thead><tbody>';
         borderline.forEach((src, idx) => {
           const title = esc(src.title || src.source_id);
-          const truncTitle = title.length > 80 ? title.slice(0, 77) + '…' : title;
           const author = esc(src.first_author || '—');
-          const truncAuthor = author.length > 25 ? author.slice(0, 22) + '…' : author;
+          const truncAuthor = author.length > 30 ? author.slice(0, 27) + '…' : author;
           const year = esc(String(src.year || '—'));
           const score = esc(String(src.relevance_score || 0));
           const cites = esc(String(src.citation_count || 0));
@@ -789,7 +788,7 @@
           const abstractText = esc(src.abstract || '');
           html += `<tr title="${abstractText}">`;
           html += `<td><input type="checkbox" class="bl-check" data-sid="${esc(src.source_id)}" data-idx="${idx}"></td>`;
-          html += `<td class="bl-title">${truncTitle}</td>`;
+          html += `<td class="bl-title">${title}</td>`;
           html += `<td>${truncAuthor}</td>`;
           html += `<td>${year}</td>`;
           html += `<td>${score}</td>`;
