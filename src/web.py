@@ -337,8 +337,16 @@ async def optional_pdf_done(job_id: str):
 
 
 @app.post("/source-shortfall/{job_id}")
-async def source_shortfall_decision(job_id: str, decision: str = Form("")):
-    """Submit proceed/cancel decision after source recovery still falls short."""
+async def source_shortfall_decision(
+    job_id: str,
+    decision: str = Form(""),
+    added_ids: str = Form(""),
+):
+    """Submit proceed/cancel decision after source recovery still falls short.
+
+    *added_ids* is an optional JSON array of source IDs the user picked from
+    the borderline candidates list.
+    """
     job = _jobs.get(job_id)
     if not job:
         return JSONResponse({"error": "Job not found"}, status_code=404)
@@ -351,13 +359,33 @@ async def source_shortfall_decision(job_id: str, decision: str = Form("")):
     if choice not in {"proceed", "cancel"}:
         return JSONResponse({"error": "Invalid decision"}, status_code=400)
 
+    # Parse optional added_ids (JSON array of source ID strings).
+    parsed_ids: list[str] = []
+    raw_ids = added_ids.strip()
+    if raw_ids and choice == "proceed":
+        try:
+            parsed_ids = json.loads(raw_ids)
+            if not isinstance(parsed_ids, list):
+                parsed_ids = []
+            parsed_ids = [str(sid).strip() for sid in parsed_ids if str(sid).strip()]
+        except (json.JSONDecodeError, TypeError):
+            parsed_ids = []
+
     with run_id_context(job_id):
-        logger.info("Job %s source shortfall decision: %s", job_id, choice)
+        logger.info(
+            "Job %s source shortfall decision: %s (added_ids=%d)",
+            job_id,
+            choice,
+            len(parsed_ids),
+        )
         job.source_shortfall_decision = choice
+        job.source_shortfall_added_ids = parsed_ids
         job.status = "running"
         _notify_job(job)
         job.source_shortfall_event.set()
-    return JSONResponse({"status": "ok", "decision": choice})
+    return JSONResponse(
+        {"status": "ok", "decision": choice, "added_count": len(parsed_ids)}
+    )
 
 
 @app.get("/download/{job_id}")

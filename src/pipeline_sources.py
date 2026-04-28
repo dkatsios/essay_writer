@@ -888,6 +888,147 @@ def _backfill_registry(
     return registry
 
 
+_BORDERLINE_CAP = 30
+_BORDERLINE_SCORE = 2
+
+
+def _build_borderline_source_list(
+    scores: dict[str, int],
+    registry: dict[str, dict],
+    selected_ids: list[str],
+    min_relevance_score: int,
+) -> list[dict]:
+    """Build a capped list of score=2 borderline sources for user review.
+
+    Returns up to ``_BORDERLINE_CAP`` entries sorted by citation count
+    descending, excluding already-selected sources.
+    """
+    selected_set = set(selected_ids)
+    target_score = min(min_relevance_score - 1, _BORDERLINE_SCORE)
+    if target_score < 1:
+        return []
+
+    candidates: list[tuple[str, dict]] = []
+    for sid, score in scores.items():
+        if score != target_score or sid in selected_set:
+            continue
+        meta = registry.get(sid)
+        if not meta:
+            continue
+        candidates.append((sid, meta))
+
+    # Sort by citation count descending.
+    candidates.sort(key=lambda item: -(int(item[1].get("citation_count", 0) or 0)))
+    candidates = candidates[:_BORDERLINE_CAP]
+
+    items: list[dict] = []
+    for sid, meta in candidates:
+        authors = meta.get("authors", [])
+        first_author = ""
+        if authors:
+            first_author = (
+                str(authors[0]).strip() if isinstance(authors, list) else str(authors)
+            )
+        has_fulltext = bool(meta.get("pdf_url"))
+        items.append(
+            {
+                "source_id": sid,
+                "title": (meta.get("title") or sid).strip(),
+                "first_author": first_author,
+                "year": meta.get("year", ""),
+                "citation_count": int(meta.get("citation_count", 0) or 0),
+                "relevance_score": scores.get(sid, 0),
+                "has_fulltext": has_fulltext,
+                "abstract": (meta.get("abstract", "") or "")[:300],
+            }
+        )
+    return items
+
+
+async def _process_borderline_additions(
+    added_ids: list[str],
+    registry: dict[str, dict],
+    fetch_results: dict[str, str],
+    scores: dict[str, int],
+    selected_ids: list[str],
+    ctx,
+    sources_dir: str,
+    notes_dir: Path,
+    essay_topic: str,
+    min_body: int,
+    min_relevance_score: int,
+    registry_path: Path,
+) -> list[str]:
+    """Fetch, extract, and add user-selected borderline sources to the selected set."""
+    # Validate: only accept IDs that are in the registry and below threshold.
+    valid_ids = [
+        sid
+        for sid in added_ids
+        if sid in registry
+        and scores.get(sid, 0) < min_relevance_score
+        and sid not in selected_ids
+    ]
+    if not valid_ids:
+        return []
+
+    logger.info("Processing %d user-selected borderline sources…", len(valid_ids))
+
+    add_pairs = [(sid, registry[sid]) for sid in valid_ids]
+
+    # Fetch PDFs for the new sources.
+    new_fetch = await _fetch_all_pdfs(
+        add_pairs,
+        sources_dir,
+        tracker=ctx.tracker,
+        min_body_words=min_body,
+    )
+    fetch_results.update(new_fetch)
+
+    # Run LLM extraction.
+    results = await _extract_all(
+        add_pairs,
+        fetch_results,
+        ctx.async_worker,
+        sources_dir,
+        notes_dir,
+        essay_topic=essay_topic,
+        tracker=ctx.tracker,
+        min_body_words=min_body,
+    )
+    _backfill_registry(registry, results, registry_path)
+
+    # Add accessible sources to selected set.
+    added = []
+    for sid, note in results:
+        if note is not None and note.is_accessible:
+            if sid not in selected_ids:
+                selected_ids.append(sid)
+                added.append(sid)
+
+    if added:
+        # Re-write selected.json with the expanded set.
+        selected_registry = {
+            sid: registry[sid] for sid in selected_ids if sid in registry
+        }
+        (ctx.run_dir / "sources" / "selected.json").write_text(
+            json.dumps(selected_registry, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        _write_source_decision_artifacts(
+            ctx.run_dir,
+            registry,
+            scores,
+            selected_ids,
+            min_relevance_score=min_relevance_score,
+        )
+        logger.info(
+            "Added %d borderline sources (selected total: %d)",
+            len(added),
+            len(selected_ids),
+        )
+    return added
+
+
 def _read_registry(registry_path: Path) -> dict[str, dict]:
     """Load the source registry from disk."""
     return json.loads(registry_path.read_text(encoding="utf-8"))
@@ -1541,7 +1682,14 @@ async def _async_read_sources_orchestration(
             target_sources,
         )
         if ctx.on_source_shortfall is not None:
-            proceed = await ctx.on_source_shortfall(
+            # Build borderline candidates: score=2, sorted by citations desc, cap 30.
+            borderline = _build_borderline_source_list(
+                scores,
+                registry,
+                selected_ids,
+                min_relevance_score,
+            )
+            proceed, added_ids = await ctx.on_source_shortfall(
                 ctx.run_dir,
                 {
                     "usable_sources": len(selected_registry),
@@ -1552,11 +1700,27 @@ async def _async_read_sources_orchestration(
                     "above_threshold": above_threshold,
                     "total_candidates": len(api_pairs) + len(user_pairs),
                     "recovery_attempted": recovery_done,
+                    "borderline_sources": borderline,
                 },
             )
             if not proceed:
                 raise SourceShortfallAbort(
                     "User declined to proceed after source shortfall"
+                )
+            if added_ids:
+                added_ids = await _process_borderline_additions(
+                    added_ids,
+                    registry,
+                    fetch_results,
+                    scores,
+                    selected_ids,
+                    ctx,
+                    sources_dir,
+                    notes_dir,
+                    essay_topic,
+                    min_body,
+                    min_relevance_score,
+                    registry_path,
                 )
 
 

@@ -253,6 +253,18 @@
     .optional-pdf-row .opt-pdf-url { flex: 1 1 10rem; min-width: 0; max-width: 100%; padding: .3rem .45rem; border: 1px solid #cbd5e1; border-radius: 4px; font-size: .85rem; }
     .optional-pdf-row .upload-status { font-size: .85rem; color: #166534; flex: 1 1 100%; }
     .optional-pdf-row .upload-status.err { color: #b91c1c; }
+    /* Borderline sources table */
+    .borderline-toggle { cursor: pointer; color: var(--accent); font-size: .9rem; background: none; border: none; padding: .35rem 0; text-decoration: underline; }
+    .borderline-wrap { margin-top: .5rem; }
+    .borderline-table { width: 100%; border-collapse: collapse; font-size: .82rem; margin-top: .35rem; }
+    .borderline-table th, .borderline-table td { padding: .35rem .5rem; text-align: left; border-bottom: 1px solid #e2e8f0; }
+    .borderline-table th { font-weight: 600; color: var(--text-muted); font-size: .78rem; text-transform: uppercase; letter-spacing: .03em; }
+    .borderline-table tr:hover { background: #f8fafc; }
+    .borderline-table td.bl-title { max-width: 22rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .borderline-table .bl-badge { display: inline-block; padding: .1rem .4rem; border-radius: 3px; font-size: .72rem; font-weight: 600; }
+    .borderline-table .bl-badge.ft-yes { background: #dcfce7; color: #166534; }
+    .borderline-table .bl-badge.ft-no { background: #f1f5f9; color: #64748b; }
+    .borderline-selected-count { font-size: .85rem; color: var(--text-muted); margin-top: .35rem; }
     .job-session-bar {
       margin-top: 1.25rem;
       padding: .85rem 1rem;
@@ -739,6 +751,7 @@
       const above = Number(summary.above_threshold || 0);
       const total = Number(summary.total_candidates || 0);
       const recovered = Boolean(summary.recovery_attempted);
+      const borderline = Array.isArray(summary.borderline_sources) ? summary.borderline_sources : [];
 
       let html = clarificationsHistoryHtml;
       html += '<h3>Not enough usable sources</h3>';
@@ -752,22 +765,93 @@
         html += '<p class="hint">A recovery search pass already ran with broader and full-text-biased search parameters.</p>';
       }
       html += '</div>';
+
+      /* Borderline sources — collapsible table */
+      if (borderline.length > 0) {
+        html += '<div class="borderline-wrap">';
+        html += `<button type="button" class="borderline-toggle" id="bl-toggle">▸ Browse ${esc(String(borderline.length))} borderline source${borderline.length > 1 ? 's' : ''} (scored just below threshold)</button>`;
+        html += '<div id="bl-panel" style="display:none">';
+        html += '<p class="hint" style="margin-bottom:.35rem">These sources scored just below the relevance threshold. Check any you want to include.</p>';
+        html += '<table class="borderline-table"><thead><tr>';
+        html += '<th></th><th>Title</th><th>Author</th><th>Year</th><th>Score</th><th>Citations</th><th>Full text</th>';
+        html += '</tr></thead><tbody>';
+        borderline.forEach((src, idx) => {
+          const title = esc(src.title || src.source_id);
+          const truncTitle = title.length > 80 ? title.slice(0, 77) + '…' : title;
+          const author = esc(src.first_author || '—');
+          const truncAuthor = author.length > 25 ? author.slice(0, 22) + '…' : author;
+          const year = esc(String(src.year || '—'));
+          const score = esc(String(src.relevance_score || 0));
+          const cites = esc(String(src.citation_count || 0));
+          const ftBadge = src.has_fulltext
+            ? '<span class="bl-badge ft-yes">PDF</span>'
+            : '<span class="bl-badge ft-no">abstract</span>';
+          const abstractText = esc(src.abstract || '');
+          html += `<tr title="${abstractText}">`;
+          html += `<td><input type="checkbox" class="bl-check" data-sid="${esc(src.source_id)}" data-idx="${idx}"></td>`;
+          html += `<td class="bl-title">${truncTitle}</td>`;
+          html += `<td>${truncAuthor}</td>`;
+          html += `<td>${year}</td>`;
+          html += `<td>${score}</td>`;
+          html += `<td>${cites}</td>`;
+          html += `<td>${ftBadge}</td>`;
+          html += '</tr>';
+        });
+        html += '</tbody></table>';
+        html += '<p class="borderline-selected-count" id="bl-count">0 selected</p>';
+        html += '</div></div>';
+      }
+
+      html += '<div style="margin-top:.75rem">';
       html += '<button type="button" id="shortfall-proceed">Proceed with available sources</button>';
       html += ' <button type="button" id="shortfall-cancel" style="background:#64748b">Cancel run</button>';
       html += '</div>';
+      html += '</div>';
       statusArea.innerHTML = html;
 
+      /* Toggle panel */
+      const toggleBtn = document.getElementById('bl-toggle');
+      const panel = document.getElementById('bl-panel');
+      if (toggleBtn && panel) {
+        toggleBtn.addEventListener('click', () => {
+          const open = panel.style.display !== 'none';
+          panel.style.display = open ? 'none' : '';
+          toggleBtn.textContent = toggleBtn.textContent.replace(/^[▸▾]/, open ? '▸' : '▾');
+        });
+      }
+
+      /* Update selected count */
+      function updateBlCount() {
+        const n = document.querySelectorAll('.bl-check:checked').length;
+        const el = document.getElementById('bl-count');
+        if (el) el.textContent = `${n} selected`;
+        const proceedBtn = document.getElementById('shortfall-proceed');
+        if (proceedBtn) {
+          proceedBtn.textContent = n > 0
+            ? `Proceed with available + ${n} selected`
+            : 'Proceed with available sources';
+        }
+      }
+      document.querySelectorAll('.bl-check').forEach(cb => {
+        cb.addEventListener('change', updateBlCount);
+      });
+
       document.getElementById('shortfall-proceed')?.addEventListener('click', () => {
-        void sendSourceShortfallDecision('proceed');
+        const checked = document.querySelectorAll('.bl-check:checked');
+        const ids = Array.from(checked).map(cb => cb.getAttribute('data-sid'));
+        void sendSourceShortfallDecision('proceed', ids);
       });
       document.getElementById('shortfall-cancel')?.addEventListener('click', () => {
-        void sendSourceShortfallDecision('cancel');
+        void sendSourceShortfallDecision('cancel', []);
       });
     }
 
-    async function sendSourceShortfallDecision(decision) {
+    async function sendSourceShortfallDecision(decision, addedIds) {
       const fd = new FormData();
       fd.append('decision', decision);
+      if (addedIds && addedIds.length > 0) {
+        fd.append('added_ids', JSON.stringify(addedIds));
+      }
       await fetch(`/source-shortfall/${jobId}`, { method: 'POST', body: fd });
       statusArea.innerHTML =
         clarificationsHistoryHtml +

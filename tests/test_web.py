@@ -370,6 +370,58 @@ def test_source_shortfall_decision_unblocks_job(tmp_path):
         _jobs.pop(jid, None)
 
 
+def test_source_shortfall_decision_with_added_ids(tmp_path):
+    jid = "shortfall004"
+    _jobs[jid] = Job(
+        job_id=jid,
+        run_dir=Path(tmp_path),
+        status="source_shortfall",
+        source_shortfall={
+            "usable_sources": 8,
+            "target_sources": 12,
+            "borderline_sources": [
+                {"source_id": "smith2020", "title": "Paper A"},
+                {"source_id": "jones2021", "title": "Paper B"},
+            ],
+        },
+    )
+    try:
+        added = json.dumps(["smith2020", "jones2021"])
+        r = client.post(
+            f"/source-shortfall/{jid}",
+            data={"decision": "proceed", "added_ids": added},
+        )
+        assert r.status_code == 200
+        assert r.json()["decision"] == "proceed"
+        assert r.json()["added_count"] == 2
+        assert _jobs[jid].source_shortfall_added_ids == ["smith2020", "jones2021"]
+        assert _jobs[jid].status == "running"
+    finally:
+        _jobs.pop(jid, None)
+
+
+def test_source_shortfall_cancel_ignores_added_ids(tmp_path):
+    jid = "shortfall005"
+    _jobs[jid] = Job(
+        job_id=jid,
+        run_dir=Path(tmp_path),
+        status="source_shortfall",
+        source_shortfall={"usable_sources": 5, "target_sources": 10},
+    )
+    try:
+        added = json.dumps(["smith2020"])
+        r = client.post(
+            f"/source-shortfall/{jid}",
+            data={"decision": "cancel", "added_ids": added},
+        )
+        assert r.status_code == 200
+        assert r.json()["decision"] == "cancel"
+        assert r.json()["added_count"] == 0
+        assert _jobs[jid].source_shortfall_added_ids == []
+    finally:
+        _jobs.pop(jid, None)
+
+
 def test_optional_pdf_url_updates_registry(tmp_path, monkeypatch):
     run_dir = Path(tmp_path) / "run"
     sources = run_dir / "sources"

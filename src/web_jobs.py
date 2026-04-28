@@ -69,6 +69,7 @@ class Job:
     source_shortfall: dict | None = None
     source_shortfall_event: threading.Event = field(default_factory=threading.Event)
     source_shortfall_decision: str = ""
+    source_shortfall_added_ids: list[str] = field(default_factory=list)
     error: str = ""
     academic_level: str = ""
     submit_prompt: str = ""
@@ -483,9 +484,12 @@ def run_pipeline_thread(
                 job.optional_pdf_allowed_ids = None
                 logger.info("Job %s optional PDF step resumed", job.job_id)
 
-            async def _on_source_shortfall(run_path: Path, summary: dict) -> bool:
+            async def _on_source_shortfall(
+                run_path: Path, summary: dict
+            ) -> tuple[bool, list[str]]:
                 job.source_shortfall = summary
                 job.source_shortfall_decision = ""
+                job.source_shortfall_added_ids = []
                 job.source_shortfall_event.clear()
                 job.status = "source_shortfall"
                 logger.warning(
@@ -504,8 +508,10 @@ def run_pipeline_thread(
                 ):
                     raise JobInteractionTimeout()
                 decision = job.source_shortfall_decision.strip().lower()
+                added_ids = list(job.source_shortfall_added_ids)
                 job.source_shortfall = None
-                return decision == "proceed"
+                job.source_shortfall_added_ids = []
+                return decision == "proceed", added_ids
 
             asyncio.run(
                 run_pipeline_fn(

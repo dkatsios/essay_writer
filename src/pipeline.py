@@ -159,7 +159,8 @@ async def run_pipeline(
     | None = None,
     on_optional_source_pdfs: Callable[[Path, list[dict]], Awaitable[None]]
     | None = None,
-    on_source_shortfall: Callable[[Path, dict], Awaitable[bool]] | None = None,
+    on_source_shortfall: Callable[[Path, dict], Awaitable[tuple[bool, list[str]]]]
+    | None = None,
     min_sources: int | None = None,
     user_sources_dir: Path | None = None,
     resume: bool = False,

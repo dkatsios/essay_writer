@@ -9,6 +9,7 @@ from types import SimpleNamespace
 from src.pipeline_sources import (
     _async_batch_triage_sources,
     _async_fetch_pdf_content,
+    _build_borderline_source_list,
     _filter_scorable_sources,
     _metadata_pretrim_score,
     _pretrim_scorable_sources,
@@ -428,3 +429,87 @@ class TestSourceScoreBatch:
         data = {"scores": '[{"source_id": "s1", "relevance_score": 3}]'}
         batch = SourceScoreBatch.model_validate(data)
         assert len(batch.scores) == 1
+
+
+# -- _build_borderline_source_list -------------------------------------------
+
+
+class TestBuildBorderlineSourceList:
+    def _registry(self, entries):
+        """Build a registry dict from a list of (id, meta) tuples."""
+        return {sid: meta for sid, meta in entries}
+
+    def test_returns_score_2_sources(self):
+        scores = {"a": 4, "b": 2, "c": 2, "d": 1}
+        registry = {
+            "a": {"title": "Above", "citation_count": 10, "authors": ["X"]},
+            "b": {"title": "Border 1", "citation_count": 50, "authors": ["Y"]},
+            "c": {"title": "Border 2", "citation_count": 20, "authors": ["Z"]},
+            "d": {"title": "Below", "citation_count": 5, "authors": ["W"]},
+        }
+        result = _build_borderline_source_list(
+            scores, registry, ["a"], min_relevance_score=3
+        )
+        assert len(result) == 2
+        # Sorted by citations desc
+        assert result[0]["source_id"] == "b"
+        assert result[1]["source_id"] == "c"
+
+    def test_excludes_already_selected(self):
+        scores = {"a": 3, "b": 2}
+        registry = {
+            "a": {"title": "Selected", "citation_count": 10, "authors": ["X"]},
+            "b": {"title": "Border", "citation_count": 5, "authors": ["Y"]},
+        }
+        result = _build_borderline_source_list(
+            scores, registry, ["a", "b"], min_relevance_score=3
+        )
+        assert len(result) == 0
+
+    def test_caps_at_30(self):
+        scores = {f"s{i}": 2 for i in range(50)}
+        registry = {
+            f"s{i}": {"title": f"Paper {i}", "citation_count": i, "authors": [f"A{i}"]}
+            for i in range(50)
+        }
+        result = _build_borderline_source_list(
+            scores, registry, [], min_relevance_score=3
+        )
+        assert len(result) == 30
+
+    def test_empty_when_no_borderline(self):
+        scores = {"a": 4, "b": 3}
+        registry = {
+            "a": {"title": "A", "citation_count": 10, "authors": ["X"]},
+            "b": {"title": "B", "citation_count": 5, "authors": ["Y"]},
+        }
+        result = _build_borderline_source_list(
+            scores, registry, [], min_relevance_score=3
+        )
+        assert result == []
+
+    def test_includes_metadata_fields(self):
+        scores = {"x": 2}
+        registry = {
+            "x": {
+                "title": "Important Paper",
+                "citation_count": 42,
+                "authors": ["John Smith", "Jane Doe"],
+                "year": "2024",
+                "pdf_url": "https://example.com/paper.pdf",
+                "abstract": "This is a long abstract " * 20,
+            },
+        }
+        result = _build_borderline_source_list(
+            scores, registry, [], min_relevance_score=3
+        )
+        assert len(result) == 1
+        item = result[0]
+        assert item["source_id"] == "x"
+        assert item["title"] == "Important Paper"
+        assert item["first_author"] == "John Smith"
+        assert item["year"] == "2024"
+        assert item["citation_count"] == 42
+        assert item["relevance_score"] == 2
+        assert item["has_fulltext"] is True
+        assert len(item["abstract"]) <= 300
