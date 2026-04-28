@@ -8,7 +8,7 @@ from html.parser import HTMLParser
 from pathlib import Path
 from urllib.parse import urlparse
 
-from src.tools._http import http_get
+from src.tools._http import http_get, pdf_get
 
 logger = logging.getLogger(__name__)
 
@@ -80,10 +80,26 @@ def fetch_url_content(url: str, sources_dir: str | None = None) -> str:
     Strips HTML tags from web pages. For PDFs, extracts text and saves
     the original PDF to the sources directory.
 
+    Uses curl_cffi with Chrome TLS impersonation for PDF URLs to bypass
+    publisher bot-detection. Falls back to httpx for non-PDF URLs.
+
     Raises ``httpx.HTTPStatusError`` or ``httpx.RequestError`` on failure.
     """
     sources_path = Path(sources_dir) if sources_dir else None
 
+    # PDF URLs: use curl_cffi with Chrome TLS fingerprint
+    if url.lower().endswith(".pdf") or "/pdf" in url.lower():
+        resp = pdf_get(url, max_retries=2, initial_backoff=1.0)
+        content_type = resp.headers.get("content-type", "")
+        if "pdf" in content_type or resp.content[:4] == b"%PDF":
+            if sources_path is not None:
+                sources_path.mkdir(parents=True, exist_ok=True)
+                filename = _slugify_url(url) + ".pdf"
+                pdf_path = sources_path / filename
+                pdf_path.write_bytes(resp.content)
+            return _extract_pdf_text(resp.content)
+
+    # Non-PDF or PDF URL that didn't return PDF content: use httpx
     resp = http_get(
         url,
         follow_redirects=True,

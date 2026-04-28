@@ -442,11 +442,11 @@ def test_optional_pdf_url_updates_registry(tmp_path, monkeypatch):
     mock_resp.content = pdf_bytes
     mock_resp.headers = {"content-type": "application/pdf"}
 
-    def _fake_http_get(url: str, **kwargs):
+    def _fake_pdf_get(url: str, **kwargs):
         assert url.startswith("http")
         return mock_resp
 
-    monkeypatch.setattr("src.web_jobs.http_get", _fake_http_get)
+    monkeypatch.setattr("src.web_jobs.pdf_get", _fake_pdf_get)
 
     data = {"source_id": "src_a", "pdf_url": "https://example.org/paper.pdf"}
     r = client.post(f"/optional-pdf/{jid}", data=data)

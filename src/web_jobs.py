@@ -16,8 +16,6 @@ from io import BytesIO
 from pathlib import Path
 from urllib.parse import urlparse
 
-import httpx
-
 from src.runtime import TokenTracker
 from src.schemas import AssignmentBrief, Clarification, ValidationQuestion
 from src.pipeline_sources import SourceShortfallAbort
@@ -26,7 +24,7 @@ from src.run_logging import (
     setup_run_logging,
     teardown_run_logging,
 )
-from src.tools._http import http_get
+from src.tools._http import http_get, pdf_get
 from src.tools.web_fetcher import extract_pdf_bytes_to_text
 
 logger = logging.getLogger(__name__)
@@ -570,17 +568,11 @@ def fetch_pdf_bytes_from_url(url: str) -> tuple[bytes | None, str | None]:
     if parsed.scheme not in ("http", "https") or not parsed.netloc:
         return None, "Invalid URL (use http or https)"
     try:
-        response = http_get(
-            url,
-            follow_redirects=True,
-            max_retries=2,
-            initial_backoff=1.0,
-            request_name="optional pdf url",
-        )
-    except httpx.HTTPError as exc:
+        resp = pdf_get(url, max_retries=2, initial_backoff=1.0)
+    except Exception as exc:
         logger.warning("Optional PDF URL fetch failed: %s", exc)
         return None, "Could not download URL"
-    raw = response.content
+    raw = resp.content
     if len(raw) > _MAX_OPTIONAL_PDF_BYTES:
         return None, "File too large"
     if not raw.startswith(b"%PDF"):
