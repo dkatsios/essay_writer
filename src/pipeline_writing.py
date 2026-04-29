@@ -160,6 +160,24 @@ def _section_filename(section: Section) -> str:
     return f"{section.position:02d}.md"
 
 
+def _truncate_at_next_section(
+    text: str, section: Section, sections: list[Section]
+) -> str:
+    """Strip content belonging to a later section if the reviewer overstepped."""
+    idx = next(i for i, s in enumerate(sections) if s.position == section.position)
+    for later in sections[idx + 1 :]:
+        for marker in (later.heading, f"## {later.title}", f"### {later.title}"):
+            if marker and marker in text:
+                truncated = text[: text.index(marker)].rstrip()
+                logger.warning(
+                    "Reviewer for section %d overstepped into section %d; truncated",
+                    section.position,
+                    later.position,
+                )
+                return truncated
+    return text
+
+
 def _partition_sections_for_writing(
     sections: list[Section],
 ) -> tuple[list[Section], list[Section]]:
@@ -548,6 +566,7 @@ def make_review_sections(
             )
             duration = monotonic() - start
 
+            reviewed = _truncate_at_next_section(reviewed, section, plan_order)
             _write_text(reviewed_dir / _section_filename(section), reviewed)
             if ctx.tracker is not None:
                 ctx.tracker.record_duration(tracker_step, duration)
