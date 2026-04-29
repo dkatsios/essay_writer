@@ -25,6 +25,7 @@ from src.intake import build_extracted_text, scan  # noqa: E402
 from src.pipeline import run_pipeline  # noqa: E402
 from src.run_logging import configure_web_logging, run_id_context  # noqa: E402
 from src.runtime import parse_validation_answers  # noqa: E402
+from src.tools._http import close_http_clients  # noqa: E402
 
 logger = logging.getLogger(__name__)
 
@@ -73,6 +74,7 @@ async def _lifespan(app: FastAPI):
     logger.info("Web application logging configured")
     web_jobs.start_job_ttl_sweeper()
     yield
+    close_http_clients()
 
 
 app = FastAPI(title="Essay Writer", lifespan=_lifespan)

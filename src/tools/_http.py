@@ -488,6 +488,20 @@ def _get_proxy_session(proxy: ProxySettings) -> _ProxySession:
     return ps
 
 
+def close_http_clients() -> None:
+    """Close the shared httpx client and all cached proxy sessions."""
+    global _HTTP_CLIENT
+    with _CLIENT_LOCK:
+        if _HTTP_CLIENT is not None:
+            _HTTP_CLIENT.close()
+            _HTTP_CLIENT = None
+    with _PROXY_SESSION_LOCK:
+        for session in _PROXY_SESSIONS.values():
+            if session._session is not None:
+                session._session.close()
+        _PROXY_SESSIONS.clear()
+
+
 def _resolve_proxy_settings(
     proxy: ProxySettings | None = None,
     *,
