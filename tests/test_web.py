@@ -1,8 +1,8 @@
 """Smoke tests for the FastAPI web app."""
 
+import asyncio
 import json
 import logging
-import threading
 import time
 import zipfile
 from io import BytesIO
@@ -16,11 +16,11 @@ from src.web import (
     Job,
     _jobs,
     _notify_job,
-    _run_pipeline_thread,
+    _run_pipeline_task,
     app,
     job_ttl_sweep_once,
 )
-from src.web_jobs import wait_for_job_signal as _wait_for_job_signal
+from src.web_jobs import async_wait_for_job_signal as _async_wait_for_job_signal
 
 client = TestClient(app)
 
@@ -164,12 +164,12 @@ def test_job_ttl_zero_disables_sweep(tmp_path, monkeypatch):
     assert jid in _jobs
 
 
-def test_wait_for_job_signal_times_out_and_marks_error(tmp_path):
+async def test_wait_for_job_signal_times_out_and_marks_error(tmp_path):
     job = Job(job_id="waittimeout01", run_dir=Path(tmp_path), status="questions")
 
-    ok = _wait_for_job_signal(
+    ok = await _async_wait_for_job_signal(
         job,
-        threading.Event(),
+        asyncio.Event(),
         error_message="Timed out waiting for clarification answers.",
         timeout=0,
     )
@@ -180,7 +180,9 @@ def test_wait_for_job_signal_times_out_and_marks_error(tmp_path):
     assert job.finished_at is not None
 
 
-def test_pipeline_thread_respects_interactive_validation_setting(tmp_path, monkeypatch):
+async def test_pipeline_task_respects_interactive_validation_setting(
+    tmp_path, monkeypatch
+):
     job = Job(job_id="cfgjob000001", run_dir=Path(tmp_path), status="running")
     captured = {}
 
@@ -191,17 +193,17 @@ def test_pipeline_thread_respects_interactive_validation_setting(tmp_path, monke
     monkeypatch.setattr("src.web.create_client", lambda *args, **kwargs: object())
     monkeypatch.setattr("src.web.create_async_client", lambda *args, **kwargs: object())
 
-    def fake_run_pipeline(*args, **kwargs):
+    async def fake_run_pipeline(*args, **kwargs):
         captured.update(kwargs)
 
     monkeypatch.setattr("src.web.run_pipeline", fake_run_pipeline)
 
-    _run_pipeline_thread(job, upload_dir=None, prompt="Test prompt")
+    await _run_pipeline_task(job, upload_dir=None, prompt="Test prompt")
 
     assert captured["on_questions"] is None
 
 
-def test_pipeline_thread_stops_after_question_timeout(tmp_path, monkeypatch):
+async def test_pipeline_task_stops_after_question_timeout(tmp_path, monkeypatch):
     job = Job(job_id="timeoutjob001", run_dir=Path(tmp_path), status="running")
     captured = {"continued": False}
 
@@ -223,7 +225,7 @@ def test_pipeline_thread_stops_after_question_timeout(tmp_path, monkeypatch):
 
     monkeypatch.setattr("src.web.run_pipeline", fake_run_pipeline)
 
-    _run_pipeline_thread(job, upload_dir=None, prompt="Test prompt")
+    await _run_pipeline_task(job, upload_dir=None, prompt="Test prompt")
 
     assert captured["continued"] is False
     assert job.status == "error"
@@ -231,7 +233,7 @@ def test_pipeline_thread_stops_after_question_timeout(tmp_path, monkeypatch):
     assert job.finished_at is not None
 
 
-def test_pipeline_thread_stops_after_source_shortfall_timeout(tmp_path, monkeypatch):
+async def test_pipeline_task_stops_after_source_shortfall_timeout(tmp_path, monkeypatch):
     job = Job(job_id="shortfall001", run_dir=Path(tmp_path), status="running")
     captured = {"continued": False}
 
@@ -258,7 +260,7 @@ def test_pipeline_thread_stops_after_source_shortfall_timeout(tmp_path, monkeypa
 
     monkeypatch.setattr("src.web.run_pipeline", fake_run_pipeline)
 
-    _run_pipeline_thread(job, upload_dir=None, prompt="Test prompt")
+    await _run_pipeline_task(job, upload_dir=None, prompt="Test prompt")
 
     assert captured["continued"] is False
     assert job.status == "error"
@@ -266,7 +268,7 @@ def test_pipeline_thread_stops_after_source_shortfall_timeout(tmp_path, monkeypa
     assert job.finished_at is not None
 
 
-def test_pipeline_thread_passes_async_worker_without_storing_api_key(
+async def test_pipeline_task_passes_async_worker_without_storing_api_key(
     tmp_path, monkeypatch
 ):
     job = Job(
@@ -296,13 +298,13 @@ def test_pipeline_thread_passes_async_worker_without_storing_api_key(
 
     monkeypatch.setattr("src.web.create_async_client", fake_create_async_client)
 
-    def fake_run_pipeline(*args, **kwargs):
+    async def fake_run_pipeline(*args, **kwargs):
         captured["async_worker"] = kwargs.get("async_worker")
         captured["job_api_key"] = job.api_key
 
     monkeypatch.setattr("src.web.run_pipeline", fake_run_pipeline)
 
-    _run_pipeline_thread(job, upload_dir=None, prompt="Test prompt")
+    await _run_pipeline_task(job, upload_dir=None, prompt="Test prompt")
 
     assert captured["async_api_key"] == "secret-key"
     assert captured["async_worker"] is async_client

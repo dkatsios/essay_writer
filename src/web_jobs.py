@@ -7,7 +7,6 @@ import json
 import logging
 import os
 import shutil
-import threading
 import time
 import unicodedata
 import zipfile
@@ -59,13 +58,13 @@ class Job:
     status: str = "running"
     run_dir: Path = field(default_factory=lambda: Path("."))
     questions: list[dict] | None = None
-    answers_event: threading.Event = field(default_factory=threading.Event)
+    answers_event: asyncio.Event = field(default_factory=asyncio.Event)
     answers: str = ""
     optional_pdf_items: list[dict] | None = None
     optional_pdf_allowed_ids: frozenset[str] | None = None
-    optional_pdf_event: threading.Event = field(default_factory=threading.Event)
+    optional_pdf_event: asyncio.Event = field(default_factory=asyncio.Event)
     source_shortfall: dict | None = None
-    source_shortfall_event: threading.Event = field(default_factory=threading.Event)
+    source_shortfall_event: asyncio.Event = field(default_factory=asyncio.Event)
     source_shortfall_decision: str = ""
     source_shortfall_added_ids: list[str] = field(default_factory=list)
     error: str = ""
@@ -82,7 +81,7 @@ class Job:
     fast_track: bool = False
     provider: str = ""
     api_key: str = ""
-    _sse_event: threading.Event = field(default_factory=threading.Event)
+    _sse_event: asyncio.Event = field(default_factory=asyncio.Event)
 
 
 jobs: dict[str, Job] = {}
@@ -218,19 +217,21 @@ class JobInteractionTimeout(Exception):
     """Raised when a web job waits too long for user interaction."""
 
 
-def wait_for_job_signal(
+async def async_wait_for_job_signal(
     job: Job,
-    event: threading.Event,
+    event: asyncio.Event,
     *,
     error_message: str,
     timeout: int | None = None,
     interaction_timeout_seconds_fn=interaction_timeout_seconds,
 ) -> bool:
     wait_seconds = interaction_timeout_seconds_fn() if timeout is None else timeout
-    if event.wait(wait_seconds):
+    try:
+        await asyncio.wait_for(event.wait(), timeout=wait_seconds)
         return True
-    set_job_error(job, error_message)
-    return False
+    except TimeoutError:
+        set_job_error(job, error_message)
+        return False
 
 
 def delete_job_artifacts(job_id: str) -> bool:
@@ -264,10 +265,10 @@ def job_ttl_sweep_once(now: float | None = None) -> int:
     return removed
 
 
-def _job_ttl_sweeper_loop() -> None:
+async def _job_ttl_sweeper_loop() -> None:
     interval = _job_sweep_interval_seconds()
     while True:
-        time.sleep(interval)
+        await asyncio.sleep(interval)
         try:
             job_ttl_sweep_once()
         except Exception:
@@ -278,15 +279,10 @@ def start_job_ttl_sweeper() -> None:
     if _job_ttl_seconds() <= 0:
         logger.info("ESSAY_WEB_JOB_TTL_SECONDS is 0; stale-job sweeper disabled")
         return
-    thread = threading.Thread(
-        target=_job_ttl_sweeper_loop,
-        name="essay-job-ttl-sweeper",
-        daemon=True,
-    )
-    thread.start()
+    asyncio.create_task(_job_ttl_sweeper_loop())
 
 
-def run_pipeline_thread(
+async def run_pipeline_task(
     job: Job,
     upload_dir: Path | None,
     prompt: str | None,
@@ -304,15 +300,7 @@ def run_pipeline_thread(
     is_academic_level_question_fn=is_academic_level_question,
     interaction_timeout_seconds_fn=interaction_timeout_seconds,
 ) -> None:
-    """Execute the essay pipeline in a background thread.
-
-    Bridge pattern: ``asyncio.run()`` creates a *fresh* event loop isolated
-    from uvicorn's main-thread loop, so there are no cross-loop issues.
-    Blocking waits (``threading.Event``) are offloaded via
-    ``asyncio.to_thread`` so they don't stall the per-thread loop.
-    Long-term, this thread should be replaced by an ``asyncio.Task``
-    on uvicorn's loop once the interaction model is fully async.
-    """
+    """Execute the essay pipeline as an asyncio task on uvicorn's event loop."""
     log_handler = None
     with run_id_context(job.job_id):
         try:
@@ -418,8 +406,7 @@ def run_pipeline_thread(
                     len(remaining),
                 )
                 notify_job(job)
-                if not await asyncio.to_thread(
-                    wait_for_job_signal,
+                if not await async_wait_for_job_signal(
                     job,
                     job.answers_event,
                     error_message="Timed out waiting for clarification answers.",
@@ -470,8 +457,7 @@ def run_pipeline_thread(
                     len(items),
                 )
                 notify_job(job)
-                if not await asyncio.to_thread(
-                    wait_for_job_signal,
+                if not await async_wait_for_job_signal(
                     job,
                     job.optional_pdf_event,
                     error_message="Timed out waiting for optional PDF input.",
@@ -497,8 +483,7 @@ def run_pipeline_thread(
                     summary.get("target_sources"),
                 )
                 notify_job(job)
-                if not await asyncio.to_thread(
-                    wait_for_job_signal,
+                if not await async_wait_for_job_signal(
                     job,
                     job.source_shortfall_event,
                     error_message="Timed out waiting for source shortfall decision.",
@@ -511,26 +496,24 @@ def run_pipeline_thread(
                 job.source_shortfall_added_ids = []
                 return decision == "proceed", added_ids
 
-            asyncio.run(
-                run_pipeline_fn(
-                    worker,
-                    writer,
-                    reviewer,
-                    run_dir,
-                    config,
-                    extra_prompt=prompt,
-                    token_tracker=tracker,
-                    on_questions=_on_questions
-                    if config.writing.interactive_validation
-                    else None,
-                    on_optional_source_pdfs=_on_optional_pdfs,
-                    on_source_shortfall=_on_source_shortfall,
-                    min_sources=min_sources,
-                    user_sources_dir=user_sources_dir,
-                    async_worker=async_worker,
-                    async_writer=async_writer,
-                    async_reviewer=async_reviewer,
-                )
+            await run_pipeline_fn(
+                worker,
+                writer,
+                reviewer,
+                run_dir,
+                config,
+                extra_prompt=prompt,
+                token_tracker=tracker,
+                on_questions=_on_questions
+                if config.writing.interactive_validation
+                else None,
+                on_optional_source_pdfs=_on_optional_pdfs,
+                on_source_shortfall=_on_source_shortfall,
+                min_sources=min_sources,
+                user_sources_dir=user_sources_dir,
+                async_worker=async_worker,
+                async_writer=async_writer,
+                async_reviewer=async_reviewer,
             )
 
             tracker.write_report(run_dir)

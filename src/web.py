@@ -6,7 +6,6 @@ import asyncio
 import json
 import logging
 import tempfile
-import threading
 import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -42,14 +41,14 @@ _build_status_payload = web_jobs.build_status_payload
 job_ttl_sweep_once = web_jobs.job_ttl_sweep_once
 
 
-def _run_pipeline_thread(
+async def _run_pipeline_task(
     job: Job,
     upload_dir: Path | None,
     prompt: str | None,
     min_sources: int | None = None,
     user_sources_dir: Path | None = None,
 ) -> None:
-    return web_jobs.run_pipeline_thread(
+    await web_jobs.run_pipeline_task(
         job,
         upload_dir,
         prompt,
@@ -105,7 +104,7 @@ async def submit(
     files: list[UploadFile] = [],  # noqa: B006
     sources: list[UploadFile] = [],  # noqa: B006
 ):
-    """Accept form data, start the pipeline in a background thread."""
+    """Accept form data, start the pipeline as a background task."""
     job_id = uuid.uuid4().hex[:12]
 
     run_dir = Path(tempfile.mkdtemp(prefix=f"essay_{job_id}_"))
@@ -178,15 +177,14 @@ async def submit(
         level_line = f"Academic level: {academic_level}."
         extra_prompt = f"{level_line}\n{extra_prompt}" if extra_prompt else level_line
 
-    thread = threading.Thread(
-        target=_run_pipeline_thread,
-        args=(job, upload_dir, extra_prompt, min_sources_value, user_sources_dir),
-        daemon=True,
+    asyncio.create_task(
+        _run_pipeline_task(
+            job, upload_dir, extra_prompt, min_sources_value, user_sources_dir
+        )
     )
-    thread.start()
 
     with run_id_context(job_id):
-        logger.info("Job %s background thread started", job_id)
+        logger.info("Job %s background task started", job_id)
 
     return JSONResponse({"job_id": job_id})
 
@@ -213,7 +211,12 @@ async def stream(job_id: str):
             return
 
         while True:
-            await asyncio.to_thread(job._sse_event.wait, _SSE_POLL_INTERVAL)
+            try:
+                await asyncio.wait_for(
+                    job._sse_event.wait(), timeout=_SSE_POLL_INTERVAL
+                )
+            except TimeoutError:
+                pass
             job._sse_event.clear()
 
             if job_id not in _jobs:
