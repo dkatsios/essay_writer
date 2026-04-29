@@ -11,7 +11,7 @@ from pathlib import Path
 from src.schemas import (
     Clarification,
     ValidationQuestion,
-    _expand_context_dependent_option,
+    expand_context_dependent_option,
 )
 
 logger = logging.getLogger(__name__)
@@ -26,7 +26,7 @@ def _read_json(path: Path) -> dict | list | None:
         return None
 
 
-def _calc_cost(
+def calc_cost(
     model: str,
     input_tokens: int,
     output_tokens: int,
@@ -69,7 +69,7 @@ def _step_cost(data: dict) -> float:
     thinking_tokens = data["thinking_tokens"]
     if not data["model"] and not (input_tokens or output_tokens or thinking_tokens):
         return 0.0
-    return _calc_cost(
+    return calc_cost(
         data["model"] or "unknown",
         input_tokens,
         output_tokens,
@@ -467,7 +467,7 @@ def parse_validation_answers(
             resolved_answer = question.options[option_index]
             selected_option_index = option_index
 
-        resolved_answer = _expand_context_dependent_option(
+        resolved_answer = expand_context_dependent_option(
             resolved_answer,
             question.options,
             selected_index=selected_option_index,

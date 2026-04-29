@@ -9,7 +9,7 @@ from unittest.mock import MagicMock
 import src.runtime as runtime_module
 
 from src.runtime import TokenTracker
-from src.pipeline_support import PipelineContext, PipelineStep, _execute
+from src.pipeline_support import PipelineContext, PipelineStep, execute
 from src.web_jobs import Job, build_status_payload
 
 
@@ -89,7 +89,7 @@ class TestTokenTrackerProgress:
             calls.append(model)
             return 0.0
 
-        monkeypatch.setattr(runtime_module, "_calc_cost", fake_calc_cost)
+        monkeypatch.setattr(runtime_module, "calc_cost", fake_calc_cost)
 
         summary = tracker.cost_summary()
 
@@ -121,7 +121,7 @@ class TestExecuteStepProgress:
             PipelineStep("a", step_fn),
             PipelineStep("b", step_fn),
         ]
-        await _execute(steps, ctx, step_offset=2, total_steps=5)
+        await execute(steps, ctx, step_offset=2, total_steps=5)
         assert captured == [(2, 5), (3, 5)]
 
     async def test_sub_total_reset_between_steps(self, tmp_path):
@@ -151,7 +151,7 @@ class TestExecuteStepProgress:
             PipelineStep("s1", step_one),
             PipelineStep("s2", step_two),
         ]
-        await _execute(steps, ctx, step_offset=0, total_steps=2)
+        await execute(steps, ctx, step_offset=0, total_steps=2)
         assert sub_totals_at_start == [(0, 0)]
 
     async def test_no_total_steps_skips_progress(self, tmp_path):
@@ -171,7 +171,7 @@ class TestExecuteStepProgress:
         def noop(_ctx):
             pass
 
-        await _execute([PipelineStep("x", noop)], ctx)
+        await execute([PipelineStep("x", noop)], ctx)
         # step_count stays at default 0 when total_steps not provided
         assert tracker.step_count == 0
 

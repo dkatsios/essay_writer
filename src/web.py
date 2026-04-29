@@ -17,7 +17,7 @@ from jinja2 import Environment, FileSystemLoader
 
 load_dotenv()
 
-from config.schemas import ModelsConfig, _PROVIDER_PRESETS, load_config  # noqa: E402
+from config.settings import ModelsConfig, PROVIDER_PRESETS, load_config  # noqa: E402
 from src import web_jobs  # noqa: E402
 from src.agent import create_async_client, create_client  # noqa: E402
 from src.intake import build_extracted_text, scan  # noqa: E402
@@ -115,10 +115,10 @@ async def submit(
         min_sources if min_sources is not None and min_sources > 0 else None
     )
     provider_value = provider.strip().lower()
-    if provider_value and provider_value not in _PROVIDER_PRESETS:
+    if provider_value and provider_value not in PROVIDER_PRESETS:
         return JSONResponse(
             {
-                "error": f"Unknown provider {provider_value!r}. Choose from: {', '.join(sorted(_PROVIDER_PRESETS))}."
+                "error": f"Unknown provider {provider_value!r}. Choose from: {', '.join(sorted(PROVIDER_PRESETS))}."
             },
             status_code=400,
         )

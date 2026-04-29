@@ -7,7 +7,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
-from src.pipeline_support import PipelineContext, _parse_sections
+from src.pipeline_support import PipelineContext, parse_sections
 from src.pipeline_writing import make_review_sections, make_write_sections
 
 
@@ -86,7 +86,7 @@ def _make_ctx(run_dir: Path, tracker: object | None = None) -> PipelineContext:
 def test_parse_sections_uses_plan_position_as_internal_id(tmp_path: Path) -> None:
     _write_plan(tmp_path)
 
-    sections = _parse_sections(tmp_path)
+    sections = parse_sections(tmp_path)
 
     assert [section.position for section in sections] == [1, 2, 3]
     assert [section.number for section in sections] == [1, 2, 2]
@@ -109,14 +109,14 @@ async def test_write_sections_keeps_duplicate_numbers_distinct(
         ),
         encoding="utf-8",
     )
-    sections = _parse_sections(tmp_path)
+    sections = parse_sections(tmp_path)
     tracker = MagicMock()
     captured_assignments: dict[int, list[str]] = {}
     captured_context_flags: dict[int, bool] = {}
     captured_context_text: dict[int, str] = {}
 
     monkeypatch.setattr(
-        "src.pipeline_writing._load_selected_source_notes", lambda _run_dir: []
+        "src.pipeline_writing.load_selected_source_notes", lambda _run_dir: []
     )
 
     def fake_render_prompt(template: str, **kwargs) -> str:
@@ -131,7 +131,7 @@ async def test_write_sections_keeps_duplicate_numbers_distinct(
     async def _fake_async_text_call(_client, prompt, _tracker=None):
         return f"draft:{prompt}"
 
-    monkeypatch.setattr("src.pipeline_writing._async_text_call", _fake_async_text_call)
+    monkeypatch.setattr("src.pipeline_writing.async_text_call", _fake_async_text_call)
 
     await make_write_sections(sections, target_words=1300, citation_min_sources=1)(
         _make_ctx(tmp_path, tracker=tracker)
@@ -173,7 +173,7 @@ async def test_review_sections_keeps_duplicate_numbers_distinct(
 ) -> None:
     _write_plan(tmp_path)
     _write_brief(tmp_path)
-    sections = _parse_sections(tmp_path)
+    sections = parse_sections(tmp_path)
     tracker = MagicMock()
     sections_dir = tmp_path / "essay" / "sections"
     sections_dir.mkdir(parents=True, exist_ok=True)
@@ -189,7 +189,7 @@ async def test_review_sections_keeps_duplicate_numbers_distinct(
     async def _fake_async_text_call(_client, prompt, _tracker=None):
         return f"review:{prompt}"
 
-    monkeypatch.setattr("src.pipeline_writing._async_text_call", _fake_async_text_call)
+    monkeypatch.setattr("src.pipeline_writing.async_text_call", _fake_async_text_call)
 
     await make_review_sections(sections, target_words=1300)(
         _make_ctx(tmp_path, tracker=tracker)
@@ -219,7 +219,7 @@ async def test_review_sections_routes_reconciliation_notes_by_position(
 ) -> None:
     _write_plan(tmp_path)
     _write_brief(tmp_path)
-    sections = _parse_sections(tmp_path)
+    sections = parse_sections(tmp_path)
     sections_dir = tmp_path / "essay" / "sections"
     sections_dir.mkdir(parents=True, exist_ok=True)
     (sections_dir / "01.md").write_text("draft:Intro", encoding="utf-8")
@@ -286,7 +286,7 @@ async def test_review_sections_routes_reconciliation_notes_by_position(
     async def _fake_async_text_call(_client, prompt, _tracker=None):
         return f"review:{prompt}"
 
-    monkeypatch.setattr("src.pipeline_writing._async_text_call", _fake_async_text_call)
+    monkeypatch.setattr("src.pipeline_writing.async_text_call", _fake_async_text_call)
 
     await make_review_sections(sections, target_words=1300)(_make_ctx(tmp_path))
 

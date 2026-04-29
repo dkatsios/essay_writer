@@ -11,7 +11,7 @@ from unittest.mock import MagicMock
 
 from fastapi.testclient import TestClient
 
-from config.schemas import EssayWriterConfig
+from config.settings import EssayWriterConfig
 from src.web import (
     Job,
     _jobs,
@@ -529,10 +529,10 @@ def test_stream_sse_notify_sends_update(tmp_path):
 
 
 def test_json_formatter_produces_valid_json_with_run_id():
-    """_JsonFormatter emits parseable JSON with expected fields and run_id."""
-    from src.run_logging import _JsonFormatter, run_id_context
+    """JsonFormatter emits parseable JSON with expected fields and run_id."""
+    from src.run_logging import JsonFormatter, run_id_context
 
-    formatter = _JsonFormatter()
+    formatter = JsonFormatter()
     logger_name = "src.test_json_fmt"
     test_logger = logging.getLogger(logger_name)
     handler = logging.StreamHandler()
@@ -561,10 +561,10 @@ def test_json_formatter_produces_valid_json_with_run_id():
 
 
 def test_json_formatter_captures_exception():
-    """_JsonFormatter includes exc_info when an exception is logged."""
-    from src.run_logging import _JsonFormatter
+    """JsonFormatter includes exc_info when an exception is logged."""
+    from src.run_logging import JsonFormatter
 
-    formatter = _JsonFormatter()
+    formatter = JsonFormatter()
     test_logger = logging.getLogger("src.test_json_exc")
 
     try:

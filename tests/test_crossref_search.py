@@ -1,7 +1,7 @@
 """Crossref metadata normalisation."""
 
 from src.tools import crossref_search
-from src.tools.crossref_search import _strip_inline_markup
+from src.tools.crossref_search import strip_inline_markup
 
 
 def test_strip_inline_markup_removes_jats_scp() -> None:
@@ -9,17 +9,17 @@ def test_strip_inline_markup_removes_jats_scp() -> None:
         "Canadian Network (<scp>CANMAT</scp>) and International (<scp>ISBD</scp>) "
         "2018 guidelines"
     )
-    assert _strip_inline_markup(raw) == (
+    assert strip_inline_markup(raw) == (
         "Canadian Network (CANMAT) and International (ISBD) 2018 guidelines"
     )
 
 
 def test_strip_inline_markup_plain_text_unchanged() -> None:
-    assert _strip_inline_markup("Plain title") == "Plain title"
+    assert strip_inline_markup("Plain title") == "Plain title"
 
 
 def test_strip_inline_markup_empty() -> None:
-    assert _strip_inline_markup("") == ""
+    assert strip_inline_markup("") == ""
 
 
 def test_search_crossref_requests_abstract_filter(monkeypatch) -> None:

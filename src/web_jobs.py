@@ -23,7 +23,7 @@ from src.run_logging import (
     setup_run_logging,
     teardown_run_logging,
 )
-from src.tools._http import http_get, pdf_get
+from src.tools._http import pdf_get
 from src.tools.web_fetcher import extract_pdf_bytes_to_text
 
 logger = logging.getLogger(__name__)

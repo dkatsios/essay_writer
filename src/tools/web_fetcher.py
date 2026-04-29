@@ -41,7 +41,7 @@ class _TextExtractor(HTMLParser):
         return _WHITESPACE_RE.sub("\n\n", "".join(self._pieces)).strip()
 
 
-def _html_to_text(html: str) -> str:
+def html_to_text(html: str) -> str:
     """Convert HTML to plain text using stdlib HTMLParser."""
     parser = _TextExtractor()
     parser.feed(html)
@@ -120,7 +120,7 @@ def fetch_url_content(url: str, sources_dir: str | None = None) -> str:
         return _extract_pdf_text(resp.content)
 
     if "html" in content_type:
-        text = _html_to_text(resp.text)
+        text = html_to_text(resp.text)
     else:
         text = resp.text
 

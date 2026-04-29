@@ -31,7 +31,7 @@ class AnthropicModels(ProviderModels):
     reviewer: str = "anthropic:claude-opus-4-6"
 
 
-_PROVIDER_PRESETS: dict[str, type[ProviderModels]] = {
+PROVIDER_PRESETS: dict[str, type[ProviderModels]] = {
     "google": GoogleModels,
     "openai": OpenAIModels,
     "anthropic": AnthropicModels,
@@ -52,11 +52,11 @@ class ModelsConfig(BaseModel):
         provider = values.get("provider")
         if not provider:
             return values
-        preset_cls = _PROVIDER_PRESETS.get(provider)
+        preset_cls = PROVIDER_PRESETS.get(provider)
         if not preset_cls:
             raise ValueError(
                 f"Unknown provider {provider!r}. "
-                f"Choose from: {', '.join(sorted(_PROVIDER_PRESETS))}"
+                f"Choose from: {', '.join(sorted(PROVIDER_PRESETS))}"
             )
         preset = preset_cls()
         if "worker" not in values:

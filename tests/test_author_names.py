@@ -54,27 +54,27 @@ class TestInlineSurnamesFromSource:
 
 class TestFormatApaInlineSurnames:
     def test_three_authors_et_al_uses_family_list(self):
-        from src.tools.docx_builder import _format_apa_inline
+        from src.tools.docx_builder import format_apa_inline
 
         source = {
             "authors": ["Yinghui Jin", "Jane Doe", "Bob Smith"],
             "author_families": ["Jin", "Doe", "Smith"],
             "year": 2020,
         }
-        assert _format_apa_inline(source, None) == "(Jin et al., 2020)"
+        assert format_apa_inline(source, None) == "(Jin et al., 2020)"
 
     def test_display_name_only_heuristic(self):
-        from src.tools.docx_builder import _format_apa_inline
+        from src.tools.docx_builder import format_apa_inline
 
         source = {"authors": ["Yinghui Jin"], "year": 2020}
-        assert _format_apa_inline(source, None) == "(Jin, 2020)"
+        assert format_apa_inline(source, None) == "(Jin, 2020)"
 
 
 class TestMakeSourceIdFamilies:
     def test_uses_first_family_for_id(self):
-        from src.tools.research_sources import _make_source_id
+        from src.tools.research_sources import make_source_id
 
-        sid = _make_source_id(
+        sid = make_source_id(
             ["Yinghui Jin"],
             2020,
             author_families=["Jin"],
@@ -82,7 +82,7 @@ class TestMakeSourceIdFamilies:
         assert sid == "jin2020"
 
     def test_heuristic_without_families(self):
-        from src.tools.research_sources import _make_source_id
+        from src.tools.research_sources import make_source_id
 
-        sid = _make_source_id(["Yinghui Jin"], 2020, author_families=None)
+        sid = make_source_id(["Yinghui Jin"], 2020, author_families=None)
         assert sid == "jin2020"

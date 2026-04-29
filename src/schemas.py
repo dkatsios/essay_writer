@@ -55,7 +55,7 @@ def _is_context_dependent_option(text: str) -> bool:
     )
 
 
-def _expand_context_dependent_option(
+def expand_context_dependent_option(
     answer: str,
     options: list[str],
     *,

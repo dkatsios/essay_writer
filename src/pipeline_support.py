@@ -19,7 +19,7 @@ from pydantic import BaseModel
 from src.agent import (
     AsyncModelClient,
     ModelClient,
-    _retry_with_backoff,
+    retry_with_backoff,
     extract_text,
     extract_usage,
 )
@@ -27,7 +27,7 @@ from src.rendering import PromptPair
 from src.schemas import AssignmentBrief, EssayPlan, SourceNote
 
 if TYPE_CHECKING:
-    from config.schemas import EssayWriterConfig
+    from config.settings import EssayWriterConfig
 
 logger = logging.getLogger(__name__)
 
@@ -80,7 +80,7 @@ class PipelineStep:
     fn: Callable[[PipelineContext], Awaitable[None]]
 
 
-def _load_checkpoint(run_dir: Path) -> set[str]:
+def load_checkpoint(run_dir: Path) -> set[str]:
     """Load completed step names from the checkpoint file."""
     path = run_dir / "checkpoint.json"
     if not path.exists():
@@ -92,10 +92,10 @@ def _load_checkpoint(run_dir: Path) -> set[str]:
         return set()
 
 
-def _save_checkpoint(run_dir: Path, step_name: str) -> None:
+def save_checkpoint(run_dir: Path, step_name: str) -> None:
     """Append a completed step to the checkpoint file."""
     path = run_dir / "checkpoint.json"
-    completed = list(_load_checkpoint(run_dir))
+    completed = list(load_checkpoint(run_dir))
     if step_name not in completed:
         completed.append(step_name)
     path.write_text(
@@ -104,7 +104,7 @@ def _save_checkpoint(run_dir: Path, step_name: str) -> None:
     )
 
 
-async def _execute(
+async def execute(
     steps: list[PipelineStep],
     ctx: PipelineContext,
     *,
@@ -143,11 +143,11 @@ async def _execute(
             raise
         if ctx.tracker is not None:
             ctx.tracker.record_duration(step.name, duration)
-        _save_checkpoint(ctx.run_dir, step.name)
+        save_checkpoint(ctx.run_dir, step.name)
         running_idx += 1
 
 
-def _build_messages(prompt: str | PromptPair) -> list[dict]:
+def build_messages(prompt: str | PromptPair) -> list[dict]:
     """Build a chat messages list from a plain string or PromptPair."""
     if isinstance(prompt, PromptPair):
         msgs: list[dict] = []
@@ -158,7 +158,7 @@ def _build_messages(prompt: str | PromptPair) -> list[dict]:
     return [{"role": "user", "content": prompt}]
 
 
-def _record_usage(tracker: object | None, response) -> None:
+def record_usage(tracker: object | None, response) -> None:
     if tracker is None or response is None:
         return
     usage = extract_usage(response)
@@ -168,7 +168,7 @@ def _record_usage(tracker: object | None, response) -> None:
         )
 
 
-def _structured_call(
+def structured_call(
     client: ModelClient,
     prompt: str | PromptPair,
     schema: type[BaseModel],
@@ -176,7 +176,7 @@ def _structured_call(
     retries: int = _STRUCTURED_RETRIES,
 ) -> BaseModel:
     """Call a model with structured output."""
-    messages = _build_messages(prompt)
+    messages = build_messages(prompt)
 
     def _do_call():
         return client.client.chat.completions.create(
@@ -186,22 +186,22 @@ def _structured_call(
             messages=messages,
         )
 
-    result = _retry_with_backoff(_do_call)
+    result = retry_with_backoff(_do_call)
     raw = getattr(result, "_raw_response", None)
     if raw:
-        _record_usage(tracker, raw)
+        record_usage(tracker, raw)
     return result
 
 
-async def _async_structured_call(
+async def async_structured_call(
     client: AsyncModelClient,
     prompt: str | PromptPair,
     schema: type[BaseModel],
     tracker: object | None = None,
     retries: int = _STRUCTURED_RETRIES,
 ) -> BaseModel:
-    """Async version of _structured_call."""
-    messages = _build_messages(prompt)
+    """Async version of structured_call."""
+    messages = build_messages(prompt)
 
     async def _do_call():
         return await client.client.chat.completions.create(
@@ -211,20 +211,20 @@ async def _async_structured_call(
             messages=messages,
         )
 
-    result = await _retry_with_backoff(_do_call, is_async=True)
+    result = await retry_with_backoff(_do_call, is_async=True)
     raw = getattr(result, "_raw_response", None)
     if raw:
-        _record_usage(tracker, raw)
+        record_usage(tracker, raw)
     return result
 
 
-def _text_call(
+def text_call(
     client: ModelClient,
     prompt: PromptPair,
     tracker: object | None = None,
 ) -> str:
     """Call a model for free-form text output."""
-    messages = _build_messages(prompt)
+    messages = build_messages(prompt)
 
     def _do_call():
         return client.client.chat.completions.create(
@@ -233,18 +233,18 @@ def _text_call(
             messages=messages,
         )
 
-    response = _retry_with_backoff(_do_call)
-    _record_usage(tracker, response)
+    response = retry_with_backoff(_do_call)
+    record_usage(tracker, response)
     return extract_text(response)
 
 
-async def _async_text_call(
+async def async_text_call(
     client: AsyncModelClient,
     prompt: PromptPair,
     tracker: object | None = None,
 ) -> str:
-    """Async version of _text_call."""
-    messages = _build_messages(prompt)
+    """Async version of text_call."""
+    messages = build_messages(prompt)
 
     async def _do_call():
         return await client.client.chat.completions.create(
@@ -253,28 +253,28 @@ async def _async_text_call(
             messages=messages,
         )
 
-    response = await _retry_with_backoff(_do_call, is_async=True)
-    _record_usage(tracker, response)
+    response = await retry_with_backoff(_do_call, is_async=True)
+    record_usage(tracker, response)
     return extract_text(response)
 
 
-def _write_json(path: Path, data: BaseModel) -> None:
+def write_json(path: Path, data: BaseModel) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
         data.model_dump_json(indent=2, ensure_ascii=False), encoding="utf-8"
     )
 
 
-def _write_text(path: Path, text: str) -> None:
+def write_text(path: Path, text: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(text, encoding="utf-8")
 
 
-def _read_text(path: Path) -> str:
+def read_text(path: Path) -> str:
     return path.read_text(encoding="utf-8")
 
 
-def _get_brief_language(run_dir: Path) -> str:
+def get_brief_language(run_dir: Path) -> str:
     brief_path = run_dir / "brief" / "assignment.json"
     if brief_path.exists():
         brief = AssignmentBrief.model_validate_json(
@@ -284,7 +284,7 @@ def _get_brief_language(run_dir: Path) -> str:
     return "Greek (Δημοτική)"
 
 
-def _get_target_words(run_dir: Path) -> int:
+def get_target_words(run_dir: Path) -> int:
     plan_path = run_dir / "plan" / "plan.json"
     if not plan_path.exists():
         return 0
@@ -292,7 +292,7 @@ def _get_target_words(run_dir: Path) -> int:
     return plan.total_word_target
 
 
-def _normalize_section_word_targets(sections: list[Section], total_target: int) -> None:
+def normalize_section_word_targets(sections: list[Section], total_target: int) -> None:
     """Scale section word targets so they sum to *total_target*, rounding to tens."""
     section_sum = sum(s.word_target for s in sections)
     if section_sum <= 0 or total_target <= 0 or section_sum == total_target:
@@ -314,7 +314,7 @@ def _normalize_section_word_targets(sections: list[Section], total_target: int) 
     )
 
 
-def _parse_sections(run_dir: Path) -> list[Section]:
+def parse_sections(run_dir: Path) -> list[Section]:
     plan_path = run_dir / "plan" / "plan.json"
     if not plan_path.exists():
         return []
@@ -349,23 +349,23 @@ def _parse_sections(run_dir: Path) -> list[Section]:
             )
         )
 
-    _normalize_section_word_targets(sections, plan.total_word_target)
+    normalize_section_word_targets(sections, plan.total_word_target)
     return sections
 
 
-def _suggested_sources(target_words: int, sources_per_1k: int = 5) -> int:
+def suggested_sources(target_words: int, sources_per_1k: int = 5) -> int:
     if target_words <= 0:
         return 0
     return round(sources_per_1k * 3 * math.log2(1 + target_words / 1000))
 
 
-def _compute_max_sources(
+def compute_max_sources(
     target_words: int,
     config: EssayWriterConfig,
     user_min_sources: int | None = None,
 ) -> tuple[int, int]:
     search = config.search
-    raw_target = _suggested_sources(target_words, search.sources_per_1k_words)
+    raw_target = suggested_sources(target_words, search.sources_per_1k_words)
     config_floor = search.min_sources
     if user_min_sources is not None:
         target = max(config_floor, user_min_sources)
@@ -375,25 +375,25 @@ def _compute_max_sources(
     return target, fetch
 
 
-def _corpus_tokens(text: str) -> set[str]:
+def corpus_tokens(text: str) -> set[str]:
     return {
         w for w in re.findall(r"\w+", text.lower(), flags=re.UNICODE) if len(w) >= 4
     }
 
 
-def _note_lexical_score(corpus_tokens: set[str], note: SourceNote) -> int:
+def note_lexical_score(tokens: set[str], note: SourceNote) -> int:
     blob = f"{note.title} {note.summary}"[:8000]
-    return len(corpus_tokens & _corpus_tokens(blob))
+    return len(tokens & corpus_tokens(blob))
 
 
-def _rank_notes_by_corpus(corpus: str, notes: list[SourceNote]) -> list[SourceNote]:
-    corpus_tokens = _corpus_tokens(corpus)
+def rank_notes_by_corpus(corpus: str, notes: list[SourceNote]) -> list[SourceNote]:
+    tokens = corpus_tokens(corpus)
     return sorted(
-        notes, key=lambda note: _note_lexical_score(corpus_tokens, note), reverse=True
+        notes, key=lambda note: note_lexical_score(tokens, note), reverse=True
     )
 
 
-def _source_catalog_markdown(notes: list[SourceNote]) -> str:
+def source_catalog_markdown(notes: list[SourceNote]) -> str:
     lines: list[str] = []
     for note in sorted(notes, key=lambda item: item.source_id):
         authors = (
@@ -406,7 +406,7 @@ def _source_catalog_markdown(notes: list[SourceNote]) -> str:
     return "\n".join(lines)
 
 
-def _plan_corpus_from_json(plan_json: str) -> str:
+def plan_corpus_from_json(plan_json: str) -> str:
     try:
         data = json.loads(plan_json)
     except json.JSONDecodeError:
@@ -425,19 +425,19 @@ def _plan_corpus_from_json(plan_json: str) -> str:
     return " ".join(parts)
 
 
-def _split_writer_source_context(
+def split_writer_source_context(
     corpus: str,
     all_notes: list[SourceNote],
     full_detail_budget: int,
 ) -> tuple[list[SourceNote], str, int]:
     if not all_notes:
         return [], "", 0
-    ranked = _rank_notes_by_corpus(corpus, all_notes)
+    ranked = rank_notes_by_corpus(corpus, all_notes)
     budget = max(1, full_detail_budget)
-    return ranked[:budget], _source_catalog_markdown(all_notes), len(all_notes)
+    return ranked[:budget], source_catalog_markdown(all_notes), len(all_notes)
 
 
-def _load_source_notes(run_dir: Path) -> list[SourceNote]:
+def load_source_notes(run_dir: Path) -> list[SourceNote]:
     notes_dir = run_dir / "sources" / "notes"
     if not notes_dir.exists():
         return []
@@ -454,8 +454,8 @@ def _load_source_notes(run_dir: Path) -> list[SourceNote]:
     return notes
 
 
-def _load_selected_source_notes(run_dir: Path) -> list[SourceNote]:
-    all_notes = _load_source_notes(run_dir)
+def load_selected_source_notes(run_dir: Path) -> list[SourceNote]:
+    all_notes = load_source_notes(run_dir)
     if not all_notes:
         return []
 
@@ -486,7 +486,7 @@ def _load_selected_source_notes(run_dir: Path) -> list[SourceNote]:
     return all_notes
 
 
-def _build_prior_sections_context(
+def build_prior_sections_context(
     written_sections: list[tuple[Section, str]],
     max_sections: int = _MAX_PRIOR_SECTION_CONTEXT,
 ) -> str:
@@ -498,7 +498,7 @@ def _build_prior_sections_context(
     return "\n\n---\n\n".join(text for _, text in recent_sections if text)
 
 
-def _section_window(
+def section_window(
     sections: list[Section],
     target_position: int,
     neighbor_count: int = _REVIEW_SECTION_NEIGHBORS,
@@ -511,14 +511,14 @@ def _section_window(
     return []
 
 
-def _build_review_context(
+def build_review_context(
     section: Section,
     sections: list[Section],
     section_texts: dict[int, str],
     neighbor_count: int = _REVIEW_SECTION_NEIGHBORS,
 ) -> str:
     parts: list[str] = []
-    for current in _section_window(sections, section.position, neighbor_count):
+    for current in section_window(sections, section.position, neighbor_count):
         text = section_texts.get(current.position, "")
         if not text:
             continue

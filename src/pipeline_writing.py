@@ -21,20 +21,20 @@ from src.tools.essay_sanitize import strip_leading_submission_metadata
 from src.pipeline_support import (
     PipelineContext,
     Section,
-    _async_structured_call,
-    _async_text_call,
-    _build_prior_sections_context,
-    _build_review_context,
-    _get_brief_language,
-    _load_selected_source_notes,
-    _plan_corpus_from_json,
-    _rank_notes_by_corpus,
-    _read_text,
-    _section_window,
-    _source_catalog_markdown,
-    _split_writer_source_context,
-    _write_json,
-    _write_text,
+    async_structured_call,
+    async_text_call,
+    build_prior_sections_context,
+    build_review_context,
+    get_brief_language,
+    load_selected_source_notes,
+    plan_corpus_from_json,
+    rank_notes_by_corpus,
+    read_text,
+    section_window,
+    source_catalog_markdown,
+    split_writer_source_context,
+    write_json,
+    write_text,
 )
 
 logger = logging.getLogger(__name__)
@@ -73,13 +73,13 @@ def make_write_full(
     citation_min_sources: int,
 ) -> Callable:
     async def _do_write_full(ctx: PipelineContext) -> None:
-        brief_json = _read_text(ctx.run_dir / "brief" / "assignment.json")
-        plan_json = _read_text(ctx.run_dir / "plan" / "plan.json")
-        source_notes = _load_selected_source_notes(ctx.run_dir)
-        language = _get_brief_language(ctx.run_dir)
+        brief_json = read_text(ctx.run_dir / "brief" / "assignment.json")
+        plan_json = read_text(ctx.run_dir / "plan" / "plan.json")
+        source_notes = load_selected_source_notes(ctx.run_dir)
+        language = get_brief_language(ctx.run_dir)
         min_sources = _effective_min_sources(citation_min_sources, source_notes)
-        detail_notes, catalog_md, total_notes = _split_writer_source_context(
-            _plan_corpus_from_json(plan_json),
+        detail_notes, catalog_md, total_notes = split_writer_source_context(
+            plan_corpus_from_json(plan_json),
             source_notes,
             ctx.config.search.section_source_full_detail_max,
         )
@@ -100,12 +100,12 @@ def make_write_full(
             min_sources=min_sources,
         )
 
-        essay = await _async_text_call(
+        essay = await async_text_call(
             ctx.async_writer,
             prompt,
             ctx.tracker,
         )
-        _write_text(
+        write_text(
             ctx.run_dir / "essay" / "draft.md",
             strip_leading_submission_metadata(essay),
         )
@@ -118,12 +118,12 @@ def make_review_full(
     citation_min_sources: int,
 ) -> Callable:
     async def _do_review_full(ctx: PipelineContext) -> None:
-        brief_json = _read_text(ctx.run_dir / "brief" / "assignment.json")
-        plan_json = _read_text(ctx.run_dir / "plan" / "plan.json")
-        draft = _read_text(ctx.run_dir / "essay" / "draft.md")
+        brief_json = read_text(ctx.run_dir / "brief" / "assignment.json")
+        plan_json = read_text(ctx.run_dir / "plan" / "plan.json")
+        draft = read_text(ctx.run_dir / "essay" / "draft.md")
         draft_words = len(draft.split())
-        language = _get_brief_language(ctx.run_dir)
-        source_notes = _load_selected_source_notes(ctx.run_dir)
+        language = get_brief_language(ctx.run_dir)
+        source_notes = load_selected_source_notes(ctx.run_dir)
         min_sources = _effective_min_sources(citation_min_sources, source_notes)
 
         prompt = render_prompt(
@@ -143,12 +143,12 @@ def make_review_full(
             min_sources=min_sources,
         )
 
-        reviewed = await _async_text_call(
+        reviewed = await async_text_call(
             ctx.async_reviewer,
             prompt,
             ctx.tracker,
         )
-        _write_text(
+        write_text(
             ctx.run_dir / "essay" / "reviewed.md",
             strip_leading_submission_metadata(reviewed),
         )
@@ -178,7 +178,7 @@ def _truncate_at_next_section(
     return text
 
 
-def _partition_sections_for_writing(
+def partition_sections_for_writing(
     sections: list[Section],
 ) -> tuple[list[Section], list[Section]]:
     parallel_sections = [
@@ -219,7 +219,7 @@ def _build_full_draft_context(
         for section in sections
         if section.position in written_by_position
     ]
-    return _build_prior_sections_context(
+    return build_prior_sections_context(
         ordered_written,
         max_sections=len(ordered_written),
     )
@@ -300,14 +300,14 @@ async def _write_section_draft(
         ]
         detail_notes = (
             assigned_notes
-            + _rank_notes_by_corpus(section_corpus, remaining)[
+            + rank_notes_by_corpus(section_corpus, remaining)[
                 : max(0, budget - len(assigned_notes))
             ]
         )
-        catalog_md = _source_catalog_markdown(source_notes)
+        catalog_md = source_catalog_markdown(source_notes)
         total_notes = len(source_notes)
     else:
-        detail_notes, catalog_md, total_notes = _split_writer_source_context(
+        detail_notes, catalog_md, total_notes = split_writer_source_context(
             section_corpus,
             source_notes,
             budget,
@@ -336,14 +336,14 @@ async def _write_section_draft(
         ctx.tracker.set_current_step(tracker_step)
 
     start = monotonic()
-    text = await _async_text_call(
+    text = await async_text_call(
         ctx.async_writer,
         prompt,
         ctx.tracker,
     )
     duration = monotonic() - start
 
-    _write_text(sections_dir / _section_filename(section), text)
+    write_text(sections_dir / _section_filename(section), text)
     if ctx.tracker is not None:
         ctx.tracker.record_duration(tracker_step, duration)
     return section, text, duration
@@ -358,16 +358,16 @@ def make_write_sections(
         sections_dir = ctx.run_dir / "essay" / "sections"
         sections_dir.mkdir(parents=True, exist_ok=True)
 
-        plan_json = _read_text(ctx.run_dir / "plan" / "plan.json")
-        source_notes = _load_selected_source_notes(ctx.run_dir)
-        language = _get_brief_language(ctx.run_dir)
+        plan_json = read_text(ctx.run_dir / "plan" / "plan.json")
+        source_notes = load_selected_source_notes(ctx.run_dir)
+        language = get_brief_language(ctx.run_dir)
         budget = ctx.config.search.section_source_full_detail_max
         min_sources = _effective_min_sources(citation_min_sources, source_notes)
         written_sections: list[tuple[Section, str]] = []
         section_assignments = _load_source_assignments(ctx.run_dir, sections)
         notes_by_id = {note.source_id: note for note in source_notes}
 
-        parallel_sections, deferred_sections = _partition_sections_for_writing(sections)
+        parallel_sections, deferred_sections = partition_sections_for_writing(sections)
         ordered = parallel_sections + deferred_sections
         if ctx.tracker is not None:
             ctx.tracker.set_sub_total(len(ordered))
@@ -445,7 +445,7 @@ def make_write_sections(
                     section_path,
                 )
 
-        _write_text(
+        write_text(
             ctx.run_dir / "essay" / "draft.md",
             strip_leading_submission_metadata("\n\n".join(draft_parts)),
         )
@@ -460,8 +460,8 @@ def make_reconcile_sections(
 ) -> Callable:
     async def _do_reconcile_sections(ctx: PipelineContext) -> None:
         sections_dir = ctx.run_dir / "essay" / "sections"
-        plan_json = _read_text(ctx.run_dir / "plan" / "plan.json")
-        language = _get_brief_language(ctx.run_dir)
+        plan_json = read_text(ctx.run_dir / "plan" / "plan.json")
+        language = get_brief_language(ctx.run_dir)
         draft_texts = _load_section_drafts(sections_dir, sections)
 
         drafted_sections = [
@@ -478,7 +478,7 @@ def make_reconcile_sections(
             if draft_texts.get(section.position)
         ]
         if not drafted_sections:
-            _write_json(
+            write_json(
                 ctx.run_dir / "essay" / "reconciliation.json",
                 EssayReconciliationPlan(global_notes=[], sections=[]),
             )
@@ -490,14 +490,14 @@ def make_reconcile_sections(
             drafted_sections=drafted_sections,
             language=language,
         )
-        plan = await _async_structured_call(
+        plan = await async_structured_call(
             ctx.async_worker,
             prompt,
             EssayReconciliationPlan,
             ctx.tracker,
         )
         normalized = _normalize_reconciliation_plan(sections, plan)
-        _write_json(ctx.run_dir / "essay" / "reconciliation.json", normalized)
+        write_json(ctx.run_dir / "essay" / "reconciliation.json", normalized)
 
     return _do_reconcile_sections
 
@@ -512,7 +512,7 @@ def make_review_sections(
         reviewed_dir = ctx.run_dir / "essay" / "reviewed"
         reviewed_dir.mkdir(parents=True, exist_ok=True)
         plan_order = list(sections)
-        language = _get_brief_language(ctx.run_dir)
+        language = get_brief_language(ctx.run_dir)
         reconciliation_notes = _load_reconciliation_notes(ctx.run_dir)
 
         draft_texts = _load_section_drafts(sections_dir, plan_order)
@@ -527,12 +527,12 @@ def make_review_sections(
 
             section_text = draft_texts[section.position]
             notes = reconciliation_notes.get(section.position)
-            full_essay = _build_review_context(
+            full_essay = build_review_context(
                 section,
                 plan_order,
                 {
                     sibling.position: draft_texts[sibling.position]
-                    for sibling in _section_window(plan_order, section.position)
+                    for sibling in section_window(plan_order, section.position)
                     if sibling.position in draft_texts
                 },
             )
@@ -559,7 +559,7 @@ def make_review_sections(
                 ctx.tracker.set_current_step("review")
 
             start = monotonic()
-            reviewed = await _async_text_call(
+            reviewed = await async_text_call(
                 ctx.async_reviewer,
                 prompt,
                 ctx.tracker,
@@ -567,7 +567,7 @@ def make_review_sections(
             duration = monotonic() - start
 
             reviewed = _truncate_at_next_section(reviewed, section, plan_order)
-            _write_text(reviewed_dir / _section_filename(section), reviewed)
+            write_text(reviewed_dir / _section_filename(section), reviewed)
             if ctx.tracker is not None:
                 ctx.tracker.record_duration(tracker_step, duration)
             return section, reviewed, duration
@@ -601,7 +601,7 @@ def make_review_sections(
             elif section.position in draft_texts:
                 reviewed_parts.append(draft_texts[section.position])
 
-        _write_text(
+        write_text(
             ctx.run_dir / "essay" / "reviewed.md",
             strip_leading_submission_metadata("\n\n".join(reviewed_parts)),
         )

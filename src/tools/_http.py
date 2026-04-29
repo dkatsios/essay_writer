@@ -140,7 +140,7 @@ class ProxySettings:
 
     @classmethod
     def from_config(cls) -> ProxySettings:
-        from config.schemas import load_config
+        from config.settings import load_config
 
         search = load_config().search
         return cls(
@@ -182,7 +182,7 @@ _PROXY_DOMAINS_SKIP = frozenset(
 
 
 @dataclass
-class _ProxySession:
+class ProxySession:
     """Manages an authenticated curl_cffi session for institutional proxy access.
 
     Supports two EZProxy modes, auto-detected from the proxy login page:
@@ -467,16 +467,16 @@ class _ProxySession:
 
 
 _PROXY_SESSION_LOCK = threading.Lock()
-_PROXY_SESSIONS: dict[tuple[str, str, str], _ProxySession] = {}
+_PROXY_SESSIONS: dict[tuple[str, str, str], ProxySession] = {}
 
 
-def _get_proxy_session(proxy: ProxySettings) -> _ProxySession:
+def _get_proxy_session(proxy: ProxySettings) -> ProxySession:
     """Return a cached proxy session for the provided settings."""
     key = (proxy.proxy_prefix, proxy.username, proxy.password)
     with _PROXY_SESSION_LOCK:
         session = _PROXY_SESSIONS.get(key)
         if session is None:
-            session = _ProxySession(
+            session = ProxySession(
                 proxy_prefix=proxy.proxy_prefix,
                 username=proxy.username,
                 password=proxy.password,
@@ -521,7 +521,7 @@ def _apply_proxy_prefix(url: str, proxy_prefix: str) -> str:
     return proxy_prefix + quote(url, safe="")
 
 
-def _is_pdf_content(resp_content: bytes) -> bool:
+def is_pdf_content(resp_content: bytes) -> bool:
     """Check if response content starts with the PDF magic bytes."""
     return resp_content[:5] == b"%PDF-"
 
@@ -529,7 +529,7 @@ def _is_pdf_content(resp_content: bytes) -> bool:
 def _pdf_fetch_one(
     fetch_url: str,
     *,
-    session: _ProxySession | None = None,
+    session: ProxySession | None = None,
     timeout: float = DEFAULT_TIMEOUT,
     max_retries: int = 2,
     initial_backoff: float = 1.0,
@@ -595,7 +595,7 @@ def _pdf_fetch_one(
     )
 
 
-def _pick_best_pdf(
+def pick_best_pdf(
     direct: PdfResponse | None,
     proxy: PdfResponse | None,
     url: str,
@@ -606,8 +606,8 @@ def _pick_best_pdf(
     (3) raise an error. When both paths return a PDF, prefer direct to
     avoid unnecessary proxy load.
     """
-    direct_is_pdf = direct is not None and _is_pdf_content(direct.content)
-    proxy_is_pdf = proxy is not None and _is_pdf_content(proxy.content)
+    direct_is_pdf = direct is not None and is_pdf_content(direct.content)
+    proxy_is_pdf = proxy is not None and is_pdf_content(proxy.content)
 
     if direct_is_pdf and proxy_is_pdf:
         return direct  # both work — prefer direct
@@ -681,7 +681,7 @@ def pdf_get(
 
     # Build the proxy URL (if applicable)
     proxy_url: str | None = None
-    proxy_session: _ProxySession | None = None
+    proxy_session: ProxySession | None = None
     if not skip_proxy:
         if use_auth_proxy:
             proxy_url = ps.rewrite_url(url)
@@ -725,7 +725,7 @@ def pdf_get(
         if direct_resp is None and proxy_resp is None:
             raise direct_err or proxy_err  # type: ignore[misc]
 
-        result = _pick_best_pdf(direct_resp, proxy_resp, url)
+        result = pick_best_pdf(direct_resp, proxy_resp, url)
 
         # If the "best" is still a 4xx+, raise so callers see the error
         if result.status_code >= 400:

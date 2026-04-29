@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-from src.tools.research_sources import _build_registry
+from src.tools.research_sources import build_registry
 
 
 class TestBuildRegistryMerge:
-    """Verify _build_registry preserves existing entries on recovery passes."""
+    """Verify build_registry preserves existing entries on recovery passes."""
 
     def _make_hit(self, title, doi="", year=2024, authors=None, citation_count=0):
         return {
@@ -22,7 +22,7 @@ class TestBuildRegistryMerge:
 
     def test_no_existing_registry(self):
         hits = [self._make_hit("Paper A"), self._make_hit("Paper B")]
-        reg = _build_registry(hits, 100)
+        reg = build_registry(hits, 100)
         assert len(reg) == 2
 
     def test_existing_entries_preserved(self):
@@ -37,7 +37,7 @@ class TestBuildRegistryMerge:
             }
         }
         new_hits = [self._make_hit("New Paper", doi="10.1000/new")]
-        reg = _build_registry(new_hits, 100, existing_registry=existing)
+        reg = build_registry(new_hits, 100, existing_registry=existing)
         assert "smith2020" in reg
         assert reg["smith2020"]["title"] == "Existing Paper"
         assert len(reg) == 2
@@ -54,7 +54,7 @@ class TestBuildRegistryMerge:
             }
         }
         new_hits = [self._make_hit("Different Title Same DOI", doi="10.1000/same")]
-        reg = _build_registry(new_hits, 100, existing_registry=existing)
+        reg = build_registry(new_hits, 100, existing_registry=existing)
         assert len(reg) == 1
         assert reg["smith2020"]["title"] == "Existing Paper"
 
@@ -70,7 +70,7 @@ class TestBuildRegistryMerge:
             }
         }
         new_hits = [self._make_hit("Existing Paper", doi="10.1000/new")]
-        reg = _build_registry(new_hits, 100, existing_registry=existing)
+        reg = build_registry(new_hits, 100, existing_registry=existing)
         assert len(reg) == 1
 
     def test_id_collision_gets_suffix(self):
@@ -85,7 +85,7 @@ class TestBuildRegistryMerge:
             }
         }
         new_hits = [self._make_hit("Second Paper", doi="10.1000/second")]
-        reg = _build_registry(new_hits, 100, existing_registry=existing)
+        reg = build_registry(new_hits, 100, existing_registry=existing)
         assert "author2024" in reg
         assert "author2024a" in reg
         assert len(reg) == 2
@@ -105,6 +105,6 @@ class TestBuildRegistryMerge:
             self._make_hit("Brand New A", doi="10.1000/a"),
             self._make_hit("Brand New B", doi="10.1000/b"),
         ]
-        reg = _build_registry(new_hits, 100, existing_registry=existing)
+        reg = build_registry(new_hits, 100, existing_registry=existing)
         assert len(reg) == 3
         assert "smith2020" in reg

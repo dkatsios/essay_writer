@@ -16,15 +16,15 @@ from src.pipeline_sources import (
 from src.pipeline_support import (
     PipelineContext,
     PipelineStep,
-    _async_structured_call,
-    _compute_max_sources,
-    _execute,
-    _get_brief_language,
-    _get_target_words,
-    _load_checkpoint,
-    _parse_sections,
-    _read_text,
-    _write_json,
+    async_structured_call,
+    compute_max_sources,
+    execute,
+    get_brief_language,
+    get_target_words,
+    load_checkpoint,
+    parse_sections,
+    read_text,
+    write_json,
 )
 from src.pipeline_writing import (
     do_export,
@@ -40,42 +40,42 @@ logger = logging.getLogger(__name__)
 
 async def _do_intake(ctx: PipelineContext) -> None:
     extracted_path = ctx.run_dir / "input" / "extracted.md"
-    extracted_text = _read_text(extracted_path) if extracted_path.exists() else ""
+    extracted_text = read_text(extracted_path) if extracted_path.exists() else ""
     prompt = render_prompt(
         "intake.j2",
         extracted_text=extracted_text,
         extra_prompt=ctx.extra_prompt,
     )
-    brief = await _async_structured_call(
+    brief = await async_structured_call(
         ctx.async_worker, prompt, AssignmentBrief, ctx.tracker
     )
-    _write_json(ctx.run_dir / "brief" / "assignment.json", brief)
+    write_json(ctx.run_dir / "brief" / "assignment.json", brief)
 
 
 async def _do_validate(ctx: PipelineContext) -> None:
-    brief_json = _read_text(ctx.run_dir / "brief" / "assignment.json")
+    brief_json = read_text(ctx.run_dir / "brief" / "assignment.json")
     prompt = render_prompt(
         "validate.j2",
         brief_json=brief_json,
-        language=_get_brief_language(ctx.run_dir),
+        language=get_brief_language(ctx.run_dir),
     )
-    result = await _async_structured_call(
+    result = await async_structured_call(
         ctx.async_worker, prompt, ValidationResult, ctx.tracker
     )
-    _write_json(ctx.run_dir / "brief" / "validation.json", result)
+    write_json(ctx.run_dir / "brief" / "validation.json", result)
 
 
 async def _do_plan(ctx: PipelineContext) -> None:
-    brief_json = _read_text(ctx.run_dir / "brief" / "assignment.json")
+    brief_json = read_text(ctx.run_dir / "brief" / "assignment.json")
     prompt = render_prompt(
         "plan.j2",
         brief_json=brief_json,
-        language=_get_brief_language(ctx.run_dir),
+        language=get_brief_language(ctx.run_dir),
     )
-    plan = await _async_structured_call(
+    plan = await async_structured_call(
         ctx.async_worker, prompt, EssayPlan, ctx.tracker
     )
-    _write_json(ctx.run_dir / "plan" / "plan.json", plan)
+    write_json(ctx.run_dir / "plan" / "plan.json", plan)
 
 
 def _read_validation(run_dir: Path) -> ValidationResult | None:
@@ -108,7 +108,7 @@ def _build_execution_steps(
             PipelineStep("review", make_review_full(target_words, citation_min_sources))
         )
     else:
-        sections = _parse_sections(ctx.run_dir)
+        sections = parse_sections(ctx.run_dir)
         if not sections:
             logger.warning("Could not parse sections -- falling back to short path")
             steps.append(
@@ -179,7 +179,7 @@ async def run_pipeline(
     if async_reviewer is None:
         async_reviewer = reviewer.to_async()
 
-    checkpoint = _load_checkpoint(run_dir) if resume else set()
+    checkpoint = load_checkpoint(run_dir) if resume else set()
     if checkpoint:
         logger.info("Resuming — completed steps: %s", ", ".join(sorted(checkpoint)))
 
@@ -205,7 +205,7 @@ async def run_pipeline(
     # Preliminary step count for progress (intake + validate + plan).
     preliminary_total = 3
 
-    await _execute(
+    await execute(
         [PipelineStep("intake", _do_intake)],
         ctx,
         checkpoint=checkpoint,
@@ -225,7 +225,7 @@ async def run_pipeline(
             encoding="utf-8",
         )
 
-    await _execute(
+    await execute(
         [PipelineStep("validate", _do_validate)],
         ctx,
         checkpoint=checkpoint,
@@ -244,7 +244,7 @@ async def run_pipeline(
         ):
             await on_questions(validation.questions, run_dir)
 
-    await _execute(
+    await execute(
         [PipelineStep("plan", _do_plan)],
         ctx,
         checkpoint=checkpoint,
@@ -252,7 +252,7 @@ async def run_pipeline(
         total_steps=preliminary_total,
     )
 
-    target_words = _get_target_words(run_dir)
+    target_words = get_target_words(run_dir)
     threshold = config.writing.long_essay_threshold
     logger.info(
         "Target: %d words, threshold: %d -> %s path",
@@ -269,7 +269,7 @@ async def run_pipeline(
         )
         user_min_sources = brief.min_sources
 
-    target_sources, fetch_sources = _compute_max_sources(
+    target_sources, fetch_sources = compute_max_sources(
         target_words,
         config,
         user_min_sources,
@@ -304,7 +304,7 @@ async def run_pipeline(
     )
     total_steps = 3 + len(execution_steps)
 
-    await _execute(
+    await execute(
         execution_steps,
         ctx,
         checkpoint=checkpoint,

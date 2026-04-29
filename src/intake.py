@@ -70,7 +70,7 @@ _EXTENSION_CATEGORIES: dict[str, str] = {
 }
 
 
-def _classify(path: Path) -> str:
+def classify(path: Path) -> str:
     """Return the category of a file: 'text', 'pdf', 'docx', 'pptx', 'image', or 'unsupported'."""
     return _EXTENSION_CATEGORIES.get(path.suffix.lower(), "unsupported")
 
@@ -122,7 +122,7 @@ def _extract_pdf(path: Path) -> tuple[str | None, list[dict] | None]:
     return placeholder, None
 
 
-def _make_image_block(image_bytes: bytes, mime: str = "image/png") -> dict:
+def make_image_block(image_bytes: bytes, mime: str = "image/png") -> dict:
     """Encode raw bytes as a base64 multimodal content block."""
     data = base64.standard_b64encode(image_bytes).decode("ascii")
     return {
@@ -167,7 +167,7 @@ def _image_mime(path: Path) -> str:
 
 def _load_image_block(path: Path) -> dict:
     """Load an image as a base64 content block for multimodal messages."""
-    return _make_image_block(path.read_bytes(), _image_mime(path))
+    return make_image_block(path.read_bytes(), _image_mime(path))
 
 
 # ---------------------------------------------------------------------------
@@ -219,7 +219,7 @@ def scan(input_path: str | Path) -> list[InputFile]:
 
     results: list[InputFile] = []
     for fp in files:
-        category = _classify(fp)
+        category = classify(fp)
 
         if category == "text":
             results.append(InputFile(fp, category, text=_extract_text(fp)))

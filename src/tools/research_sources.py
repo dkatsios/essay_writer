@@ -44,7 +44,7 @@ def _normalise_title(title: str) -> str:
     return re.sub(r"[\W_]+", "", title.casefold(), flags=re.UNICODE)
 
 
-def _make_source_id(
+def make_source_id(
     authors: list[str],
     year: int | None,
     author_families: list[str] | None = None,
@@ -116,7 +116,7 @@ def _search_one_query(
     return results, raw_responses
 
 
-def _query_worker_count(query_count: int) -> int:
+def query_worker_count(query_count: int) -> int:
     """Return a bounded worker count for query-level concurrency."""
     if query_count <= 0:
         return 1
@@ -134,7 +134,7 @@ def _run_queries(
         return [], []
 
     collected: dict[int, tuple[str, list[dict], dict[str, dict]]] = {}
-    with ThreadPoolExecutor(max_workers=_query_worker_count(len(queries))) as pool:
+    with ThreadPoolExecutor(max_workers=query_worker_count(len(queries))) as pool:
         futures = {
             submit_with_current_context(
                 pool,
@@ -188,7 +188,7 @@ def _citation_rank(hit: dict) -> int:
     return -(hit.get("citation_count") or 0)
 
 
-def _build_registry(
+def build_registry(
     raw_results: list[dict],
     max_sources: int,
     *,
@@ -279,7 +279,7 @@ def _build_registry(
     for hit in candidates:
         authors = hit.get("authors", [])
         author_families = hit.get("author_families")
-        source_id = _make_source_id(
+        source_id = make_source_id(
             authors, hit.get("year"), author_families=author_families
         )
         source_id = _dedup_source_id(source_id, used_ids)
@@ -344,7 +344,7 @@ def run_research(
             except Exception:
                 existing_registry = None
 
-    registry = _build_registry(
+    registry = build_registry(
         all_results,
         max_sources,
         existing_registry=existing_registry,

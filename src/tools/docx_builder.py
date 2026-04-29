@@ -343,7 +343,7 @@ def _clean_authors(source: dict) -> list[str]:
     return [a for a in source.get("authors", []) if a.strip()]
 
 
-def _format_apa_inline(source: dict, page_info: str | None) -> str:
+def format_apa_inline(source: dict, page_info: str | None) -> str:
     """Format an APA7 in-text citation string."""
     authors = _clean_authors(source)
     year = source.get("year", "n.d.")
@@ -363,7 +363,7 @@ def _format_apa_inline(source: dict, page_info: str | None) -> str:
     return citation
 
 
-def _format_bib_entry(source: dict) -> str:
+def format_bib_entry(source: dict) -> str:
     """Format a full APA7 bibliography entry."""
     authors = _clean_authors(source)
     year = source.get("year", "n.d.")
@@ -429,7 +429,7 @@ def _process_citations(essay_text: str, sources: dict, style: str) -> str:
             if source_id not in seen:
                 seen[source_id] = True
                 used.append((source_id, page_info))
-            return _format_apa_inline(source, page_info)
+            return format_apa_inline(source, page_info)
 
     processed = _CITE_RE.sub(replacer, essay_text)
 
@@ -441,7 +441,7 @@ def _process_citations(essay_text: str, sources: dict, style: str) -> str:
         for i, (sid, page_info) in enumerate(used, 1):
             source = sources.get(sid)
             if source:
-                entry = _format_bib_entry(source)
+                entry = format_bib_entry(source)
                 if page_info:
                     entry += f" [{page_info}]"
                 processed += f"{i}. {entry}\n\n"
@@ -452,7 +452,7 @@ def _process_citations(essay_text: str, sources: dict, style: str) -> str:
         for sid in unique_ids:
             source = sources.get(sid)
             if source:
-                entries.append(_format_bib_entry(source))
+                entries.append(format_bib_entry(source))
         entries.sort()
         for i, entry in enumerate(entries, 1):
             processed += f"{i}. {entry}\n\n"

@@ -261,7 +261,7 @@ def _should_log_retry_warning(attempt: int) -> bool:
     return attempt == 0 or attempt == _RETRY_MAX - 1
 
 
-def _retry_with_backoff(fn, *, is_async: bool = False):
+def retry_with_backoff(fn, *, is_async: bool = False):
     """Run a sync or async callable with exponential backoff on transient errors."""
     if is_async:
 
@@ -366,7 +366,7 @@ def extract_text(response: Any) -> str:
     return str(response)
 
 
-def _normalize_model_spec(
+def normalize_model_spec(
     model_spec: str,
     *,
     api_key: str | None = None,
@@ -430,7 +430,7 @@ class AsyncModelClient:
 
 def create_client(model_spec: str, *, api_key: str | None = None) -> ModelClient:
     """Build the sync Instructor client for the selected provider."""
-    normalized_model, kwargs = _normalize_model_spec(model_spec, api_key=api_key)
+    normalized_model, kwargs = normalize_model_spec(model_spec, api_key=api_key)
     provider, _, _bare_name = model_spec.partition(":")
     if provider in {"google_genai", "google_vertexai"} and "api_key" not in kwargs:
         google_credential = _classify_google_credential(
@@ -459,7 +459,7 @@ def create_async_client(
     api_key: str | None = None,
 ) -> AsyncModelClient:
     """Build the async Instructor client for the selected provider."""
-    normalized_model, kwargs = _normalize_model_spec(model_spec, api_key=api_key)
+    normalized_model, kwargs = normalize_model_spec(model_spec, api_key=api_key)
     provider, _, _bare_name = model_spec.partition(":")
     if provider in {"google_genai", "google_vertexai"} and "api_key" not in kwargs:
         google_credential = _classify_google_credential(

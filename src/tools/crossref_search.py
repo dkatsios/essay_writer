@@ -22,7 +22,7 @@ logger = logging.getLogger(__name__)
 _CROSSREF_API = "https://api.crossref.org/works"
 
 
-def _strip_inline_markup(text: str) -> str:
+def strip_inline_markup(text: str) -> str:
     """Remove JATS/HTML-style tags Crossref sometimes embeds in title and abstract."""
     if not text or "<" not in text:
         return text
@@ -90,11 +90,11 @@ def search_crossref(
             if date_parts and date_parts[0]:
                 year = date_parts[0][0]
 
-        abstract = _strip_inline_markup(item.get("abstract", "") or "")
+        abstract = strip_inline_markup(item.get("abstract", "") or "")
 
         title_list = item.get("title", [])
         title_raw = title_list[0] if title_list else ""
-        title = _strip_inline_markup(title_raw)
+        title = strip_inline_markup(title_raw)
 
         pdf_url = ""
         for link in item.get("link", []):

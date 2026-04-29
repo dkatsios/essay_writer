@@ -44,7 +44,7 @@ class _RunFilter(logging.Filter):
         return _run_id_var.get() == self.run_id
 
 
-class _JsonFormatter(logging.Formatter):
+class JsonFormatter(logging.Formatter):
     """Emit one JSON object per log line for structured log aggregation."""
 
     def format(self, record: logging.LogRecord) -> str:
@@ -85,7 +85,7 @@ def configure_web_logging() -> None:
     handler = logging.StreamHandler()
     handler.setLevel(logging.INFO)
     if _use_json_logging():
-        handler.setFormatter(_JsonFormatter())
+        handler.setFormatter(JsonFormatter())
     else:
         handler.setFormatter(logging.Formatter(_LOG_FORMAT, _LOG_DATEFMT))
     setattr(handler, _CONSOLE_HANDLER_MARKER, True)

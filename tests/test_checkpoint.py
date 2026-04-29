@@ -11,9 +11,9 @@ import pytest
 from src.pipeline_support import (
     PipelineContext,
     PipelineStep,
-    _execute,
-    _load_checkpoint,
-    _save_checkpoint,
+    execute,
+    load_checkpoint,
+    save_checkpoint,
 )
 
 
@@ -25,7 +25,7 @@ def run_dir(tmp_path: Path) -> Path:
 
 class TestLoadCheckpoint:
     def test_missing_file_returns_empty(self, run_dir: Path):
-        assert _load_checkpoint(run_dir) == set()
+        assert load_checkpoint(run_dir) == set()
 
     def test_loads_completed_steps(self, run_dir: Path):
         run_dir.mkdir(parents=True)
@@ -33,39 +33,39 @@ class TestLoadCheckpoint:
             json.dumps({"completed": ["intake", "validate", "plan"]}),
             encoding="utf-8",
         )
-        assert _load_checkpoint(run_dir) == {"intake", "validate", "plan"}
+        assert load_checkpoint(run_dir) == {"intake", "validate", "plan"}
 
     def test_corrupt_json_returns_empty(self, run_dir: Path):
         run_dir.mkdir(parents=True)
         (run_dir / "checkpoint.json").write_text("not json", encoding="utf-8")
-        assert _load_checkpoint(run_dir) == set()
+        assert load_checkpoint(run_dir) == set()
 
     def test_empty_completed_returns_empty(self, run_dir: Path):
         run_dir.mkdir(parents=True)
         (run_dir / "checkpoint.json").write_text(
             json.dumps({"completed": []}), encoding="utf-8"
         )
-        assert _load_checkpoint(run_dir) == set()
+        assert load_checkpoint(run_dir) == set()
 
 
 class TestSaveCheckpoint:
     def test_creates_file(self, run_dir: Path):
         run_dir.mkdir(parents=True)
-        _save_checkpoint(run_dir, "intake")
+        save_checkpoint(run_dir, "intake")
         data = json.loads((run_dir / "checkpoint.json").read_text(encoding="utf-8"))
         assert data["completed"] == ["intake"]
 
     def test_appends_step(self, run_dir: Path):
         run_dir.mkdir(parents=True)
-        _save_checkpoint(run_dir, "intake")
-        _save_checkpoint(run_dir, "validate")
+        save_checkpoint(run_dir, "intake")
+        save_checkpoint(run_dir, "validate")
         data = json.loads((run_dir / "checkpoint.json").read_text(encoding="utf-8"))
         assert data["completed"] == ["intake", "validate"]
 
     def test_no_duplicates(self, run_dir: Path):
         run_dir.mkdir(parents=True)
-        _save_checkpoint(run_dir, "intake")
-        _save_checkpoint(run_dir, "intake")
+        save_checkpoint(run_dir, "intake")
+        save_checkpoint(run_dir, "intake")
         data = json.loads((run_dir / "checkpoint.json").read_text(encoding="utf-8"))
         assert data["completed"] == ["intake"]
 
@@ -90,7 +90,7 @@ class TestExecuteWithCheckpoint:
             PipelineStep("b", lambda _ctx: calls.append("b")),
             PipelineStep("c", lambda _ctx: calls.append("c")),
         ]
-        await _execute(steps, ctx, checkpoint={"a", "b"})
+        await execute(steps, ctx, checkpoint={"a", "b"})
         assert calls == ["c"]
 
     async def test_no_checkpoint_runs_all(self, run_dir: Path):
@@ -100,7 +100,7 @@ class TestExecuteWithCheckpoint:
             PipelineStep("a", lambda _ctx: calls.append("a")),
             PipelineStep("b", lambda _ctx: calls.append("b")),
         ]
-        await _execute(steps, ctx)
+        await execute(steps, ctx)
         assert calls == ["a", "b"]
 
     async def test_writes_checkpoint_after_each_step(self, run_dir: Path):
@@ -109,8 +109,8 @@ class TestExecuteWithCheckpoint:
             PipelineStep("a", lambda _ctx: None),
             PipelineStep("b", lambda _ctx: None),
         ]
-        await _execute(steps, ctx)
-        checkpoint = _load_checkpoint(run_dir)
+        await execute(steps, ctx)
+        checkpoint = load_checkpoint(run_dir)
         assert checkpoint == {"a", "b"}
 
     async def test_failed_step_not_checkpointed(self, run_dir: Path):
@@ -124,9 +124,9 @@ class TestExecuteWithCheckpoint:
             PipelineStep("b", _fail),
         ]
         with pytest.raises(RuntimeError, match="boom"):
-            await _execute(steps, ctx)
+            await execute(steps, ctx)
 
-        checkpoint = _load_checkpoint(run_dir)
+        checkpoint = load_checkpoint(run_dir)
         assert checkpoint == {"a"}
 
     async def test_empty_checkpoint_runs_all(self, run_dir: Path):
@@ -135,5 +135,5 @@ class TestExecuteWithCheckpoint:
         steps = [
             PipelineStep("a", lambda _ctx: calls.append("a")),
         ]
-        await _execute(steps, ctx, checkpoint=set())
+        await execute(steps, ctx, checkpoint=set())
         assert calls == ["a"]

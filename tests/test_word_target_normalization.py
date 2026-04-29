@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-from pathlib import Path
 
 from src.schemas import EssayPlan
 
@@ -113,20 +112,20 @@ class TestNormalizeSectionWordTargets:
         ]
 
     def test_no_op_when_already_matching(self):
-        from src.pipeline_support import _normalize_section_word_targets
+        from src.pipeline_support import normalize_section_word_targets
 
         sections = self._make_sections([300, 500, 200])
-        _normalize_section_word_targets(sections, 1000)
+        normalize_section_word_targets(sections, 1000)
         assert [s.word_target for s in sections] == [300, 500, 200]
 
     def test_scales_down_and_rounds_to_tens(self):
-        from src.pipeline_support import _normalize_section_word_targets
+        from src.pipeline_support import normalize_section_word_targets
 
         # 3936 * (24000/43680) ≈ 2162.6 → round to nearest 10 = 2160
         # 984 * (24000/43680) ≈ 540.7 → 540
         sections = self._make_sections([3936, 984, 1312])
         total = 24000
-        _normalize_section_word_targets(sections, total)
+        normalize_section_word_targets(sections, total)
 
         for section in sections:
             assert section.word_target % 10 == 0, (
@@ -135,7 +134,7 @@ class TestNormalizeSectionWordTargets:
         assert sum(s.word_target for s in sections) == total
 
     def test_real_world_case_sums_to_total(self):
-        from src.pipeline_support import _normalize_section_word_targets
+        from src.pipeline_support import normalize_section_word_targets
 
         targets = [
             2160,
@@ -164,7 +163,7 @@ class TestNormalizeSectionWordTargets:
             2160,
         ]
         sections = self._make_sections(targets)
-        _normalize_section_word_targets(sections, 24000)
+        normalize_section_word_targets(sections, 24000)
 
         assert sum(s.word_target for s in sections) == 24000
         for s in sections:
@@ -172,19 +171,19 @@ class TestNormalizeSectionWordTargets:
             assert s.word_target >= 10
 
     def test_no_op_when_sum_is_zero(self):
-        from src.pipeline_support import _normalize_section_word_targets
+        from src.pipeline_support import normalize_section_word_targets
 
         sections = self._make_sections([0, 0])
-        _normalize_section_word_targets(sections, 1000)
+        normalize_section_word_targets(sections, 1000)
         # No crash, values unchanged
         assert [s.word_target for s in sections] == [0, 0]
 
     def test_parse_sections_normalizes(self, tmp_path):
-        """Integration: _parse_sections applies normalization even for mismatched plans."""
-        from src.pipeline_support import _parse_sections
+        """Integration: parse_sections applies normalization even for mismatched plans."""
+        from src.pipeline_support import parse_sections
 
         # sum(600+400)=1000 but total=500 → validator auto-corrects,
-        # then _parse_sections normalizes again (no-op since already fixed).
+        # then parse_sections normalizes again (no-op since already fixed).
         plan = {
             "title": "Test",
             "thesis": "Thesis",
@@ -198,7 +197,7 @@ class TestNormalizeSectionWordTargets:
         (tmp_path / "plan").mkdir(parents=True, exist_ok=True)
         (tmp_path / "plan" / "plan.json").write_text(json.dumps(plan), encoding="utf-8")
 
-        sections = _parse_sections(tmp_path)
+        sections = parse_sections(tmp_path)
 
         assert sum(s.word_target for s in sections) == 500
         # 600 * (500/1000) = 300, 400 * (500/1000) = 200

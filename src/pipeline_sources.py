@@ -29,12 +29,12 @@ from src.tools.research_sources import run_research
 from src.tools.web_fetcher import fetch_url_content
 from src.pipeline_support import (
     PipelineContext,
-    _async_structured_call,
-    _corpus_tokens,
-    _load_selected_source_notes,
-    _note_lexical_score,
-    _parse_sections,
-    _write_json,
+    async_structured_call,
+    corpus_tokens,
+    load_selected_source_notes,
+    note_lexical_score,
+    parse_sections,
+    write_json,
 )
 
 logger = logging.getLogger(__name__)
@@ -273,7 +273,7 @@ def _is_useful_abstract(text: str) -> bool:
     return True
 
 
-class _DomainFailureTracker:
+class DomainFailureTracker:
     """Track domains that return 429 and skip after threshold."""
 
     def __init__(self, max_failures: int = 2) -> None:
@@ -417,7 +417,7 @@ async def _async_read_one_source(
             essay_topic=essay_topic,
         )
         try:
-            note = await _async_structured_call(worker, prompt, SourceNote, tracker)
+            note = await async_structured_call(worker, prompt, SourceNote, tracker)
             note = _source_note_with_fulltext_flag(note, had_body)
             # API sources that passed scoring are always accessible
             if not is_user_provided:
@@ -462,7 +462,7 @@ async def _async_fetch_pdf_content(
     source_id: str,
     meta: dict,
     sources_dir: str,
-    domain_tracker: _DomainFailureTracker | None = None,
+    domain_tracker: DomainFailureTracker | None = None,
     min_body_words: int = 50,
 ) -> tuple[str, str, bool]:
     """Fetch PDF content for a single source (network I/O only, no LLM).
@@ -589,7 +589,7 @@ async def _async_batch_triage_sources(
             sources=batch,
             sections=sections or [],
         )
-        result = await _async_structured_call(
+        result = await async_structured_call(
             async_worker, prompt, SourceScoreBatch, tracker
         )
         return {item.source_id: item.relevance_score for item in result.scores}
@@ -809,7 +809,7 @@ async def _fetch_all_pdfs(
 
     if tracker is not None:
         tracker.set_sub_total(len(pairs))
-    domain_tracker = _DomainFailureTracker()
+    domain_tracker = DomainFailureTracker()
     semaphore = asyncio.Semaphore(_SOURCE_READ_CONCURRENCY)
 
     async def _fetch_one(source_id: str, meta: dict) -> tuple[str, str, bool]:
@@ -867,7 +867,7 @@ async def _extract_all(
                     min_body_words=min_body_words,
                     prefetched_content=fetch_results.get(source_id, ""),
                 )
-                _write_json(notes_dir / f"{source_id}.json", note)
+                write_json(notes_dir / f"{source_id}.json", note)
                 return source_id, note
             except Exception:
                 logger.exception("Failed to read source %s", source_id)
@@ -1917,12 +1917,12 @@ async def _async_read_sources_orchestration(
 
 
 async def do_assign_sources(ctx: PipelineContext) -> None:
-    source_notes = _load_selected_source_notes(ctx.run_dir)
+    source_notes = load_selected_source_notes(ctx.run_dir)
     if not source_notes:
         logger.warning("No source notes available for assignment")
         return
 
-    sections = _parse_sections(ctx.run_dir)
+    sections = parse_sections(ctx.run_dir)
     min_per_section = max(2, len(source_notes) // (len(sections) or 1))
     prompt = render_prompt(
         "source_assignment.j2",
@@ -1930,7 +1930,7 @@ async def do_assign_sources(ctx: PipelineContext) -> None:
         source_notes=source_notes,
         min_per_section=min_per_section,
     )
-    result = await _async_structured_call(
+    result = await async_structured_call(
         ctx.async_worker, prompt, SourceAssignmentPlan, ctx.tracker
     )
 
@@ -1954,7 +1954,7 @@ async def do_assign_sources(ctx: PipelineContext) -> None:
             section_corpora.append(
                 (
                     matching,
-                    _corpus_tokens(
+                    corpus_tokens(
                         f"{section.title} {section.key_points} {section.content_outline or ''}"
                     ),
                 )
@@ -1967,7 +1967,7 @@ async def do_assign_sources(ctx: PipelineContext) -> None:
                 note = notes_by_id[source_id]
                 best_section, _ = max(
                     section_corpora,
-                    key=lambda assignment: _note_lexical_score(
+                    key=lambda assignment: note_lexical_score(
                         assignment[1],
                         note,
                     ),
@@ -1977,4 +1977,4 @@ async def do_assign_sources(ctx: PipelineContext) -> None:
                 "Patched %d unassigned sources into best-fit sections", len(missing_ids)
             )
 
-    _write_json(ctx.run_dir / "plan" / "source_assignments.json", result)
+    write_json(ctx.run_dir / "plan" / "source_assignments.json", result)

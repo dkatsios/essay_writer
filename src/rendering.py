@@ -20,7 +20,7 @@ class PromptPair(NamedTuple):
 
 
 @lru_cache(maxsize=4)
-def _get_env(templates_dir: str) -> Environment:
+def get_env(templates_dir: str) -> Environment:
     """Return a cached Jinja2 environment for the given directory."""
     return Environment(
         loader=FileSystemLoader(templates_dir),
@@ -37,7 +37,7 @@ def render_prompt(template_name: str, **context: object) -> PromptPair:
     marker is absent the entire rendered text is used as the *user* message with
     ``system=None``.
     """
-    env = _get_env(str(_TEMPLATES_DIR))
+    env = get_env(str(_TEMPLATES_DIR))
     template = env.get_template(template_name)
     rendered = template.render(**context)
     if _SPLIT_MARKER in rendered:

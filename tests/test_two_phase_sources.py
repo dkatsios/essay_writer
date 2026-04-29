@@ -275,7 +275,7 @@ class TestAsyncBatchTriageSources:
 
         monkeypatch.setattr("src.pipeline_sources.render_prompt", fake_render_prompt)
         monkeypatch.setattr(
-            "src.pipeline_sources._async_structured_call", fake_async_structured_call
+            "src.pipeline_sources.async_structured_call", fake_async_structured_call
         )
 
         result = asyncio.run(
@@ -323,7 +323,7 @@ class TestAsyncBatchTriageSources:
 
         monkeypatch.setattr("src.pipeline_sources.render_prompt", fake_render_prompt)
         monkeypatch.setattr(
-            "src.pipeline_sources._async_structured_call", fake_async_structured_call
+            "src.pipeline_sources.async_structured_call", fake_async_structured_call
         )
 
         result = asyncio.run(
@@ -395,9 +395,9 @@ class TestAsyncFetchPdfContent:
         assert did_fail is False
 
     def test_domain_throttled_returns_empty(self):
-        from src.pipeline_sources import _DomainFailureTracker
+        from src.pipeline_sources import DomainFailureTracker
 
-        tracker = _DomainFailureTracker(max_failures=1)
+        tracker = DomainFailureTracker(max_failures=1)
         tracker.record_failure("https://example.com/paper.pdf")
         tracker.record_failure("https://example.com/paper.pdf")
         meta = {"pdf_url": "https://example.com/paper.pdf"}
