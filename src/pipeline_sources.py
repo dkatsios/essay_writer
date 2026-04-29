@@ -10,6 +10,7 @@ import math
 import re
 import threading
 from collections.abc import Callable
+from dataclasses import dataclass, field
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -55,6 +56,39 @@ _PRETRIM_TITLE_WEIGHT = 5
 _PRETRIM_ABSTRACT_WEIGHT = 1
 _PRETRIM_CITATION_WEIGHT = 3
 _PRETRIM_FULLTEXT_BONUS = 5
+
+
+@dataclass
+class SourceReadState:
+    """Accumulated state passed through the read-sources sub-phases."""
+
+    # Config (immutable after init)
+    registry_path: Path
+    target_sources: int
+    fetch_sources: int
+    sources_dir: str
+    notes_dir: Path
+    essay_topic: str
+    thesis: str
+    plan_sections: list[dict]
+    min_body: int
+    triage_batch_size: int
+    min_relevance_score: int
+    top_n: int
+    pretrim_corpus: set[str]
+
+    # Mutable state accumulated across phases
+    recovery_done: bool = False
+    scores: dict[str, int] = field(default_factory=dict)
+    registry: dict[str, dict] = field(default_factory=dict)
+    triaged: list[dict] = field(default_factory=list)
+    fetch_results: dict[str, str] = field(default_factory=dict)
+    selected_ids: list[str] = field(default_factory=list)
+    api_pairs: list[tuple[str, dict]] = field(default_factory=list)
+    user_pairs: list[tuple[str, dict]] = field(default_factory=list)
+    above_threshold: int = 0
+    initial_scorable_count: int = 0
+    scorable: list[dict] = field(default_factory=list)
 
 
 class SourceShortfallAbort(RuntimeError):
@@ -1115,37 +1149,27 @@ def make_read_sources(
     return _do_read_sources
 
 
-async def _async_read_sources_orchestration(
+def _init_source_read_state(
     ctx: PipelineContext,
     registry_path: Path,
     target_sources: int,
     fetch_sources: int,
-) -> None:
-    """Core async orchestration for source reading.
-
-    All async phases use ``await`` directly; the sync recovery research
-    pass is offloaded via ``asyncio.to_thread``.
-    """
-
-    min_body = ctx.config.search.optional_pdf_min_body_words
-    triage_batch_size = ctx.config.search.triage_batch_size
-    min_relevance_score = ctx.config.search.min_relevance_score
-    top_n = ctx.config.search.optional_pdf_prompt_top_n
-    sources_dir = str(ctx.run_dir / "sources")
+) -> SourceReadState:
+    """Build initial ``SourceReadState`` from config and on-disk artifacts."""
     notes_dir = ctx.run_dir / "sources" / "notes"
     notes_dir.mkdir(parents=True, exist_ok=True)
 
-    brief_path = ctx.run_dir / "brief" / "assignment.json"
     essay_topic = ""
     thesis = ""
+    brief_path = ctx.run_dir / "brief" / "assignment.json"
     if brief_path.exists():
         try:
             brief = json.loads(brief_path.read_text(encoding="utf-8"))
             essay_topic = brief.get("topic", "")
         except Exception:
             pass
-    plan_path = ctx.run_dir / "plan" / "plan.json"
     plan_sections: list[dict] = []
+    plan_path = ctx.run_dir / "plan" / "plan.json"
     if plan_path.exists():
         try:
             plan_data = json.loads(plan_path.read_text(encoding="utf-8"))
@@ -1157,16 +1181,9 @@ async def _async_read_sources_orchestration(
         except Exception:
             pass
 
-    async_worker = ctx.async_worker
     pretrim_corpus = _optional_pdf_corpus_tokens(ctx.run_dir)
-
-    # -- Orchestration -------------------------------------------------
-
-    recovery_done = False
-    scores: dict[str, int] = {}
     registry = _read_registry(registry_path)
 
-    # Separate user sources from API sources
     user_pairs = [
         (sid, meta) for sid, meta in registry.items() if meta.get("user_provided")
     ]
@@ -1174,14 +1191,10 @@ async def _async_read_sources_orchestration(
         (sid, meta) for sid, meta in registry.items() if not meta.get("user_provided")
     ]
 
-    # Phase 2: filter API sources by abstract before any LLM work
     scorable = _filter_scorable_sources({sid: meta for sid, meta in api_pairs})
     initial_scorable_count = len(scorable)
     scorable = _pretrim_scorable_sources(
-        scorable,
-        registry,
-        pretrim_corpus,
-        target_sources,
+        scorable, registry, pretrim_corpus, target_sources
     )
     logger.info(
         "Sources scored: %d (from %d scorable)",
@@ -1194,348 +1207,401 @@ async def _async_read_sources_orchestration(
             initial_scorable_count - len(scorable),
         )
 
-    # Phase 3: score title+abstract relevance before fetching PDFs
-    triaged = scorable
-    if scorable:
-        if ctx.tracker is not None:
-            ctx.tracker.set_current_step("read_sources:score")
-        logger.info(
-            "Source scoring: candidates=%d batch_size=%d",
-            len(scorable),
-            triage_batch_size,
-        )
-        new_scores = await _async_batch_triage_sources(
-            scorable,
-            essay_topic,
-            thesis,
-            async_worker,
-            tracker=ctx.tracker,
-            batch_size=triage_batch_size,
-            sections=plan_sections,
-        )
-        scores.update(new_scores)
-        triaged = [
-            source
-            for source in scorable
-            if scores.get(source["source_id"], 0) >= min_relevance_score
-        ]
-        logger.info(
-            "Sources above threshold: %d (score >= %d)",
-            len(triaged),
-            min_relevance_score,
-        )
+    return SourceReadState(
+        registry_path=registry_path,
+        target_sources=target_sources,
+        fetch_sources=fetch_sources,
+        sources_dir=str(ctx.run_dir / "sources"),
+        notes_dir=notes_dir,
+        essay_topic=essay_topic,
+        thesis=thesis,
+        plan_sections=plan_sections,
+        min_body=ctx.config.search.optional_pdf_min_body_words,
+        triage_batch_size=ctx.config.search.triage_batch_size,
+        min_relevance_score=ctx.config.search.min_relevance_score,
+        top_n=ctx.config.search.optional_pdf_prompt_top_n,
+        pretrim_corpus=pretrim_corpus,
+        registry=registry,
+        user_pairs=user_pairs,
+        api_pairs=api_pairs,
+        scorable=scorable,
+        initial_scorable_count=initial_scorable_count,
+        triaged=list(scorable),
+    )
 
-    # Triage recovery: if triaged pool is already below target, recover early
-    if len(triaged) < target_sources:
-        recovery_fetch_sources = max(
-            fetch_sources + 1,
-            int(fetch_sources * ctx.config.search.recovery_overfetch_multiplier),
-        )
-        recovery_fetch_per_api = max(
-            ctx.config.search.fetch_per_api + 1,
-            int(
-                ctx.config.search.fetch_per_api
-                * ctx.config.search.recovery_fetch_per_api_multiplier
-            ),
-        )
-        logger.info(
-            "Triaged pool below target (%d/%d) — rerunning research with "
-            "max_sources=%d fetch_per_api=%d prefer_fulltext=%s",
-            len(triaged),
-            target_sources,
-            recovery_fetch_sources,
-            recovery_fetch_per_api,
-            ctx.config.search.recovery_prefer_fulltext,
-        )
-        await asyncio.to_thread(
-            _run_research_pass,
-            ctx,
-            recovery_fetch_sources,
-            fetch_per_api=recovery_fetch_per_api,
-            prefer_fulltext=ctx.config.search.recovery_prefer_fulltext,
-        )
-        recovery_done = True
-        registry = _read_registry(registry_path)
 
-        # Exclude all IDs from the initial pass — both scored and unscorable
-        # (no abstract / no authors) — so recovery only processes truly new entries.
-        known_ids = {sid for sid, _ in api_pairs} | set(scores.keys())
-        known_dois, known_titles = _build_dedup_sets(known_ids, registry)
-
-        new_api = {
-            sid: meta
-            for sid, meta in registry.items()
-            if not meta.get("user_provided")
-            and sid not in known_ids
-            and not _is_content_duplicate(meta, known_dois, known_titles)
-        }
-        if new_api:
-            new_scorable = _filter_scorable_sources(new_api)
-            initial_new_scorable_count = len(new_scorable)
-            new_scorable = _pretrim_scorable_sources(
-                new_scorable,
-                registry,
-                pretrim_corpus,
-                target_sources,
-            )
-            if new_scorable:
-                if len(new_scorable) < initial_new_scorable_count:
-                    logger.info(
-                        "Sources scored recovery: %d (from %d scorable)",
-                        len(new_scorable),
-                        initial_new_scorable_count,
-                    )
-                if ctx.tracker is not None:
-                    ctx.tracker.set_current_step("read_sources:score")
-                logger.info(
-                    "Source scoring recovery: candidates=%d",
-                    len(new_scorable),
-                )
-                new_scores = await _async_batch_triage_sources(
-                    new_scorable,
-                    essay_topic,
-                    thesis,
-                    async_worker,
-                    tracker=ctx.tracker,
-                    batch_size=triage_batch_size,
-                    sections=plan_sections,
-                )
-                scores.update(new_scores)
-                new_triaged = [
-                    source
-                    for source in new_scorable
-                    if scores.get(source["source_id"], 0) >= min_relevance_score
-                ]
-                triaged.extend(new_triaged)
-                logger.info(
-                    "Sources above threshold recovery: added=%d total=%d",
-                    len(new_triaged),
-                    len(triaged),
-                )
-
-        # Update api_pairs so later phases see the expanded registry
-        api_pairs = [
-            (sid, meta)
-            for sid, meta in registry.items()
-            if not meta.get("user_provided")
-        ]
-
-    # Phase 4: fetch PDFs only for triaged API sources + user sources
-    triaged_ids = {source["source_id"] for source in triaged}
-    fetch_pairs = [
-        (sid, meta) for sid, meta in api_pairs if sid in triaged_ids
-    ] + user_pairs
-    if not fetch_pairs and not scorable:
-        logger.info("No sources to read (no scorable API and no user-provided).")
+async def _phase_score(ctx: PipelineContext, state: SourceReadState) -> None:
+    """Score title+abstract relevance before fetching PDFs."""
+    if not state.scorable:
         return
+    if ctx.tracker is not None:
+        ctx.tracker.set_current_step("read_sources:score")
+    logger.info(
+        "Source scoring: candidates=%d batch_size=%d",
+        len(state.scorable),
+        state.triage_batch_size,
+    )
+    new_scores = await _async_batch_triage_sources(
+        state.scorable,
+        state.essay_topic,
+        state.thesis,
+        ctx.async_worker,
+        tracker=ctx.tracker,
+        batch_size=state.triage_batch_size,
+        sections=state.plan_sections,
+    )
+    state.scores.update(new_scores)
+    state.triaged = [
+        source
+        for source in state.scorable
+        if state.scores.get(source["source_id"], 0) >= state.min_relevance_score
+    ]
+    logger.info(
+        "Sources above threshold: %d (score >= %d)",
+        len(state.triaged),
+        state.min_relevance_score,
+    )
+
+
+async def _phase_triage_recovery(ctx: PipelineContext, state: SourceReadState) -> None:
+    """If triaged pool is already below target, rerun research and score new candidates."""
+    if len(state.triaged) >= state.target_sources:
+        return
+
+    recovery_fetch_sources = max(
+        state.fetch_sources + 1,
+        int(state.fetch_sources * ctx.config.search.recovery_overfetch_multiplier),
+    )
+    recovery_fetch_per_api = max(
+        ctx.config.search.fetch_per_api + 1,
+        int(
+            ctx.config.search.fetch_per_api
+            * ctx.config.search.recovery_fetch_per_api_multiplier
+        ),
+    )
+    logger.info(
+        "Triaged pool below target (%d/%d) — rerunning research with "
+        "max_sources=%d fetch_per_api=%d prefer_fulltext=%s",
+        len(state.triaged),
+        state.target_sources,
+        recovery_fetch_sources,
+        recovery_fetch_per_api,
+        ctx.config.search.recovery_prefer_fulltext,
+    )
+    await asyncio.to_thread(
+        _run_research_pass,
+        ctx,
+        recovery_fetch_sources,
+        fetch_per_api=recovery_fetch_per_api,
+        prefer_fulltext=ctx.config.search.recovery_prefer_fulltext,
+    )
+    state.recovery_done = True
+    state.registry = _read_registry(state.registry_path)
+
+    known_ids = {sid for sid, _ in state.api_pairs} | set(state.scores.keys())
+    known_dois, known_titles = _build_dedup_sets(known_ids, state.registry)
+
+    new_api = {
+        sid: meta
+        for sid, meta in state.registry.items()
+        if not meta.get("user_provided")
+        and sid not in known_ids
+        and not _is_content_duplicate(meta, known_dois, known_titles)
+    }
+    if new_api:
+        new_scorable = _filter_scorable_sources(new_api)
+        initial_new_scorable_count = len(new_scorable)
+        new_scorable = _pretrim_scorable_sources(
+            new_scorable,
+            state.registry,
+            state.pretrim_corpus,
+            state.target_sources,
+        )
+        if new_scorable:
+            if len(new_scorable) < initial_new_scorable_count:
+                logger.info(
+                    "Sources scored recovery: %d (from %d scorable)",
+                    len(new_scorable),
+                    initial_new_scorable_count,
+                )
+            if ctx.tracker is not None:
+                ctx.tracker.set_current_step("read_sources:score")
+            logger.info(
+                "Source scoring recovery: candidates=%d",
+                len(new_scorable),
+            )
+            new_scores = await _async_batch_triage_sources(
+                new_scorable,
+                state.essay_topic,
+                state.thesis,
+                ctx.async_worker,
+                tracker=ctx.tracker,
+                batch_size=state.triage_batch_size,
+                sections=state.plan_sections,
+            )
+            state.scores.update(new_scores)
+            new_triaged = [
+                source
+                for source in new_scorable
+                if state.scores.get(source["source_id"], 0)
+                >= state.min_relevance_score
+            ]
+            state.triaged.extend(new_triaged)
+            logger.info(
+                "Sources above threshold recovery: added=%d total=%d",
+                len(new_triaged),
+                len(state.triaged),
+            )
+
+    state.api_pairs = [
+        (sid, meta)
+        for sid, meta in state.registry.items()
+        if not meta.get("user_provided")
+    ]
+
+
+async def _phase_fetch(ctx: PipelineContext, state: SourceReadState) -> bool:
+    """Fetch PDFs for triaged API sources + user sources.
+
+    Returns ``False`` if there is nothing to process (caller should abort).
+    """
+    triaged_ids = {source["source_id"] for source in state.triaged}
+    fetch_pairs = [
+        (sid, meta) for sid, meta in state.api_pairs if sid in triaged_ids
+    ] + state.user_pairs
+    if not fetch_pairs and not state.scorable:
+        logger.info("No sources to read (no scorable API and no user-provided).")
+        return False
     if ctx.tracker is not None:
         ctx.tracker.set_current_step("read_sources:fetch")
     logger.info(
         "Source fetch: candidates=%d user=%d",
         len(fetch_pairs),
-        len(user_pairs),
+        len(state.user_pairs),
     )
-    fetch_results: dict[str, str] = await _fetch_all_pdfs(
-        fetch_pairs, sources_dir, tracker=ctx.tracker, min_body_words=min_body
+    state.fetch_results = await _fetch_all_pdfs(
+        fetch_pairs,
+        state.sources_dir,
+        tracker=ctx.tracker,
+        min_body_words=state.min_body,
     )
+    return True
 
-    # Phase 5: select top T from scored API sources
-    above_threshold = sum(1 for s in scores.values() if s >= min_relevance_score)
-    selected_ids = _select_top_sources(
-        scores,
-        registry,
-        target_sources,
-        fetch_results,
-        min_body,
-        min_relevance_score,
+
+async def _phase_select(ctx: PipelineContext, state: SourceReadState) -> None:
+    """Select top T from scored API sources."""
+    state.above_threshold = sum(
+        1 for s in state.scores.values() if s >= state.min_relevance_score
+    )
+    state.selected_ids = _select_top_sources(
+        state.scores,
+        state.registry,
+        state.target_sources,
+        state.fetch_results,
+        state.min_body,
+        state.min_relevance_score,
     )
     logger.info(
         "Sources available for writing: %d (target=%d)",
-        len(selected_ids),
-        target_sources,
+        len(state.selected_ids),
+        state.target_sources,
     )
 
-    # Recovery pass if below target (API sources only)
-    if len(selected_ids) < target_sources and not recovery_done:
-        recovery_fetch_sources = max(
-            fetch_sources + 1,
-            int(fetch_sources * ctx.config.search.recovery_overfetch_multiplier),
-        )
-        recovery_fetch_per_api = max(
-            ctx.config.search.fetch_per_api + 1,
-            int(
-                ctx.config.search.fetch_per_api
-                * ctx.config.search.recovery_fetch_per_api_multiplier
-            ),
-        )
-        logger.info(
-            "Selected usable sources below target (%d/%d) — rerunning research with max_sources=%d fetch_per_api=%d prefer_fulltext=%s",
-            len(selected_ids),
-            target_sources,
-            recovery_fetch_sources,
-            recovery_fetch_per_api,
-            ctx.config.search.recovery_prefer_fulltext,
-        )
-        await asyncio.to_thread(
-            _run_research_pass,
-            ctx,
-            recovery_fetch_sources,
-            fetch_per_api=recovery_fetch_per_api,
-            prefer_fulltext=ctx.config.search.recovery_prefer_fulltext,
-        )
-        recovery_done = True
-        registry = _read_registry(registry_path)
 
-        # Dedup against all previously seen API sources (scored + unscorable)
-        known_ids = {sid for sid, _ in api_pairs} | set(scores.keys())
-        known_dois, known_titles = _build_dedup_sets(known_ids, registry)
+async def _phase_post_select_recovery(
+    ctx: PipelineContext, state: SourceReadState
+) -> None:
+    """Recovery pass if selected < target and no prior recovery was done."""
+    if len(state.selected_ids) >= state.target_sources or state.recovery_done:
+        return
 
-        # Filter + fetch new API candidates only (skip ID and content dupes)
-        new_api = {
-            sid: meta
-            for sid, meta in registry.items()
-            if not meta.get("user_provided")
-            and sid not in known_ids
-            and not _is_content_duplicate(meta, known_dois, known_titles)
-        }
-        if new_api:
-            new_scorable = _filter_scorable_sources(new_api)
-            initial_new_scorable_count = len(new_scorable)
-            new_scorable = _pretrim_scorable_sources(
-                new_scorable,
-                registry,
-                pretrim_corpus,
-                target_sources,
-            )
-            if new_scorable:
-                if len(new_scorable) < initial_new_scorable_count:
-                    logger.info(
-                        "Source pretrim recovery: removed=%d before scoring",
-                        initial_new_scorable_count - len(new_scorable),
-                    )
-                if ctx.tracker is not None:
-                    ctx.tracker.set_current_step("read_sources:score")
+    recovery_fetch_sources = max(
+        state.fetch_sources + 1,
+        int(state.fetch_sources * ctx.config.search.recovery_overfetch_multiplier),
+    )
+    recovery_fetch_per_api = max(
+        ctx.config.search.fetch_per_api + 1,
+        int(
+            ctx.config.search.fetch_per_api
+            * ctx.config.search.recovery_fetch_per_api_multiplier
+        ),
+    )
+    logger.info(
+        "Selected usable sources below target (%d/%d) — rerunning research with max_sources=%d fetch_per_api=%d prefer_fulltext=%s",
+        len(state.selected_ids),
+        state.target_sources,
+        recovery_fetch_sources,
+        recovery_fetch_per_api,
+        ctx.config.search.recovery_prefer_fulltext,
+    )
+    await asyncio.to_thread(
+        _run_research_pass,
+        ctx,
+        recovery_fetch_sources,
+        fetch_per_api=recovery_fetch_per_api,
+        prefer_fulltext=ctx.config.search.recovery_prefer_fulltext,
+    )
+    state.recovery_done = True
+    state.registry = _read_registry(state.registry_path)
+
+    known_ids = {sid for sid, _ in state.api_pairs} | set(state.scores.keys())
+    known_dois, known_titles = _build_dedup_sets(known_ids, state.registry)
+
+    new_api = {
+        sid: meta
+        for sid, meta in state.registry.items()
+        if not meta.get("user_provided")
+        and sid not in known_ids
+        and not _is_content_duplicate(meta, known_dois, known_titles)
+    }
+    if new_api:
+        new_scorable = _filter_scorable_sources(new_api)
+        initial_new_scorable_count = len(new_scorable)
+        new_scorable = _pretrim_scorable_sources(
+            new_scorable,
+            state.registry,
+            state.pretrim_corpus,
+            state.target_sources,
+        )
+        if new_scorable:
+            if len(new_scorable) < initial_new_scorable_count:
                 logger.info(
-                    "Source scoring recovery: candidates=%d",
-                    len(new_scorable),
+                    "Source pretrim recovery: removed=%d before scoring",
+                    initial_new_scorable_count - len(new_scorable),
                 )
-                new_scores = await _async_batch_triage_sources(
-                    new_scorable,
-                    essay_topic,
-                    thesis,
-                    async_worker,
-                    tracker=ctx.tracker,
-                    batch_size=triage_batch_size,
-                    sections=plan_sections,
-                )
-                scores.update(new_scores)
+            if ctx.tracker is not None:
+                ctx.tracker.set_current_step("read_sources:score")
+            logger.info(
+                "Source scoring recovery: candidates=%d",
+                len(new_scorable),
+            )
+            new_scores = await _async_batch_triage_sources(
+                new_scorable,
+                state.essay_topic,
+                state.thesis,
+                ctx.async_worker,
+                tracker=ctx.tracker,
+                batch_size=state.triage_batch_size,
+                sections=state.plan_sections,
+            )
+            state.scores.update(new_scores)
 
-                new_above = [
-                    source
-                    for source in new_scorable
-                    if scores.get(source["source_id"], 0) >= min_relevance_score
+            new_above = [
+                source
+                for source in new_scorable
+                if state.scores.get(source["source_id"], 0)
+                >= state.min_relevance_score
+            ]
+            if new_above:
+                new_above_ids = {s["source_id"] for s in new_above}
+                new_fetch_pairs = [
+                    (sid, meta)
+                    for sid, meta in new_api.items()
+                    if sid in new_above_ids and sid not in state.fetch_results
                 ]
-                if new_above:
-                    new_above_ids = {s["source_id"] for s in new_above}
-                    new_fetch_pairs = [
-                        (sid, meta)
-                        for sid, meta in new_api.items()
-                        if sid in new_above_ids and sid not in fetch_results
-                    ]
-                    if new_fetch_pairs:
-                        if ctx.tracker is not None:
-                            ctx.tracker.set_current_step("read_sources:fetch")
-                        logger.info(
-                            "Source fetch recovery: candidates=%d",
-                            len(new_fetch_pairs),
-                        )
-                        new_fetches = await _fetch_all_pdfs(
-                            new_fetch_pairs,
-                            sources_dir,
-                            tracker=ctx.tracker,
-                            min_body_words=min_body,
-                        )
-                        fetch_results.update(new_fetches)
+                if new_fetch_pairs:
+                    if ctx.tracker is not None:
+                        ctx.tracker.set_current_step("read_sources:fetch")
+                    logger.info(
+                        "Source fetch recovery: candidates=%d",
+                        len(new_fetch_pairs),
+                    )
+                    new_fetches = await _fetch_all_pdfs(
+                        new_fetch_pairs,
+                        state.sources_dir,
+                        tracker=ctx.tracker,
+                        min_body_words=state.min_body,
+                    )
+                    state.fetch_results.update(new_fetches)
 
-        # Recompute above_threshold after merging recovery scores
-        above_threshold = sum(1 for s in scores.values() if s >= min_relevance_score)
-        selected_ids = _select_top_sources(
-            scores,
-            registry,
-            target_sources,
-            fetch_results,
-            min_body,
-            min_relevance_score,
-        )
+    state.above_threshold = sum(
+        1 for s in state.scores.values() if s >= state.min_relevance_score
+    )
+    state.selected_ids = _select_top_sources(
+        state.scores,
+        state.registry,
+        state.target_sources,
+        state.fetch_results,
+        state.min_body,
+        state.min_relevance_score,
+    )
 
-    # Phase 5: full extraction on selected API sources
+
+async def _phase_extract(ctx: PipelineContext, state: SourceReadState) -> None:
+    """Full LLM extraction on selected + user sources, with backfill loop."""
     if ctx.tracker is not None:
         ctx.tracker.set_current_step("read_sources:extract")
-    selected_pairs = [(sid, registry[sid]) for sid in selected_ids if sid in registry]
+    selected_pairs = [
+        (sid, state.registry[sid])
+        for sid in state.selected_ids
+        if sid in state.registry
+    ]
 
-    # Extract user sources (bypass scoring entirely)
-    all_extract_pairs = user_pairs + selected_pairs
+    all_extract_pairs = state.user_pairs + selected_pairs
+    results: list[tuple[str, SourceNote | None]] = []
     if all_extract_pairs:
         logger.info(
             "Running full LLM extraction on %d sources (%d user, %d API)...",
             len(all_extract_pairs),
-            len(user_pairs),
+            len(state.user_pairs),
             len(selected_pairs),
         )
         results = await _extract_all(
             all_extract_pairs,
-            fetch_results,
-            async_worker,
-            sources_dir,
-            notes_dir,
-            essay_topic=essay_topic,
+            state.fetch_results,
+            ctx.async_worker,
+            state.sources_dir,
+            state.notes_dir,
+            essay_topic=state.essay_topic,
             tracker=ctx.tracker,
-            min_body_words=min_body,
+            min_body_words=state.min_body,
         )
-        registry = _backfill_registry(registry, results, registry_path)
+        state.registry = _backfill_registry(
+            state.registry, results, state.registry_path
+        )
 
-        # Partition by origin using registry metadata (not positional slicing)
         user_accessible_ids = [
             sid
             for sid, note in results
             if note is not None
             and note.is_accessible
-            and registry.get(sid, {}).get("user_provided")
+            and state.registry.get(sid, {}).get("user_provided")
         ]
         api_extracted_ids = [
             sid
             for sid, note in results
             if note is not None
             and note.is_accessible
-            and not registry.get(sid, {}).get("user_provided")
+            and not state.registry.get(sid, {}).get("user_provided")
         ]
-        selected_ids = user_accessible_ids + api_extracted_ids
+        state.selected_ids = user_accessible_ids + api_extracted_ids
 
     # Backfill from unused above-threshold candidates if extraction failures
     # reduced the usable set below target.
-    extracted_set = set(selected_ids)
-    # Include all IDs that went through extraction (even failures)
-    for sid, _note in results if all_extract_pairs else []:
+    extracted_set = set(state.selected_ids)
+    for sid, _note in results:
         extracted_set.add(sid)
     above_threshold_ids = {
-        sid for sid, sc in scores.items() if sc >= min_relevance_score
+        sid
+        for sid, sc in state.scores.items()
+        if sc >= state.min_relevance_score
     }
     backfill_round = 0
     while (
-        len(selected_ids) < target_sources
+        len(state.selected_ids) < state.target_sources
         and backfill_round < _MAX_EXTRACTION_BACKFILL_ROUNDS
     ):
         backfill_pool = [
-            (sid, scores[sid])
+            (sid, state.scores[sid])
             for sid in above_threshold_ids
-            if sid not in extracted_set and sid in registry
+            if sid not in extracted_set and sid in state.registry
         ]
         if not backfill_pool:
             break
-        deficit = target_sources - len(selected_ids)
+        deficit = state.target_sources - len(state.selected_ids)
         backfill_pool.sort(
             key=lambda item: _source_composite_score(
-                item[0], item[1], registry, fetch_results, min_body
+                item[0], item[1], state.registry, state.fetch_results, state.min_body
             ),
             reverse=True,
         )
@@ -1550,112 +1616,130 @@ async def _async_read_sources_orchestration(
         )
         if ctx.tracker is not None:
             ctx.tracker.set_current_step("read_sources:extract_backfill")
-        backfill_pairs = [(sid, registry[sid]) for sid in backfill_batch]
+        backfill_pairs = [
+            (sid, state.registry[sid]) for sid in backfill_batch
+        ]
         backfill_results = await _extract_all(
             backfill_pairs,
-            fetch_results,
-            async_worker,
-            sources_dir,
-            notes_dir,
-            essay_topic=essay_topic,
+            state.fetch_results,
+            ctx.async_worker,
+            state.sources_dir,
+            state.notes_dir,
+            essay_topic=state.essay_topic,
             tracker=ctx.tracker,
-            min_body_words=min_body,
+            min_body_words=state.min_body,
         )
-        registry = _backfill_registry(registry, backfill_results, registry_path)
+        state.registry = _backfill_registry(
+            state.registry, backfill_results, state.registry_path
+        )
         for sid, note in backfill_results:
             extracted_set.add(sid)
             if (
                 note is not None
                 and note.is_accessible
-                and not registry.get(sid, {}).get("user_provided")
+                and not state.registry.get(sid, {}).get("user_provided")
             ):
-                selected_ids.append(sid)
+                state.selected_ids.append(sid)
         backfill_round += 1
         if backfill_round < _MAX_EXTRACTION_BACKFILL_ROUNDS:
             logger.info(
                 "After backfill round %d: %d usable sources (target %d)",
                 backfill_round,
-                len(selected_ids),
-                target_sources,
+                len(state.selected_ids),
+                state.target_sources,
             )
 
-    # Optional PDF prompt for selected sources without fulltext
-    task_ids = set(selected_ids)
+
+async def _phase_optional_pdf(ctx: PipelineContext, state: SourceReadState) -> None:
+    """Prompt for optional PDF uploads for sources without fulltext."""
+    task_ids = set(state.selected_ids)
     corpus = _optional_pdf_corpus_tokens(ctx.run_dir)
     results_for_optional = [
         (
             sid,
             SourceNote.model_validate_json(
-                (notes_dir / f"{sid}.json").read_text(encoding="utf-8")
+                (state.notes_dir / f"{sid}.json").read_text(encoding="utf-8")
             ),
         )
-        for sid in selected_ids
-        if (notes_dir / f"{sid}.json").exists()
+        for sid in state.selected_ids
+        if (state.notes_dir / f"{sid}.json").exists()
     ]
     items, prompt_ids = _build_optional_pdf_prompt_payload(
-        results_for_optional, registry, task_ids, corpus, top_n
+        results_for_optional, state.registry, task_ids, corpus, state.top_n
     )
 
-    if items and top_n > 0:
-        paths_before = {
-            source_id: (registry.get(source_id) or {}).get("content_path")
-            for source_id in prompt_ids
-        }
-        if ctx.on_optional_source_pdfs:
-            await ctx.on_optional_source_pdfs(ctx.run_dir, items)
-        else:
-            _log_optional_pdf_hint(ctx.run_dir, items)
+    if not (items and state.top_n > 0):
+        return
 
-        registry = _read_registry(registry_path)
-        reread_ids = [
-            source_id
-            for source_id in prompt_ids
-            if (registry.get(source_id) or {}).get("content_path")
-            != paths_before.get(source_id)
+    paths_before = {
+        source_id: (state.registry.get(source_id) or {}).get("content_path")
+        for source_id in prompt_ids
+    }
+    if ctx.on_optional_source_pdfs:
+        await ctx.on_optional_source_pdfs(ctx.run_dir, items)
+    else:
+        _log_optional_pdf_hint(ctx.run_dir, items)
+
+    state.registry = _read_registry(state.registry_path)
+    reread_ids = [
+        source_id
+        for source_id in prompt_ids
+        if (state.registry.get(source_id) or {}).get("content_path")
+        != paths_before.get(source_id)
+    ]
+    if reread_ids:
+        logger.info(
+            "Re-reading %d source(s) after optional PDF upload…",
+            len(reread_ids),
+        )
+        reread_pairs = [
+            (source_id, state.registry[source_id]) for source_id in reread_ids
         ]
-        if reread_ids:
-            logger.info(
-                "Re-reading %d source(s) after optional PDF upload…",
-                len(reread_ids),
-            )
-            reread_pairs = [
-                (source_id, registry[source_id]) for source_id in reread_ids
-            ]
-            # Re-fetch content for uploaded sources
-            reread_fetch = await _fetch_all_pdfs(
-                reread_pairs,
-                sources_dir,
-                tracker=ctx.tracker,
-                min_body_words=min_body,
-            )
-            fetch_results.update(reread_fetch)
-            reread_results = await _extract_all(
-                reread_pairs,
-                fetch_results,
-                async_worker,
-                sources_dir,
-                notes_dir,
-                essay_topic=essay_topic,
-                tracker=ctx.tracker,
-                min_body_words=min_body,
-            )
-            registry = _backfill_registry(registry, reread_results, registry_path)
+        reread_fetch = await _fetch_all_pdfs(
+            reread_pairs,
+            state.sources_dir,
+            tracker=ctx.tracker,
+            min_body_words=state.min_body,
+        )
+        state.fetch_results.update(reread_fetch)
+        reread_results = await _extract_all(
+            reread_pairs,
+            state.fetch_results,
+            ctx.async_worker,
+            state.sources_dir,
+            state.notes_dir,
+            essay_topic=state.essay_topic,
+            tracker=ctx.tracker,
+            min_body_words=state.min_body,
+        )
+        state.registry = _backfill_registry(
+            state.registry, reread_results, state.registry_path
+        )
 
-            # Update selected_ids: add any newly accessible sources
-            for sid, note in reread_results:
-                if note is not None and note.is_accessible and sid not in selected_ids:
-                    selected_ids.append(sid)
+        for sid, note in reread_results:
+            if (
+                note is not None
+                and note.is_accessible
+                and sid not in state.selected_ids
+            ):
+                state.selected_ids.append(sid)
 
+
+async def _phase_finalize(ctx: PipelineContext, state: SourceReadState) -> None:
+    """Write decision artifacts, save selected.json, and handle shortfall."""
     _write_source_decision_artifacts(
         ctx.run_dir,
-        registry,
-        scores,
-        selected_ids,
-        min_relevance_score=min_relevance_score,
+        state.registry,
+        state.scores,
+        state.selected_ids,
+        min_relevance_score=state.min_relevance_score,
     )
 
-    # Build selected registry subset and save
-    selected_registry = {sid: registry[sid] for sid in selected_ids if sid in registry}
+    selected_registry = {
+        sid: state.registry[sid]
+        for sid in state.selected_ids
+        if sid in state.registry
+    }
     (ctx.run_dir / "sources" / "selected.json").write_text(
         json.dumps(selected_registry, ensure_ascii=False, indent=2),
         encoding="utf-8",
@@ -1665,8 +1749,8 @@ async def _async_read_sources_orchestration(
         len(selected_registry),
     )
     selected_full_text, selected_abstract_only = _selected_source_detail_counts(
-        selected_ids,
-        notes_dir,
+        state.selected_ids,
+        state.notes_dir,
     )
     if selected_full_text or selected_abstract_only:
         logger.info(
@@ -1675,31 +1759,31 @@ async def _async_read_sources_orchestration(
             selected_abstract_only,
         )
 
-    if len(selected_registry) < target_sources:
+    if len(selected_registry) < state.target_sources:
         logger.warning(
             "Only %d usable selected sources after filtering (target %d).",
             len(selected_registry),
-            target_sources,
+            state.target_sources,
         )
         if ctx.on_source_shortfall is not None:
-            # Build borderline candidates: score=2, sorted by citations desc, cap 30.
             borderline = _build_borderline_source_list(
-                scores,
-                registry,
-                selected_ids,
-                min_relevance_score,
+                state.scores,
+                state.registry,
+                state.selected_ids,
+                state.min_relevance_score,
             )
             proceed, added_ids = await ctx.on_source_shortfall(
                 ctx.run_dir,
                 {
                     "usable_sources": len(selected_registry),
-                    "target_sources": target_sources,
-                    "scorable_candidates": initial_scorable_count,
-                    "scoring_candidates": len(scorable),
-                    "triaged_candidates": len(triaged),
-                    "above_threshold": above_threshold,
-                    "total_candidates": len(api_pairs) + len(user_pairs),
-                    "recovery_attempted": recovery_done,
+                    "target_sources": state.target_sources,
+                    "scorable_candidates": state.initial_scorable_count,
+                    "scoring_candidates": len(state.scorable),
+                    "triaged_candidates": len(state.triaged),
+                    "above_threshold": state.above_threshold,
+                    "total_candidates": len(state.api_pairs)
+                    + len(state.user_pairs),
+                    "recovery_attempted": state.recovery_done,
                     "borderline_sources": borderline,
                 },
             )
@@ -1710,18 +1794,126 @@ async def _async_read_sources_orchestration(
             if added_ids:
                 added_ids = await _process_borderline_additions(
                     added_ids,
-                    registry,
-                    fetch_results,
-                    scores,
-                    selected_ids,
+                    state.registry,
+                    state.fetch_results,
+                    state.scores,
+                    state.selected_ids,
                     ctx,
-                    sources_dir,
-                    notes_dir,
-                    essay_topic,
-                    min_body,
-                    min_relevance_score,
-                    registry_path,
+                    state.sources_dir,
+                    state.notes_dir,
+                    state.essay_topic,
+                    state.min_body,
+                    state.min_relevance_score,
+                    state.registry_path,
                 )
+
+
+# -- Sub-step checkpointing -----------------------------------------------
+
+
+def _save_source_sub_checkpoint(
+    run_dir: Path, phase: str, state: SourceReadState
+) -> None:
+    """Persist sub-step progress within read_sources."""
+    path = run_dir / "sources" / "read_checkpoint.json"
+    data: dict = {
+        "completed_phase": phase,
+        "scores": state.scores,
+        "recovery_done": state.recovery_done,
+    }
+    if phase == "fetch":
+        data["fetch_results_keys"] = list(state.fetch_results.keys())
+        data["selected_ids"] = state.selected_ids
+    path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def _load_source_sub_checkpoint(run_dir: Path) -> dict | None:
+    """Load sub-step checkpoint, return ``None`` if not present."""
+    path = run_dir / "sources" / "read_checkpoint.json"
+    if not path.exists():
+        return None
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return None
+
+
+def _reload_fetch_results_from_disk(state: SourceReadState) -> dict[str, str]:
+    """Rebuild ``fetch_results`` from source files already saved on disk."""
+    sources_path = Path(state.sources_dir)
+    results: dict[str, str] = {}
+    for sid in state.registry:
+        meta = state.registry[sid]
+        content_path = meta.get("content_path")
+        if content_path:
+            full = sources_path / content_path
+            if full.exists():
+                try:
+                    results[sid] = full.read_text(encoding="utf-8")
+                except Exception:
+                    pass
+    return results
+
+
+async def _async_read_sources_orchestration(
+    ctx: PipelineContext,
+    registry_path: Path,
+    target_sources: int,
+    fetch_sources: int,
+) -> None:
+    """Core async orchestration for source reading.
+
+    All async phases use ``await`` directly; the sync recovery research
+    pass is offloaded via ``asyncio.to_thread``.
+    """
+    state = _init_source_read_state(ctx, registry_path, target_sources, fetch_sources)
+
+    # Check for a sub-step checkpoint from a previous interrupted run.
+    sub_ckpt = _load_source_sub_checkpoint(ctx.run_dir)
+    if sub_ckpt and sub_ckpt.get("completed_phase") == "fetch":
+        logger.info("Resuming read_sources from sub-checkpoint: fetch")
+        state.scores = {
+            str(k): int(v) for k, v in sub_ckpt.get("scores", {}).items()
+        }
+        state.recovery_done = sub_ckpt.get("recovery_done", False)
+        state.selected_ids = list(sub_ckpt.get("selected_ids", []))
+        state.above_threshold = sum(
+            1 for s in state.scores.values() if s >= state.min_relevance_score
+        )
+        state.fetch_results = _reload_fetch_results_from_disk(state)
+    elif sub_ckpt and sub_ckpt.get("completed_phase") == "scores":
+        logger.info("Resuming read_sources from sub-checkpoint: scores")
+        state.scores = {
+            str(k): int(v) for k, v in sub_ckpt.get("scores", {}).items()
+        }
+        state.recovery_done = sub_ckpt.get("recovery_done", False)
+        state.triaged = [
+            source
+            for source in state.scorable
+            if state.scores.get(source["source_id"], 0) >= state.min_relevance_score
+        ]
+        has_content = await _phase_fetch(ctx, state)
+        if not has_content:
+            return
+        await _phase_select(ctx, state)
+        await _phase_post_select_recovery(ctx, state)
+        _save_source_sub_checkpoint(ctx.run_dir, "fetch", state)
+    else:
+        # Fresh run — execute all phases from the beginning.
+        await _phase_score(ctx, state)
+        await _phase_triage_recovery(ctx, state)
+        _save_source_sub_checkpoint(ctx.run_dir, "scores", state)
+
+        has_content = await _phase_fetch(ctx, state)
+        if not has_content:
+            return
+        await _phase_select(ctx, state)
+        await _phase_post_select_recovery(ctx, state)
+        _save_source_sub_checkpoint(ctx.run_dir, "fetch", state)
+
+    await _phase_extract(ctx, state)
+    await _phase_optional_pdf(ctx, state)
+    await _phase_finalize(ctx, state)
 
 
 async def do_assign_sources(ctx: PipelineContext) -> None:
