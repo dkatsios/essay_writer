@@ -526,3 +526,66 @@ def test_stream_sse_notify_sends_update(tmp_path):
     assert len(events) >= 2
     assert events[0]["status"] == "running"
     assert events[-1]["status"] == "done"
+
+
+def test_json_formatter_produces_valid_json_with_run_id():
+    """_JsonFormatter emits parseable JSON with expected fields and run_id."""
+    from src.run_logging import _JsonFormatter, run_id_context
+
+    formatter = _JsonFormatter()
+    logger_name = "src.test_json_fmt"
+    test_logger = logging.getLogger(logger_name)
+    handler = logging.StreamHandler()
+    handler.setFormatter(formatter)
+
+    record = test_logger.makeRecord(
+        logger_name, logging.INFO, "test.py", 1, "hello %s", ("world",), None
+    )
+    line = formatter.format(record)
+    parsed = json.loads(line)
+
+    assert parsed["level"] == "INFO"
+    assert parsed["logger"] == logger_name
+    assert parsed["message"] == "hello world"
+    assert parsed["run_id"] is None
+    assert "timestamp" in parsed
+
+    with run_id_context("job_abc123"):
+        record2 = test_logger.makeRecord(
+            logger_name, logging.WARNING, "test.py", 2, "step done", (), None
+        )
+        line2 = formatter.format(record2)
+    parsed2 = json.loads(line2)
+    assert parsed2["run_id"] == "job_abc123"
+    assert parsed2["level"] == "WARNING"
+
+
+def test_json_formatter_captures_exception():
+    """_JsonFormatter includes exc_info when an exception is logged."""
+    from src.run_logging import _JsonFormatter
+
+    formatter = _JsonFormatter()
+    test_logger = logging.getLogger("src.test_json_exc")
+
+    try:
+        raise ValueError("boom")
+    except ValueError:
+        import sys
+
+        exc_info = sys.exc_info()
+
+    record = test_logger.makeRecord(
+        "src.test_json_exc",
+        logging.ERROR,
+        "test.py",
+        1,
+        "something failed",
+        (),
+        exc_info,
+    )
+    line = formatter.format(record)
+    parsed = json.loads(line)
+
+    assert parsed["level"] == "ERROR"
+    assert "exc_info" in parsed
+    assert "ValueError: boom" in parsed["exc_info"]

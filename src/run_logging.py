@@ -2,10 +2,14 @@
 
 from __future__ import annotations
 
+import json
 import logging
+import os
 from contextlib import contextmanager
 from contextvars import ContextVar, copy_context
+from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
 
 _run_id_var: ContextVar[str | None] = ContextVar("run_id", default=None)
 
@@ -40,6 +44,30 @@ class _RunFilter(logging.Filter):
         return _run_id_var.get() == self.run_id
 
 
+class _JsonFormatter(logging.Formatter):
+    """Emit one JSON object per log line for structured log aggregation."""
+
+    def format(self, record: logging.LogRecord) -> str:
+        entry: dict[str, Any] = {
+            "timestamp": datetime.fromtimestamp(
+                record.created, tz=timezone.utc
+            ).isoformat(),
+            "level": record.levelname,
+            "logger": record.name,
+            "message": record.getMessage(),
+            "run_id": _run_id_var.get(),
+        }
+        if record.exc_info and not record.exc_text:
+            record.exc_text = self.formatException(record.exc_info)
+        if record.exc_text:
+            entry["exc_info"] = record.exc_text
+        return json.dumps(entry, ensure_ascii=False, default=str)
+
+
+def _use_json_logging() -> bool:
+    return os.environ.get("ESSAY_WEB_LOG_FORMAT", "json").strip().lower() != "text"
+
+
 def _ensure_src_logger_debug() -> logging.Logger:
     src_logger = logging.getLogger("src")
     if src_logger.level == logging.NOTSET or src_logger.level > logging.DEBUG:
@@ -56,7 +84,10 @@ def configure_web_logging() -> None:
 
     handler = logging.StreamHandler()
     handler.setLevel(logging.INFO)
-    handler.setFormatter(logging.Formatter(_LOG_FORMAT, _LOG_DATEFMT))
+    if _use_json_logging():
+        handler.setFormatter(_JsonFormatter())
+    else:
+        handler.setFormatter(logging.Formatter(_LOG_FORMAT, _LOG_DATEFMT))
     setattr(handler, _CONSOLE_HANDLER_MARKER, True)
     src_logger.addHandler(handler)
 
