@@ -18,6 +18,8 @@ uv run uvicorn src.web:app --reload
 # Web: optional ESSAY_WEB_JOB_TTL_SECONDS (default 86400, 0=disable stale-job sweeps), ESSAY_WEB_JOB_SWEEP_INTERVAL_SECONDS, ESSAY_WEB_INTERACTION_TIMEOUT_SECONDS (default 1800)
 # Optional PDF prompt: ESSAY_WRITER_SEARCH__OPTIONAL_PDF_PROMPT_TOP_N (default 5, 0=off), ESSAY_WRITER_SEARCH__OPTIONAL_PDF_MIN_BODY_WORDS
 # Source filtering: ESSAY_WRITER_SEARCH__TRIAGE_BATCH_SIZE (default 50), ESSAY_WRITER_SEARCH__MIN_RELEVANCE_SCORE (default 3)
+# Institutional proxy: ESSAY_WRITER_SEARCH__PROXY_PREFIX (e.g. 'https://login.proxy.eap.gr/login?url=')
+# Proxy auth (Shibboleth/EZProxy): ESSAY_WRITER_SEARCH__PROXY_USERNAME, ESSAY_WRITER_SEARCH__PROXY_PASSWORD
 
 # Docker
 docker build -t essay-writer .

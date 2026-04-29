@@ -1,0 +1,123 @@
+{
+  "ok": 0,
+  "total": 13,
+  "results": [
+    {
+      "url": "https://link.springer.com/content/pdf/10.1007/s10640-019-00399-w.pdf",
+      "domain": "link.springer.com",
+      "ok": false,
+      "status": 200,
+      "content_type": "text/html; charset=utf-8",
+      "size_bytes": 11922,
+      "elapsed_s": 0.62
+    },
+    {
+      "url": "https://link.springer.com/content/pdf/10.1007/978-3-319-21674-4_3.pdf",
+      "domain": "link.springer.com",
+      "ok": false,
+      "status": 200,
+      "content_type": "text/html; charset=utf-8",
+      "size_bytes": 11922,
+      "elapsed_s": 0.6
+    },
+    {
+      "url": "https://journals.sagepub.com/doi/pdf/10.1068/c10171r",
+      "domain": "journals.sagepub.com",
+      "ok": false,
+      "status": 200,
+      "content_type": "text/html; charset=utf-8",
+      "size_bytes": 11922,
+      "elapsed_s": 0.6
+    },
+    {
+      "url": "https://journals.sagepub.com/doi/pdf/10.1007/s12290-016-0407-5",
+      "domain": "journals.sagepub.com",
+      "ok": false,
+      "status": 200,
+      "content_type": "text/html; charset=utf-8",
+      "size_bytes": 11922,
+      "elapsed_s": 0.6
+    },
+    {
+      "url": "https://www.tandfonline.com/doi/pdf/10.1080/21693277.2016.1192517?needAccess=true",
+      "domain": "www.tandfonline.com",
+      "ok": false,
+      "status": 200,
+      "content_type": "text/html; charset=utf-8",
+      "size_bytes": 11922,
+      "elapsed_s": 0.6
+    },
+    {
+      "url": "https://onlinelibrary.wiley.com/doi/pdfdirect/10.1002/art.39859",
+      "domain": "onlinelibrary.wiley.com",
+      "ok": false,
+      "status": 200,
+      "content_type": "text/html; charset=utf-8",
+      "size_bytes": 11922,
+      "elapsed_s": 0.6
+    },
+    {
+      "url": "https://onlinelibrary.wiley.com/doi/pdfdirect/10.1111/rsp3.12340",
+      "domain": "onlinelibrary.wiley.com",
+      "ok": false,
+      "status": 200,
+      "content_type": "text/html; charset=utf-8",
+      "size_bytes": 11922,
+      "elapsed_s": 0.6
+    },
+    {
+      "url": "http://academic.oup.com/histres/article-pdf/74/183/95/31573289/1468-2281.00118.pdf",
+      "domain": "academic.oup.com",
+      "ok": false,
+      "status": 200,
+      "content_type": "text/html; charset=utf-8",
+      "size_bytes": 11922,
+      "elapsed_s": 0.61
+    },
+    {
+      "url": "https://www.cambridge.org/core/services/aop-cambridge-core/content/view/0DCD6F79DE1F989E4C2AA6E201F6FEEF/S0003975602001066a.pdf/ethnicity-without-groups.pdf",
+      "domain": "www.cambridge.org",
+      "ok": false,
+      "status": 200,
+      "content_type": "text/html; charset=utf-8",
+      "size_bytes": 11922,
+      "elapsed_s": 0.59
+    },
+    {
+      "url": "https://direct.mit.edu/isec/article-pdf/34/2/82/693298/isec.2009.34.2.82.pdf",
+      "domain": "direct.mit.edu",
+      "ok": false,
+      "status": 200,
+      "content_type": "text/html; charset=utf-8",
+      "size_bytes": 11922,
+      "elapsed_s": 0.62
+    },
+    {
+      "url": "https://www.nature.com/articles/s41599-018-0152-2.pdf",
+      "domain": "www.nature.com",
+      "ok": false,
+      "status": 200,
+      "content_type": "text/html; charset=utf-8",
+      "size_bytes": 11922,
+      "elapsed_s": 0.59
+    },
+    {
+      "url": "http://www.thelancet.com/article/S0140673615001907/pdf",
+      "domain": "www.thelancet.com",
+      "ok": false,
+      "status": 200,
+      "content_type": "text/html; charset=utf-8",
+      "size_bytes": 11922,
+      "elapsed_s": 0.6
+    },
+    {
+      "url": "https://ieeexplore.ieee.org/ielx7/6287639/8600701/08721134.pdf",
+      "domain": "ieeexplore.ieee.org",
+      "ok": false,
+      "status": 200,
+      "content_type": "text/html; charset=utf-8",
+      "size_bytes": 11922,
+      "elapsed_s": 0.61
+    }
+  ]
+}

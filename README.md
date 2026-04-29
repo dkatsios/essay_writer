@@ -87,4 +87,6 @@ The service exposes the web UI on the port assigned by Render. Optional: set `ES
 
 Default settings are defined in `config/schemas.py`. Override them with environment variables using the `ESSAY_WRITER_` prefix.
 
+PDF proxy defaults also live in `config/schemas.py` under `search.proxy_prefix`, `search.proxy_username`, and `search.proxy_password`. Environment variables with the matching `ESSAY_WRITER_SEARCH__...` names override those defaults.
+
 When the direct Google provider path is used, the runtime auto-detects the credential format. Classic `GOOGLE_API_KEY` values stay on the Gemini Developer API path, while `AQ.` keys are routed through Vertex AI. In the web UI, the same credential field also accepts pasted Vertex service-account JSON; when that JSON includes `project_id`, it is used if `GOOGLE_CLOUD_PROJECT` is unset. `GOOGLE_CLOUD_LOCATION` is still required for all direct Vertex paths. If `AI_BASE_URL` is set, the runtime uses the gateway credentials instead and ignores direct Google Vertex credentials.

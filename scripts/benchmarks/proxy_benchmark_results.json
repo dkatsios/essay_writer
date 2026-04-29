@@ -1,0 +1,1398 @@
+{
+  "total": 60,
+  "direct_ok": 25,
+  "proxy_ok": 24,
+  "combined_ok": 32,
+  "results": [
+    {
+      "url": "http://ejournals.epublishing.ekt.gr/index.php/SCAD/article/viewFile/8903/9107",
+      "domain": "ejournals.epublishing.ekt.gr",
+      "title": "Η χώρα προέλευσης των μεταναστριών και η κοινωνική τους ένταξη στη Ελλάδα",
+      "direct": {
+        "ok": true,
+        "status": 200,
+        "size": 444805,
+        "elapsed": 1.61
+      },
+      "proxy": {
+        "ok": true,
+        "status": 200,
+        "size": 444805,
+        "elapsed": 1.78
+      },
+      "combined": {
+        "ok": true,
+        "status": 200,
+        "size": 444805,
+        "elapsed": 1.51
+      }
+    },
+    {
+      "url": "http://ejournals.epublishing.ekt.gr/index.php/SCAD/article/viewFile/8905/9109",
+      "domain": "ejournals.epublishing.ekt.gr",
+      "title": "Η επίδραση της νόμιμης διαμονής στην κοινωνική ένταξη των μεταναστών στην Ελλάδα",
+      "direct": {
+        "ok": true,
+        "status": 200,
+        "size": 658220,
+        "elapsed": 1.35
+      },
+      "proxy": {
+        "ok": true,
+        "status": 200,
+        "size": 658219,
+        "elapsed": 1.46
+      },
+      "combined": {
+        "ok": true,
+        "status": 200,
+        "size": 658218,
+        "elapsed": 1.82
+      }
+    },
+    {
+      "url": "http://ejournals.epublishing.ekt.gr/index.php/SCAD/article/viewFile/8921/9123",
+      "domain": "ejournals.epublishing.ekt.gr",
+      "title": "Δυναμική του δημοσίου χρέους, οικονομική πολιτική και κοινωνική συνοχή στην Ελλάδα: μία σημείωση",
+      "direct": {
+        "ok": true,
+        "status": 200,
+        "size": 623589,
+        "elapsed": 1.31
+      },
+      "proxy": {
+        "ok": true,
+        "status": 200,
+        "size": 623589,
+        "elapsed": 1.51
+      },
+      "combined": {
+        "ok": true,
+        "status": 200,
+        "size": 623589,
+        "elapsed": 1.68
+      }
+    },
+    {
+      "url": "http://doi.org/10.1080/13691830305614",
+      "domain": "doi.org",
+      "title": "Regularising undocumented immigrants in Greece: Procedures and effects",
+      "direct": {
+        "ok": false,
+        "status": 403,
+        "size": 6012,
+        "elapsed": 0.66
+      },
+      "proxy": {
+        "ok": false,
+        "status": 200,
+        "size": 213529,
+        "elapsed": 2.42
+      },
+      "combined": {
+        "ok": false,
+        "status": 200,
+        "size": 213529,
+        "elapsed": 3.31
+      }
+    },
+    {
+      "url": "http://doi.org/10.5782/2223-2621.2012.15.2.29",
+      "domain": "doi.org",
+      "title": "The “New Great Game” Over the Caspian Region: Russia, the USA, and China in the Same Melting Pot",
+      "direct": {
+        "ok": false,
+        "status": 404,
+        "size": 15363,
+        "elapsed": 1.2
+      },
+      "proxy": {
+        "ok": false,
+        "status": 404,
+        "size": 15363,
+        "elapsed": 0.86
+      },
+      "combined": {
+        "ok": false,
+        "status": null,
+        "size": 0,
+        "elapsed": 0.85,
+        "error": "HTTP 404 for http://doi.org/10.5782/2223-2621.2012.15.2.29"
+      }
+    },
+    {
+      "url": "https://doi.org/10.1002/sd.3221",
+      "domain": "doi.org",
+      "title": "AI‐driven adaptive learning for sustainable educational transformation",
+      "direct": {
+        "ok": false,
+        "status": 403,
+        "size": 5983,
+        "elapsed": 0.54
+      },
+      "proxy": {
+        "ok": false,
+        "status": 200,
+        "size": 660748,
+        "elapsed": 3.56
+      },
+      "combined": {
+        "ok": false,
+        "status": 200,
+        "size": 660748,
+        "elapsed": 2.05
+      }
+    },
+    {
+      "url": "http://eproceedings.epublishing.ekt.gr/index.php/edusc/article/viewFile/135/103",
+      "domain": "eproceedings.epublishing.ekt.gr",
+      "title": "Η νομοθεσία της ειδικής αγωγής στην Ελλάδα και την Αγγλία: μια συγκριτική προσέγγιση.",
+      "direct": {
+        "ok": true,
+        "status": 200,
+        "size": 652013,
+        "elapsed": 1.43
+      },
+      "proxy": {
+        "ok": false,
+        "status": 404,
+        "size": 24,
+        "elapsed": 0.43
+      },
+      "combined": {
+        "ok": true,
+        "status": 200,
+        "size": 652013,
+        "elapsed": 1.36
+      }
+    },
+    {
+      "url": "http://eproceedings.epublishing.ekt.gr/index.php/edusc/article/viewFile/184/149",
+      "domain": "eproceedings.epublishing.ekt.gr",
+      "title": "Παρουσία, εξέλιξη και προοπτική της Εσπερινής Εκπαίδευσης  στην Μεταπολιτευτική Ελλάδα",
+      "direct": {
+        "ok": true,
+        "status": 200,
+        "size": 845183,
+        "elapsed": 1.22
+      },
+      "proxy": {
+        "ok": false,
+        "status": 404,
+        "size": 24,
+        "elapsed": 0.32
+      },
+      "combined": {
+        "ok": true,
+        "status": 200,
+        "size": 845183,
+        "elapsed": 1.42
+      }
+    },
+    {
+      "url": "http://eproceedings.epublishing.ekt.gr/index.php/edusc/article/viewFile/248/213",
+      "domain": "eproceedings.epublishing.ekt.gr",
+      "title": "Εκπαιδευτική πολιτική για την ετερότητα και τη διαφορετικότητα στην Ελλάδα: μία ανασκόπηση του θεσμι",
+      "direct": {
+        "ok": true,
+        "status": 200,
+        "size": 456471,
+        "elapsed": 1.31
+      },
+      "proxy": {
+        "ok": false,
+        "status": 404,
+        "size": 24,
+        "elapsed": 0.28
+      },
+      "combined": {
+        "ok": true,
+        "status": 200,
+        "size": 456471,
+        "elapsed": 1.22
+      }
+    },
+    {
+      "url": "https://onlinelibrary.wiley.com/doi/pdf/10.1002/9781444338386.wbeah04299",
+      "domain": "onlinelibrary.wiley.com",
+      "title": "Sumptuary legislation, Greece",
+      "direct": {
+        "ok": false,
+        "status": 403,
+        "size": 6067,
+        "elapsed": 0.14
+      },
+      "proxy": {
+        "ok": false,
+        "status": 200,
+        "size": 114058,
+        "elapsed": 1.94
+      },
+      "combined": {
+        "ok": false,
+        "status": 200,
+        "size": 114058,
+        "elapsed": 1.71
+      }
+    },
+    {
+      "url": "https://onlinelibrary.wiley.com/doi/pdf/10.1002/9781444351071.wbeghm157",
+      "domain": "onlinelibrary.wiley.com",
+      "title": "Culture and migration, a critical assessment",
+      "direct": {
+        "ok": false,
+        "status": 403,
+        "size": 6064,
+        "elapsed": 0.13
+      },
+      "proxy": {
+        "ok": false,
+        "status": 200,
+        "size": 115368,
+        "elapsed": 2.47
+      },
+      "combined": {
+        "ok": false,
+        "status": 200,
+        "size": 115368,
+        "elapsed": 1.9
+      }
+    },
+    {
+      "url": "https://onlinelibrary.wiley.com/doi/pdf/10.1002/9781444351071.wbeghm259",
+      "domain": "onlinelibrary.wiley.com",
+      "title": "Greece, migration 1830s to present",
+      "direct": {
+        "ok": false,
+        "status": 403,
+        "size": 6064,
+        "elapsed": 0.15
+      },
+      "proxy": {
+        "ok": false,
+        "status": 200,
+        "size": 136809,
+        "elapsed": 2.06
+      },
+      "combined": {
+        "ok": false,
+        "status": 200,
+        "size": 136809,
+        "elapsed": 1.8
+      }
+    },
+    {
+      "url": "http://academic.oup.com/histres/article-pdf/74/183/95/31573289/1468-2281.00118.pdf",
+      "domain": "academic.oup.com",
+      "title": "Winston Churchill's image of France and the French",
+      "direct": {
+        "ok": false,
+        "status": 403,
+        "size": 6072,
+        "elapsed": 0.32
+      },
+      "proxy": {
+        "ok": true,
+        "status": 200,
+        "size": 373346,
+        "elapsed": 5.08
+      },
+      "combined": {
+        "ok": true,
+        "status": 200,
+        "size": 373346,
+        "elapsed": 4.47
+      }
+    },
+    {
+      "url": "http://academic.oup.com/ijrl/article-pdf/31/4/567/33227737/eez031.pdf",
+      "domain": "academic.oup.com",
+      "title": "Evidentiary Burden of Proof regarding Exclusion Grounds for Asylum: The Case of the Turkish Military",
+      "direct": {
+        "ok": false,
+        "status": 403,
+        "size": 6033,
+        "elapsed": 0.26
+      },
+      "proxy": {
+        "ok": true,
+        "status": 200,
+        "size": 168854,
+        "elapsed": 0.9
+      },
+      "combined": {
+        "ok": true,
+        "status": 200,
+        "size": 168854,
+        "elapsed": 1.5
+      }
+    },
+    {
+      "url": "http://academic.oup.com/isq/advance-article-pdf/doi/10.1093/isq/sqz037/28854659/sqz037.pdf",
+      "domain": "academic.oup.com",
+      "title": "Competitive Intervention, Protracted Conflict, and the Global Prevalence of Civil War",
+      "direct": {
+        "ok": false,
+        "status": 403,
+        "size": 6117,
+        "elapsed": 0.25
+      },
+      "proxy": {
+        "ok": true,
+        "status": 200,
+        "size": 750300,
+        "elapsed": 1.59
+      },
+      "combined": {
+        "ok": true,
+        "status": 200,
+        "size": 750300,
+        "elapsed": 2.74
+      }
+    },
+    {
+      "url": "https://journals.sagepub.com/doi/pdf/10.1007/s12290-016-0407-5",
+      "domain": "journals.sagepub.com",
+      "title": "Media discourse on the refugee crisis: on what have the Greek, German and British press focused?",
+      "direct": {
+        "ok": false,
+        "status": 403,
+        "size": 6022,
+        "elapsed": 0.2
+      },
+      "proxy": {
+        "ok": true,
+        "status": 200,
+        "size": 514617,
+        "elapsed": 1.94
+      },
+      "combined": {
+        "ok": true,
+        "status": 200,
+        "size": 514617,
+        "elapsed": 2.71
+      }
+    },
+    {
+      "url": "https://journals.sagepub.com/doi/pdf/10.1068/c10171r",
+      "domain": "journals.sagepub.com",
+      "title": "Peripherality and Integration: Industrial Growth and Decline in the Greek Regions",
+      "direct": {
+        "ok": false,
+        "status": 403,
+        "size": 5992,
+        "elapsed": 0.13
+      },
+      "proxy": {
+        "ok": true,
+        "status": 200,
+        "size": 576208,
+        "elapsed": 1.47
+      },
+      "combined": {
+        "ok": true,
+        "status": 200,
+        "size": 576208,
+        "elapsed": 1.31
+      }
+    },
+    {
+      "url": "https://journals.sagepub.com/doi/pdf/10.1089/soro.2020.0056",
+      "domain": "journals.sagepub.com",
+      "title": "Mechanics and Morphological Compensation Strategy for Trimmed Soft Whisker Sensor",
+      "direct": {
+        "ok": false,
+        "status": 403,
+        "size": 6013,
+        "elapsed": 0.13
+      },
+      "proxy": {
+        "ok": true,
+        "status": 200,
+        "size": 3112020,
+        "elapsed": 1.47
+      },
+      "combined": {
+        "ok": true,
+        "status": 200,
+        "size": 3112020,
+        "elapsed": 1.81
+      }
+    },
+    {
+      "url": "http://link.springer.com/content/pdf/10.1186/s40878-019-0159-x.pdf",
+      "domain": "link.springer.com",
+      "title": "The impact of externalized migration governance on Turkey: technocratic migration governance and the",
+      "direct": {
+        "ok": true,
+        "status": 200,
+        "size": 571133,
+        "elapsed": 1.06
+      },
+      "proxy": {
+        "ok": true,
+        "status": 200,
+        "size": 571133,
+        "elapsed": 2.3
+      },
+      "combined": {
+        "ok": true,
+        "status": 200,
+        "size": 571133,
+        "elapsed": 1.95
+      }
+    },
+    {
+      "url": "https://link.springer.com/content/pdf/10.1007%2F978-1-349-94186-5_84.pdf",
+      "domain": "link.springer.com",
+      "title": "American Institute of Certified Public Accountants (AICPA)",
+      "direct": {
+        "ok": true,
+        "status": 200,
+        "size": 1954125,
+        "elapsed": 0.95
+      },
+      "proxy": {
+        "ok": true,
+        "status": 200,
+        "size": 1954125,
+        "elapsed": 1.84
+      },
+      "combined": {
+        "ok": true,
+        "status": 200,
+        "size": 1954125,
+        "elapsed": 1.59
+      }
+    },
+    {
+      "url": "https://link.springer.com/content/pdf/10.1007%2F978-3-319-21674-4_3.pdf",
+      "domain": "link.springer.com",
+      "title": "Migration and Immigrants in Europe: A Historical and Demographic Perspective",
+      "direct": {
+        "ok": true,
+        "status": 200,
+        "size": 977187,
+        "elapsed": 0.83
+      },
+      "proxy": {
+        "ok": true,
+        "status": 200,
+        "size": 977187,
+        "elapsed": 1.61
+      },
+      "combined": {
+        "ok": true,
+        "status": 200,
+        "size": 977187,
+        "elapsed": 1.54
+      }
+    },
+    {
+      "url": "https://www.cambridge.org/core/services/aop-cambridge-core/content/view/0DCD6F79DE1F989E4C2AA6E201F6FEEF/S0003975602001066a.pdf/div-class-title-ethnicity-without-groups-div.pdf",
+      "domain": "www.cambridge.org",
+      "title": "Ethnicity without groups",
+      "direct": {
+        "ok": true,
+        "status": 200,
+        "size": 260615,
+        "elapsed": 0.68
+      },
+      "proxy": {
+        "ok": true,
+        "status": 200,
+        "size": 260615,
+        "elapsed": 2.19
+      },
+      "combined": {
+        "ok": true,
+        "status": 200,
+        "size": 260615,
+        "elapsed": 1.17
+      }
+    },
+    {
+      "url": "https://www.cambridge.org/core/services/aop-cambridge-core/content/view/13EDE93689F6810E801FB3A5BAC3EEC3/9781107589742c1_p1-52_CBO.pdf/refractions.pdf",
+      "domain": "www.cambridge.org",
+      "title": "A History of Modern Uganda",
+      "direct": {
+        "ok": true,
+        "status": 200,
+        "size": 268102,
+        "elapsed": 0.51
+      },
+      "proxy": {
+        "ok": true,
+        "status": 200,
+        "size": 268102,
+        "elapsed": 0.96
+      },
+      "combined": {
+        "ok": true,
+        "status": 200,
+        "size": 268102,
+        "elapsed": 0.97
+      }
+    },
+    {
+      "url": "https://www.cambridge.org/core/services/aop-cambridge-core/content/view/2241A975887ECCD04100F249D056A2C9/S0145553200012451a.pdf/div-class-title-culture-strategy-and-state-centered-explanations-of-revolution-1789-and-1989-div.pdf",
+      "domain": "www.cambridge.org",
+      "title": "Culture, Strategy, and State-Centered Explanations of Revolution, 1789 and 1989",
+      "direct": {
+        "ok": false,
+        "status": 200,
+        "size": 961989,
+        "elapsed": 1.1
+      },
+      "proxy": {
+        "ok": false,
+        "status": 200,
+        "size": 963177,
+        "elapsed": 2.66
+      },
+      "combined": {
+        "ok": false,
+        "status": 200,
+        "size": 961984,
+        "elapsed": 2.62
+      }
+    },
+    {
+      "url": "https://www.mdpi.com/1424-8220/20/11/3291/pdf?version=1610017630",
+      "domain": "www.mdpi.com",
+      "title": "Digital Transformation in Higher Education Institutions: A Systematic Literature Review",
+      "direct": {
+        "ok": true,
+        "status": 200,
+        "size": 12320076,
+        "elapsed": 1.15
+      },
+      "proxy": {
+        "ok": true,
+        "status": 200,
+        "size": 12320076,
+        "elapsed": 1.14
+      },
+      "combined": {
+        "ok": true,
+        "status": 200,
+        "size": 12320076,
+        "elapsed": 1.91
+      }
+    },
+    {
+      "url": "https://www.mdpi.com/1660-4601/15/7/1425/pdf?version=1530875676",
+      "domain": "www.mdpi.com",
+      "title": "Epidemiology of Suicide and the Psychiatric Perspective",
+      "direct": {
+        "ok": true,
+        "status": 200,
+        "size": 1665333,
+        "elapsed": 1.41
+      },
+      "proxy": {
+        "ok": true,
+        "status": 200,
+        "size": 1665333,
+        "elapsed": 0.56
+      },
+      "combined": {
+        "ok": true,
+        "status": 200,
+        "size": 1665333,
+        "elapsed": 0.55
+      }
+    },
+    {
+      "url": "https://www.mdpi.com/1660-4601/16/6/1060/pdf?version=1553401565",
+      "domain": "www.mdpi.com",
+      "title": "Waste Mismanagement in Developing Countries: A Review of Global Issues",
+      "direct": {
+        "ok": true,
+        "status": 200,
+        "size": 2380114,
+        "elapsed": 0.61
+      },
+      "proxy": {
+        "ok": true,
+        "status": 200,
+        "size": 2380114,
+        "elapsed": 0.45
+      },
+      "combined": {
+        "ok": true,
+        "status": 200,
+        "size": 2380114,
+        "elapsed": 0.76
+      }
+    },
+    {
+      "url": "https://www.tandfonline.com/doi/abs/10.1080/0022038042000309214",
+      "domain": "www.tandfonline.com",
+      "title": "Neo-liberalism and East Asia: Resisting the Washington Consensus",
+      "direct": {
+        "ok": false,
+        "status": 403,
+        "size": 6027,
+        "elapsed": 0.13
+      },
+      "proxy": {
+        "ok": false,
+        "status": 200,
+        "size": 206496,
+        "elapsed": 1.51
+      },
+      "combined": {
+        "ok": false,
+        "status": 200,
+        "size": 206464,
+        "elapsed": 1.58
+      }
+    },
+    {
+      "url": "https://www.tandfonline.com/doi/abs/10.1080/1350176042000248089",
+      "domain": "www.tandfonline.com",
+      "title": "Governance by conditionality: EU rule transfer to the candidate countries of Central and Eastern Eur",
+      "direct": {
+        "ok": false,
+        "status": 403,
+        "size": 6027,
+        "elapsed": 0.14
+      },
+      "proxy": {
+        "ok": false,
+        "status": 200,
+        "size": 208136,
+        "elapsed": 1.49
+      },
+      "combined": {
+        "ok": false,
+        "status": 200,
+        "size": 208136,
+        "elapsed": 1.61
+      }
+    },
+    {
+      "url": "https://www.tandfonline.com/doi/epdf/10.1080/03066150.2016.1141198?needAccess=true&role=button",
+      "domain": "www.tandfonline.com",
+      "title": "Is there a global environmental justice movement?",
+      "direct": {
+        "ok": false,
+        "status": 403,
+        "size": 6163,
+        "elapsed": 0.15
+      },
+      "proxy": {
+        "ok": false,
+        "status": 200,
+        "size": 41648,
+        "elapsed": 1.31
+      },
+      "combined": {
+        "ok": false,
+        "status": 200,
+        "size": 41648,
+        "elapsed": 1.69
+      }
+    },
+    {
+      "url": "http://hdl.handle.net/10106/11090",
+      "domain": "hdl.handle.net",
+      "title": "Ronsons, Zippos, Brew-ups, And Tommycookers: The M4 Sherman Tank And American Armored Development Du",
+      "direct": {
+        "ok": false,
+        "status": 200,
+        "size": 33952,
+        "elapsed": 1.54
+      },
+      "proxy": {
+        "ok": false,
+        "status": 404,
+        "size": 24,
+        "elapsed": 0.41
+      },
+      "combined": {
+        "ok": false,
+        "status": 200,
+        "size": 33952,
+        "elapsed": 1.25
+      }
+    },
+    {
+      "url": "http://hdl.handle.net/10125/3502",
+      "domain": "hdl.handle.net",
+      "title": "Violent Separatism in Xinjiang: A Critical Assessment",
+      "direct": {
+        "ok": false,
+        "status": 200,
+        "size": 428912,
+        "elapsed": 3.25
+      },
+      "proxy": {
+        "ok": false,
+        "status": 404,
+        "size": 24,
+        "elapsed": 0.31
+      },
+      "combined": {
+        "ok": false,
+        "status": 200,
+        "size": 428912,
+        "elapsed": 2.79
+      }
+    },
+    {
+      "url": "http://hdl.handle.net/10125/35836",
+      "domain": "hdl.handle.net",
+      "title": "Contesting Buddhist Narratives: Democratization, Nationalism, and Communal Violence in Myanmar",
+      "direct": {
+        "ok": false,
+        "status": 200,
+        "size": 423509,
+        "elapsed": 2.91
+      },
+      "proxy": {
+        "ok": false,
+        "status": 404,
+        "size": 24,
+        "elapsed": 0.31
+      },
+      "combined": {
+        "ok": false,
+        "status": 200,
+        "size": 423509,
+        "elapsed": 1.74
+      }
+    },
+    {
+      "url": "http://www.thelancet.com/article/S0140673613624071/pdf",
+      "domain": "www.thelancet.com",
+      "title": "The political origins of health inequity: prospects for change",
+      "direct": {
+        "ok": true,
+        "status": 200,
+        "size": 5683354,
+        "elapsed": 19.06
+      },
+      "proxy": {
+        "ok": false,
+        "status": 404,
+        "size": 24,
+        "elapsed": 0.43
+      },
+      "combined": {
+        "ok": true,
+        "status": 200,
+        "size": 5683354,
+        "elapsed": 3.03
+      }
+    },
+    {
+      "url": "http://www.thelancet.com/article/S0140673615001907/pdf",
+      "domain": "www.thelancet.com",
+      "title": "Adapting to migration as a planetary force.",
+      "direct": {
+        "ok": true,
+        "status": 200,
+        "size": 123451,
+        "elapsed": 2.17
+      },
+      "proxy": {
+        "ok": false,
+        "status": 404,
+        "size": 24,
+        "elapsed": 0.32
+      },
+      "combined": {
+        "ok": true,
+        "status": 200,
+        "size": 123451,
+        "elapsed": 2.04
+      }
+    },
+    {
+      "url": "http://www.thelancet.com/article/S0140673615608583/pdf",
+      "domain": "www.thelancet.com",
+      "title": "Global health security: the wider lessons from the west African Ebola virus disease epidemic",
+      "direct": {
+        "ok": true,
+        "status": 200,
+        "size": 469693,
+        "elapsed": 2.46
+      },
+      "proxy": {
+        "ok": false,
+        "status": 404,
+        "size": 24,
+        "elapsed": 0.3
+      },
+      "combined": {
+        "ok": true,
+        "status": 200,
+        "size": 469693,
+        "elapsed": 2.27
+      }
+    },
+    {
+      "url": "https://www.aeaweb.org/articles/pdf/doi/10.1257/089533002320951037",
+      "domain": "www.aeaweb.org",
+      "title": "Decentralization of Governance and Development",
+      "direct": {
+        "ok": true,
+        "status": 200,
+        "size": 116365,
+        "elapsed": 1.15
+      },
+      "proxy": {
+        "ok": true,
+        "status": 200,
+        "size": 116365,
+        "elapsed": 3.69
+      },
+      "combined": {
+        "ok": true,
+        "status": 200,
+        "size": 116365,
+        "elapsed": 2.98
+      }
+    },
+    {
+      "url": "https://www.aeaweb.org/articles/pdf/doi/10.1257/0895330027157",
+      "domain": "www.aeaweb.org",
+      "title": "Confronting the Environmental Kuznets Curve",
+      "direct": {
+        "ok": true,
+        "status": 200,
+        "size": 253589,
+        "elapsed": 1.77
+      },
+      "proxy": {
+        "ok": true,
+        "status": 200,
+        "size": 253589,
+        "elapsed": 2.37
+      },
+      "combined": {
+        "ok": true,
+        "status": 200,
+        "size": 253589,
+        "elapsed": 2.09
+      }
+    },
+    {
+      "url": "https://www.aeaweb.org/articles/pdf/doi/10.1257/089533004773563430",
+      "domain": "www.aeaweb.org",
+      "title": "Do Democracies Have Different Public Policies than Nondemocracies?",
+      "direct": {
+        "ok": true,
+        "status": 200,
+        "size": 215239,
+        "elapsed": 1.21
+      },
+      "proxy": {
+        "ok": true,
+        "status": 200,
+        "size": 215239,
+        "elapsed": 1.93
+      },
+      "combined": {
+        "ok": true,
+        "status": 200,
+        "size": 215239,
+        "elapsed": 2.06
+      }
+    },
+    {
+      "url": "http://library.oapen.org/bitstream/20.500.12657/31805/1/625230.pdf",
+      "domain": "library.oapen.org",
+      "title": "A Certain Age",
+      "direct": {
+        "ok": false,
+        "status": 200,
+        "size": 16097,
+        "elapsed": 6.79
+      },
+      "proxy": {
+        "ok": false,
+        "status": 404,
+        "size": 24,
+        "elapsed": 0.44
+      },
+      "combined": {
+        "ok": false,
+        "status": 200,
+        "size": 16097,
+        "elapsed": 0.59
+      }
+    },
+    {
+      "url": "https://library.oapen.org/bitstream/20.500.12657/25789/1/1004300.pdf",
+      "domain": "library.oapen.org",
+      "title": "Conflicted Antiquities",
+      "direct": {
+        "ok": true,
+        "status": 200,
+        "size": 3966023,
+        "elapsed": 0.86
+      },
+      "proxy": {
+        "ok": false,
+        "status": 404,
+        "size": 24,
+        "elapsed": 0.35
+      },
+      "combined": {
+        "ok": true,
+        "status": 200,
+        "size": 3966023,
+        "elapsed": 5.54
+      }
+    },
+    {
+      "url": "https://library.oapen.org/bitstream/20.500.12657/31581/1/626979.pdf",
+      "domain": "library.oapen.org",
+      "title": "Hybridity, or the Cultural Logic of Globalization",
+      "direct": {
+        "ok": true,
+        "status": 200,
+        "size": 853643,
+        "elapsed": 9.19
+      },
+      "proxy": {
+        "ok": false,
+        "status": 404,
+        "size": 24,
+        "elapsed": 0.29
+      },
+      "combined": {
+        "ok": true,
+        "status": 200,
+        "size": 853643,
+        "elapsed": 0.73
+      }
+    },
+    {
+      "url": "http://api.wiley.com/onlinelibrary/tdm/v1/articles/10.1002%2F9781444338232.wbeow252",
+      "domain": "api.wiley.com",
+      "title": "Greek Civil War (1944–1949)",
+      "direct": {
+        "ok": false,
+        "status": 400,
+        "size": 0,
+        "elapsed": 0.44
+      },
+      "proxy": {
+        "ok": false,
+        "status": 400,
+        "size": 0,
+        "elapsed": 2.31
+      },
+      "combined": {
+        "ok": false,
+        "status": null,
+        "size": 0,
+        "elapsed": 0.88,
+        "error": "HTTP 400 for http://api.wiley.com/onlinelibrary/tdm/v1/articles/10.1002%2F9781444338232.wbeow252"
+      }
+    },
+    {
+      "url": "https://api.wiley.com/onlinelibrary/tdm/v1/articles/10.1002%2Fberj.3609",
+      "domain": "api.wiley.com",
+      "title": "Parents’ educational involvement: Types of resources and forms of involvement in four countries",
+      "direct": {
+        "ok": false,
+        "status": 400,
+        "size": 0,
+        "elapsed": 0.43
+      },
+      "proxy": {
+        "ok": false,
+        "status": 400,
+        "size": 0,
+        "elapsed": 0.84
+      },
+      "combined": {
+        "ok": false,
+        "status": null,
+        "size": 0,
+        "elapsed": 0.91,
+        "error": "HTTP 400 for https://api.wiley.com/onlinelibrary/tdm/v1/articles/10.1002%2Fberj.3609"
+      }
+    },
+    {
+      "url": "https://api.wiley.com/onlinelibrary/tdm/v1/articles/10.1002%2Fcpe.5649",
+      "domain": "api.wiley.com",
+      "title": "New Lustre features to improve Lustre metadata and small‐file performance",
+      "direct": {
+        "ok": false,
+        "status": 400,
+        "size": 0,
+        "elapsed": 0.42
+      },
+      "proxy": {
+        "ok": false,
+        "status": 400,
+        "size": 0,
+        "elapsed": 0.91
+      },
+      "combined": {
+        "ok": false,
+        "status": null,
+        "size": 0,
+        "elapsed": 0.86,
+        "error": "HTTP 400 for https://api.wiley.com/onlinelibrary/tdm/v1/articles/10.1002%2Fcpe.5649"
+      }
+    },
+    {
+      "url": "https://direct.mit.edu/books/book/chapter-pdf/1618942/9780262361170_f000000.pdf",
+      "domain": "direct.mit.edu",
+      "title": "ʿAṣfūriyyeh",
+      "direct": {
+        "ok": false,
+        "status": 403,
+        "size": 6064,
+        "elapsed": 0.2
+      },
+      "proxy": {
+        "ok": false,
+        "status": 200,
+        "size": 73533,
+        "elapsed": 3.0
+      },
+      "combined": {
+        "ok": false,
+        "status": 200,
+        "size": 73533,
+        "elapsed": 2.41
+      }
+    },
+    {
+      "url": "https://direct.mit.edu/books/oa-monograph/5598/bookpreview-pdf/2128215",
+      "domain": "direct.mit.edu",
+      "title": "Balkan Cyberia",
+      "direct": {
+        "ok": false,
+        "status": 403,
+        "size": 6037,
+        "elapsed": 0.13
+      },
+      "proxy": {
+        "ok": true,
+        "status": 200,
+        "size": 998908,
+        "elapsed": 2.78
+      },
+      "combined": {
+        "ok": true,
+        "status": 200,
+        "size": 998908,
+        "elapsed": 2.26
+      }
+    },
+    {
+      "url": "https://direct.mit.edu/isec/article-pdf/34/2/82/693298/isec.2009.34.2.82.pdf",
+      "domain": "direct.mit.edu",
+      "title": "What's in a Line? Is Partition a Solution to Civil War?",
+      "direct": {
+        "ok": false,
+        "status": 403,
+        "size": 6055,
+        "elapsed": 0.13
+      },
+      "proxy": {
+        "ok": false,
+        "status": 200,
+        "size": 108899,
+        "elapsed": 1.85
+      },
+      "combined": {
+        "ok": false,
+        "status": 200,
+        "size": 108899,
+        "elapsed": 1.74
+      }
+    },
+    {
+      "url": "https://read.dukeupress.edu/demography/article-pdf/48/1/317/880710/317perelli-harris.pdf",
+      "domain": "read.dukeupress.edu",
+      "title": "Nonmarital Childbearing in Russia: Second Demographic Transition or Pattern of Disadvantage?",
+      "direct": {
+        "ok": false,
+        "status": 403,
+        "size": 6102,
+        "elapsed": 0.76
+      },
+      "proxy": {
+        "ok": false,
+        "status": 404,
+        "size": 24,
+        "elapsed": 0.45
+      },
+      "combined": {
+        "ok": false,
+        "status": null,
+        "size": 0,
+        "elapsed": 0.3,
+        "error": "HTTP 403 for https://read.dukeupress.edu/demography/article-pdf/48/1/317/880710/317perelli-harris.pdf"
+      }
+    },
+    {
+      "url": "https://read.dukeupress.edu/differences/article-pdf/21/1/194/405585/16_Wilson.pdf",
+      "domain": "read.dukeupress.edu",
+      "title": "Underbelly",
+      "direct": {
+        "ok": false,
+        "status": 403,
+        "size": 6060,
+        "elapsed": 0.14
+      },
+      "proxy": {
+        "ok": false,
+        "status": 404,
+        "size": 24,
+        "elapsed": 0.36
+      },
+      "combined": {
+        "ok": false,
+        "status": null,
+        "size": 0,
+        "elapsed": 0.3,
+        "error": "HTTP 403 for https://read.dukeupress.edu/differences/article-pdf/21/1/194/405585/16_Wilson.pdf"
+      }
+    },
+    {
+      "url": "https://read.dukeupress.edu/environmental-humanities/article-pdf/6/1/159/251848/159Haraway.pdf",
+      "domain": "read.dukeupress.edu",
+      "title": "Anthropocene, Capitalocene, Plantationocene, Chthulucene: Making Kin",
+      "direct": {
+        "ok": false,
+        "status": 403,
+        "size": 6120,
+        "elapsed": 0.13
+      },
+      "proxy": {
+        "ok": false,
+        "status": 404,
+        "size": 24,
+        "elapsed": 0.27
+      },
+      "combined": {
+        "ok": false,
+        "status": null,
+        "size": 0,
+        "elapsed": 0.3,
+        "error": "HTTP 403 for https://read.dukeupress.edu/environmental-humanities/article-pdf/6/1/159/251848/159Haraway.pdf"
+      }
+    },
+    {
+      "url": "https://www.cogitatiopress.com/mediaandcommunication/article/download/808/808",
+      "domain": "www.cogitatiopress.com",
+      "title": "Networked Authoritarianism and the Geopolitics of Information: Understanding Russian Internet Policy",
+      "direct": {
+        "ok": false,
+        "status": 200,
+        "size": 0,
+        "elapsed": 0.4
+      },
+      "proxy": {
+        "ok": false,
+        "status": 404,
+        "size": 24,
+        "elapsed": 0.4
+      },
+      "combined": {
+        "ok": false,
+        "status": 200,
+        "size": 0,
+        "elapsed": 0.31
+      }
+    },
+    {
+      "url": "https://www.cogitatiopress.com/politicsandgovernance/article/download/5183/5183",
+      "domain": "www.cogitatiopress.com",
+      "title": "Loops of Violence(s) Within Europe’s Governance of Migration in Libya, Italy, Greece, and Belgium",
+      "direct": {
+        "ok": false,
+        "status": 200,
+        "size": 0,
+        "elapsed": 0.23
+      },
+      "proxy": {
+        "ok": false,
+        "status": 404,
+        "size": 24,
+        "elapsed": 0.27
+      },
+      "combined": {
+        "ok": false,
+        "status": 200,
+        "size": 0,
+        "elapsed": 0.3
+      }
+    },
+    {
+      "url": "https://www.cogitatiopress.com/socialinclusion/article/download/1004/1004",
+      "domain": "www.cogitatiopress.com",
+      "title": "Under Control? Or Border (as) Conflict: Reflections on the European Border Regime",
+      "direct": {
+        "ok": false,
+        "status": 200,
+        "size": 0,
+        "elapsed": 0.21
+      },
+      "proxy": {
+        "ok": false,
+        "status": 404,
+        "size": 24,
+        "elapsed": 0.28
+      },
+      "combined": {
+        "ok": false,
+        "status": 200,
+        "size": 0,
+        "elapsed": 0.3
+      }
+    },
+    {
+      "url": "https://scholarlypublishingcollective.org/psup/jemahs/article-pdf/1/3/228/1314247/jeasmedarcherstu_1_3_228.pdf",
+      "domain": "scholarlypublishingcollective.org",
+      "title": "The Effects of the Economic Crisis on Archaeology in Greece",
+      "direct": {
+        "ok": false,
+        "status": 403,
+        "size": 6161,
+        "elapsed": 0.47
+      },
+      "proxy": {
+        "ok": false,
+        "status": 404,
+        "size": 24,
+        "elapsed": 0.43
+      },
+      "combined": {
+        "ok": false,
+        "status": null,
+        "size": 0,
+        "elapsed": 0.3,
+        "error": "HTTP 403 for https://scholarlypublishingcollective.org/psup/jemahs/article-pdf/1/3/228/1314247/jeasmedarcherstu_1_3_228."
+      }
+    },
+    {
+      "url": "https://scholarlypublishingcollective.org/psup/jemahs/article-pdf/13/1-2/6/2264829/jeasmedarcherstu_13_1-2_6.pdf",
+      "domain": "scholarlypublishingcollective.org",
+      "title": "An Historical Sketch of Paleolithic Research in Greece",
+      "direct": {
+        "ok": false,
+        "status": 403,
+        "size": 6188,
+        "elapsed": 0.14
+      },
+      "proxy": {
+        "ok": false,
+        "status": 404,
+        "size": 24,
+        "elapsed": 0.35
+      },
+      "combined": {
+        "ok": false,
+        "status": null,
+        "size": 0,
+        "elapsed": 0.3,
+        "error": "HTTP 403 for https://scholarlypublishingcollective.org/psup/jemahs/article-pdf/13/1-2/6/2264829/jeasmedarcherstu_13_1-2_"
+      }
+    },
+    {
+      "url": "https://scholarlypublishingcollective.org/psup/jemahs/article-pdf/13/3/234/2325419/jeasmedarcherstu_13_3_234.pdf",
+      "domain": "scholarlypublishingcollective.org",
+      "title": "Wall Recesses for Traditional, Medieval, and Ancient Hives in Greece",
+      "direct": {
+        "ok": false,
+        "status": 403,
+        "size": 6188,
+        "elapsed": 0.13
+      },
+      "proxy": {
+        "ok": false,
+        "status": 404,
+        "size": 24,
+        "elapsed": 0.36
+      },
+      "combined": {
+        "ok": false,
+        "status": null,
+        "size": 0,
+        "elapsed": 0.3,
+        "error": "HTTP 403 for https://scholarlypublishingcollective.org/psup/jemahs/article-pdf/13/3/234/2325419/jeasmedarcherstu_13_3_23"
+      }
+    },
+    {
+      "url": "https://journals.plos.org/plosmedicine/article/file?id=10.1371/journal.pmed.0020141&type=printable",
+      "domain": "journals.plos.org",
+      "title": "A Systematic Review of the Prevalence of Schizophrenia",
+      "direct": {
+        "ok": true,
+        "status": 200,
+        "size": 546850,
+        "elapsed": 0.7
+      },
+      "proxy": {
+        "ok": true,
+        "status": 200,
+        "size": 546850,
+        "elapsed": 0.52
+      },
+      "combined": {
+        "ok": true,
+        "status": 200,
+        "size": 546850,
+        "elapsed": 0.8
+      }
+    },
+    {
+      "url": "https://journals.plos.org/plosmedicine/article/file?id=10.1371/journal.pmed.1001484&type=printable",
+      "domain": "journals.plos.org",
+      "title": "Global Burden of Sickle Cell Anaemia in Children under Five, 2010–2050: Modelling Based on Demograph",
+      "direct": {
+        "ok": true,
+        "status": 200,
+        "size": 1896206,
+        "elapsed": 0.92
+      },
+      "proxy": {
+        "ok": true,
+        "status": 200,
+        "size": 1896206,
+        "elapsed": 1.41
+      },
+      "combined": {
+        "ok": true,
+        "status": 200,
+        "size": 1896206,
+        "elapsed": 0.89
+      }
+    },
+    {
+      "url": "https://journals.plos.org/plosntds/article/file?id=10.1371/journal.pntd.0003898&type=printable",
+      "domain": "journals.plos.org",
+      "title": "Global Morbidity and Mortality of Leptospirosis: A Systematic Review",
+      "direct": {
+        "ok": true,
+        "status": 200,
+        "size": 1433211,
+        "elapsed": 0.58
+      },
+      "proxy": {
+        "ok": true,
+        "status": 200,
+        "size": 1433211,
+        "elapsed": 0.63
+      },
+      "combined": {
+        "ok": true,
+        "status": 200,
+        "size": 1433211,
+        "elapsed": 0.57
+      }
+    }
+  ]
+}

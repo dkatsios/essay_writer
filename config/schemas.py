@@ -112,6 +112,12 @@ class SearchConfig(BaseModel):
     """Maximum number of title+abstract candidates per triage LLM call."""
     min_relevance_score: int = 3
     """Minimum 1–5 relevance score required for final source selection."""
+    proxy_prefix: str = "https://login.proxy.eap.gr/login?url="
+    """EZProxy URL prefix for institutional access (e.g. 'https://proxy.uoa.gr/login?url='). When set, PDF fetch URLs are rewritten through the proxy. Simple EZProxy uses URL-prefix rewriting; Shibboleth-based proxies use hostname rewriting (auto-detected)."""
+    proxy_username: str = "std523991"
+    """Username for institutional proxy authentication (Shibboleth/EZProxy). When set with proxy_password, the proxy session is authenticated before PDF downloads."""
+    proxy_password: str = "f7mv9u"
+    """Password for institutional proxy authentication."""
 
 
 class EssayWriterConfig(BaseSettings):
