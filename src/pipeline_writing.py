@@ -11,7 +11,6 @@ from time import monotonic
 
 from src.rendering import render_prompt
 from src.schemas import (
-    AssignmentBrief,
     EssayPlan,
     EssayReconciliationPlan,
     SectionReconciliationNotes,
@@ -25,7 +24,6 @@ from src.pipeline_support import (
     async_text_call,
     build_prior_sections_context,
     build_review_context,
-    get_brief_language,
     load_selected_source_notes,
     plan_corpus_from_json,
     rank_notes_by_corpus,
@@ -73,10 +71,10 @@ def make_write_full(
     citation_min_sources: int,
 ) -> Callable:
     async def _do_write_full(ctx: PipelineContext) -> None:
-        brief_json = read_text(ctx.run_dir / "brief" / "assignment.json")
+        brief_json = ctx.brief.model_dump_json(indent=2, ensure_ascii=False)
         plan_json = read_text(ctx.run_dir / "plan" / "plan.json")
         source_notes = load_selected_source_notes(ctx.run_dir)
-        language = get_brief_language(ctx.run_dir)
+        language = ctx.brief.language
         min_sources = _effective_min_sources(citation_min_sources, source_notes)
         detail_notes, catalog_md, total_notes = split_writer_source_context(
             plan_corpus_from_json(plan_json),
@@ -118,11 +116,11 @@ def make_review_full(
     citation_min_sources: int,
 ) -> Callable:
     async def _do_review_full(ctx: PipelineContext) -> None:
-        brief_json = read_text(ctx.run_dir / "brief" / "assignment.json")
+        brief_json = ctx.brief.model_dump_json(indent=2, ensure_ascii=False)
         plan_json = read_text(ctx.run_dir / "plan" / "plan.json")
         draft = read_text(ctx.run_dir / "essay" / "draft.md")
         draft_words = len(draft.split())
-        language = get_brief_language(ctx.run_dir)
+        language = ctx.brief.language
         source_notes = load_selected_source_notes(ctx.run_dir)
         min_sources = _effective_min_sources(citation_min_sources, source_notes)
 
@@ -360,7 +358,7 @@ def make_write_sections(
 
         plan_json = read_text(ctx.run_dir / "plan" / "plan.json")
         source_notes = load_selected_source_notes(ctx.run_dir)
-        language = get_brief_language(ctx.run_dir)
+        language = ctx.brief.language
         budget = ctx.config.search.section_source_full_detail_max
         min_sources = _effective_min_sources(citation_min_sources, source_notes)
         written_sections: list[tuple[Section, str]] = []
@@ -461,7 +459,7 @@ def make_reconcile_sections(
     async def _do_reconcile_sections(ctx: PipelineContext) -> None:
         sections_dir = ctx.run_dir / "essay" / "sections"
         plan_json = read_text(ctx.run_dir / "plan" / "plan.json")
-        language = get_brief_language(ctx.run_dir)
+        language = ctx.brief.language
         draft_texts = _load_section_drafts(sections_dir, sections)
 
         drafted_sections = [
@@ -512,7 +510,7 @@ def make_review_sections(
         reviewed_dir = ctx.run_dir / "essay" / "reviewed"
         reviewed_dir.mkdir(parents=True, exist_ok=True)
         plan_order = list(sections)
-        language = get_brief_language(ctx.run_dir)
+        language = ctx.brief.language
         reconciliation_notes = _load_reconciliation_notes(ctx.run_dir)
 
         draft_texts = _load_section_drafts(sections_dir, plan_order)
@@ -635,7 +633,6 @@ def do_export(ctx: PipelineContext) -> None:
             break
 
     doc_config = ctx.config.formatting.model_dump()
-    brief_path = ctx.run_dir / "brief" / "assignment.json"
     plan_path = ctx.run_dir / "plan" / "plan.json"
 
     if plan_path.exists():
@@ -643,10 +640,8 @@ def do_export(ctx: PipelineContext) -> None:
         if plan.title:
             doc_config.setdefault("title", plan.title)
 
-    if brief_path.exists():
-        brief = AssignmentBrief.model_validate_json(
-            brief_path.read_text(encoding="utf-8")
-        )
+    brief = ctx.brief
+    if brief is not None:
         doc_config.setdefault("title", brief.topic)
         if brief.student:
             doc_config.setdefault("author", brief.student)

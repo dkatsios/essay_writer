@@ -19,7 +19,7 @@ load_dotenv()
 
 from config.settings import ModelsConfig, PROVIDER_PRESETS, load_config  # noqa: E402
 from src import web_jobs  # noqa: E402
-from src.agent import create_async_client, create_client  # noqa: E402
+from src.agent import create_async_client  # noqa: E402
 from src.intake import build_extracted_text, scan  # noqa: E402
 from src.pipeline import run_pipeline  # noqa: E402
 from src.run_logging import configure_web_logging, run_id_context  # noqa: E402
@@ -56,7 +56,6 @@ async def _run_pipeline_task(
         user_sources_dir,
         load_config_fn=load_config,
         models_config_cls=ModelsConfig,
-        create_client_fn=create_client,
         create_async_client_fn=create_async_client,
         run_pipeline_fn=run_pipeline,
         scan_fn=scan,

@@ -1161,13 +1161,8 @@ def _init_source_read_state(
 
     essay_topic = ""
     thesis = ""
-    brief_path = ctx.run_dir / "brief" / "assignment.json"
-    if brief_path.exists():
-        try:
-            brief = json.loads(brief_path.read_text(encoding="utf-8"))
-            essay_topic = brief.get("topic", "")
-        except Exception:
-            pass
+    if ctx.brief is not None:
+        essay_topic = ctx.brief.topic or ""
     plan_sections: list[dict] = []
     plan_path = ctx.run_dir / "plan" / "plan.json"
     if plan_path.exists():

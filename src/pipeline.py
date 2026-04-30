@@ -173,10 +173,16 @@ async def run_pipeline(
     """
     # Ensure async clients exist for all roles.
     if async_worker is None:
+        if worker is None:
+            raise ValueError("Either async_worker or worker must be provided")
         async_worker = worker.to_async()
     if async_writer is None:
+        if writer is None:
+            raise ValueError("Either async_writer or writer must be provided")
         async_writer = writer.to_async()
     if async_reviewer is None:
+        if reviewer is None:
+            raise ValueError("Either async_reviewer or reviewer must be provided")
         async_reviewer = reviewer.to_async()
 
     checkpoint = load_checkpoint(run_dir) if resume else set()
@@ -262,11 +268,11 @@ async def run_pipeline(
     )
 
     # Compute source counts once, read the brief once, write once.
+    brief = AssignmentBrief.model_validate_json(
+        brief_path.read_text(encoding="utf-8")
+    )
     user_min_sources = min_sources
-    if user_min_sources is None and brief_path.exists():
-        brief = AssignmentBrief.model_validate_json(
-            brief_path.read_text(encoding="utf-8")
-        )
+    if user_min_sources is None:
         user_min_sources = brief.min_sources
 
     target_sources, fetch_sources = compute_max_sources(
@@ -279,15 +285,12 @@ async def run_pipeline(
         user_min_sources if user_min_sources is not None else 0,
     )
 
-    if brief_path.exists():
-        brief = AssignmentBrief.model_validate_json(
-            brief_path.read_text(encoding="utf-8")
-        )
-        brief.min_sources = citation_min_sources
-        brief_path.write_text(
-            brief.model_dump_json(indent=2, ensure_ascii=False),
-            encoding="utf-8",
-        )
+    brief.min_sources = citation_min_sources
+    brief_path.write_text(
+        brief.model_dump_json(indent=2, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    ctx.brief = brief
 
     logger.info(
         "Sources: target=%d citation_minimum=%d",

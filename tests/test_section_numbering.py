@@ -9,6 +9,7 @@ from unittest.mock import MagicMock
 
 from src.pipeline_support import PipelineContext, parse_sections
 from src.pipeline_writing import make_review_sections, make_write_sections
+from src.schemas import AssignmentBrief
 
 
 def _write_plan(run_dir: Path) -> None:
@@ -80,6 +81,9 @@ def _make_ctx(run_dir: Path, tracker: object | None = None) -> PipelineContext:
         run_dir=run_dir,
         config=config,
         tracker=tracker,
+        brief=AssignmentBrief(
+            topic="Test topic", language="English", description="Test description"
+        ),
     )
 
 

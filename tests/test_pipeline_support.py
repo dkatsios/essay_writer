@@ -10,6 +10,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from config.settings import EssayWriterConfig
+from src.schemas import AssignmentBrief
 
 
 class TestStructuredCallRepair:
@@ -275,6 +276,11 @@ class TestSelectedSourceNotes:
                 writing=SimpleNamespace(word_count_tolerance=0.1),
             ),
             tracker=None,
+            brief=AssignmentBrief(
+                topic="Test topic",
+                language="English",
+                description="Test description",
+            ),
         )
 
         await make_write_full(target_words=1000, citation_min_sources=5)(ctx)
@@ -555,10 +561,6 @@ class TestLongEssayContextHelpers:
         monkeypatch.setattr(
             "src.pipeline_writing.async_text_call", fake_async_text_call
         )
-        monkeypatch.setattr(
-            "src.pipeline_writing.get_brief_language",
-            lambda _run_dir: "English",
-        )
 
         ctx = PipelineContext(
             worker=None,
@@ -569,6 +571,9 @@ class TestLongEssayContextHelpers:
             config=EssayWriterConfig(),
             async_writer=None,
             async_reviewer=object(),
+            brief=AssignmentBrief(
+                topic="Test", language="English", description="Test"
+            ),
         )
 
         await make_review_full(target_words=1000, citation_min_sources=3)(ctx)

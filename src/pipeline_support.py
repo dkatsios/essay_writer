@@ -40,10 +40,10 @@ _STRUCTURED_RETRIES = 2
 class PipelineContext:
     """Shared state passed to every step."""
 
-    worker: ModelClient
+    worker: ModelClient | None
     async_worker: AsyncModelClient | None
-    writer: ModelClient
-    reviewer: ModelClient
+    writer: ModelClient | None
+    reviewer: ModelClient | None
     run_dir: Path
     config: EssayWriterConfig
     async_writer: AsyncModelClient | None = None
@@ -55,6 +55,7 @@ class PipelineContext:
     on_source_shortfall: (
         Callable[[Path, dict], Awaitable[tuple[bool, list[str]]]] | None
     ) = None
+    brief: AssignmentBrief | None = None
 
 
 @dataclass

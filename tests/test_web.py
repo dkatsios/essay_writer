@@ -190,7 +190,6 @@ async def test_pipeline_task_respects_interactive_validation_setting(
     config.writing.interactive_validation = False
 
     monkeypatch.setattr("src.web.load_config", lambda: config)
-    monkeypatch.setattr("src.web.create_client", lambda *args, **kwargs: object())
     monkeypatch.setattr("src.web.create_async_client", lambda *args, **kwargs: object())
 
     async def fake_run_pipeline(*args, **kwargs):
@@ -210,7 +209,6 @@ async def test_pipeline_task_stops_after_question_timeout(tmp_path, monkeypatch)
     config = EssayWriterConfig()
 
     monkeypatch.setattr("src.web.load_config", lambda: config)
-    monkeypatch.setattr("src.web.create_client", lambda *args, **kwargs: object())
     monkeypatch.setattr("src.web.create_async_client", lambda *args, **kwargs: object())
     monkeypatch.setattr("src.web_jobs.interaction_timeout_seconds", lambda: 0)
 
@@ -240,7 +238,6 @@ async def test_pipeline_task_stops_after_source_shortfall_timeout(tmp_path, monk
     config = EssayWriterConfig()
 
     monkeypatch.setattr("src.web.load_config", lambda: config)
-    monkeypatch.setattr("src.web.create_client", lambda *args, **kwargs: object())
     monkeypatch.setattr("src.web.create_async_client", lambda *args, **kwargs: object())
     monkeypatch.setattr("src.web_jobs.interaction_timeout_seconds", lambda: 0)
 
@@ -281,16 +278,9 @@ async def test_pipeline_task_passes_async_worker_without_storing_api_key(
 
     config = EssayWriterConfig()
 
-    class _SyncClient:
-        def __init__(self):
-            self.client = object()
-            self.model = "worker-model"
-            self.model_spec = "openai:gpt-5.4"
-
     async_client = object()
 
     monkeypatch.setattr("src.web.load_config", lambda: config)
-    monkeypatch.setattr("src.web.create_client", lambda *args, **kwargs: _SyncClient())
 
     def fake_create_async_client(*args, **kwargs):
         captured["async_api_key"] = kwargs.get("api_key")

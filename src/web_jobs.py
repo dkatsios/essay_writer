@@ -291,7 +291,6 @@ async def run_pipeline_task(
     *,
     load_config_fn,
     models_config_cls,
-    create_client_fn,
     create_async_client_fn,
     run_pipeline_fn,
     scan_fn,
@@ -341,14 +340,11 @@ async def run_pipeline_task(
 
             api_key = job.api_key or None
             job.api_key = ""
-            worker = create_client_fn(config.models.worker, api_key=api_key)
             async_worker = create_async_client_fn(config.models.worker, api_key=api_key)
             async_writer = create_async_client_fn(config.models.writer, api_key=api_key)
             async_reviewer = create_async_client_fn(
                 config.models.reviewer, api_key=api_key
             )
-            writer = create_client_fn(config.models.writer, api_key=api_key)
-            reviewer = create_client_fn(config.models.reviewer, api_key=api_key)
 
             tracker = TokenTracker()
             job.tracker = tracker
@@ -497,9 +493,9 @@ async def run_pipeline_task(
                 return decision == "proceed", added_ids
 
             await run_pipeline_fn(
-                worker,
-                writer,
-                reviewer,
+                None,
+                None,
+                None,
                 run_dir,
                 config,
                 extra_prompt=prompt,

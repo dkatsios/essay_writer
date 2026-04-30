@@ -32,7 +32,7 @@ uv run ruff check src/ tests/
 uv run python -m pytest tests/ -v
 
 # Import check
-uv run python -c "from src.agent import create_client, _retry_with_backoff"
+uv run python -c "from src.agent import create_client, retry_with_backoff"
 ```
 
 ## Documentation Sync
