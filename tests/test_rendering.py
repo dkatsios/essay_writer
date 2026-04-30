@@ -60,6 +60,7 @@ class TestRendering:
         assert writer_prompt.system is not None
         assert "Argument-led prose" in writer_prompt.system
         assert "Paragraph progression" in writer_prompt.system
+        assert "Paragraph openings" not in writer_prompt.system
 
         reviewer_prompt = render_prompt(
             "essay_review.j2",
@@ -76,5 +77,7 @@ class TestRendering:
             min_sources=1,
         )
         assert reviewer_prompt.system is not None
+        assert "Active style cleanup" in reviewer_prompt.system
         assert "Essay-about-the-essay scaffolding" in reviewer_prompt.system
         assert "Paraphrastic repetition" in reviewer_prompt.system
+        assert "Repeated abstract sentence stems" in reviewer_prompt.system
