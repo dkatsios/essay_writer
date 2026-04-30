@@ -265,9 +265,7 @@ async def test_pipeline_task_stops_after_question_timeout(tmp_path, monkeypatch)
     assert job.finished_at is not None
 
 
-async def test_pipeline_task_stops_after_source_shortfall_timeout(
-    tmp_path, monkeypatch
-):
+async def test_pipeline_task_stops_after_source_shortfall_timeout(tmp_path, monkeypatch):
     job = Job(job_id="shortfall001", run_dir=Path(tmp_path), status="running")
     captured = {"continued": False}
 

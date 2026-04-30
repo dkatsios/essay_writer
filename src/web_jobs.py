@@ -386,34 +386,49 @@ async def run_pipeline_task(
                 if not remaining:
                     return
 
-                job.questions = [
-                    {
-                        "question": question.question,
-                        "options": question.options,
-                        "suggested_option_index": question.suggested_option_index,
-                    }
-                    for question in remaining
-                ]
-                job.answers_event.clear()
-                job.status = "questions"
-                logger.info(
-                    "Job %s waiting for %d clarification question(s)",
-                    job.job_id,
-                    len(remaining),
-                )
-                notify_job(job)
-                if not await async_wait_for_job_signal(
-                    job,
-                    job.answers_event,
-                    error_message="Timed out waiting for clarification answers.",
-                    interaction_timeout_seconds_fn=interaction_timeout_seconds_fn,
-                ):
-                    raise JobInteractionTimeout()
+                chosen_answers = ""
+                if not config.writing.interactive_validation:
+                    chosen_answers = ", ".join(
+                        f"{index}. {chr(ord('a') + max(0, min(question.suggested_option_index, len(question.options) - 1)))}"
+                        for index, question in enumerate(remaining, 1)
+                        if question.options
+                    )
+                    logger.info(
+                        "Job %s auto-applied %d suggested clarification answer(s)",
+                        job.job_id,
+                        len(remaining),
+                    )
 
-                if not job.answers:
-                    logger.info("Job %s clarification step skipped", job.job_id)
-                    job.questions = None
-                    return
+                else:
+                    job.questions = [
+                        {
+                            "question": question.question,
+                            "options": question.options,
+                            "suggested_option_index": question.suggested_option_index,
+                        }
+                        for question in remaining
+                    ]
+                    job.answers_event.clear()
+                    job.status = "questions"
+                    logger.info(
+                        "Job %s waiting for %d clarification question(s)",
+                        job.job_id,
+                        len(remaining),
+                    )
+                    notify_job(job)
+                    if not await async_wait_for_job_signal(
+                        job,
+                        job.answers_event,
+                        error_message="Timed out waiting for clarification answers.",
+                        interaction_timeout_seconds_fn=interaction_timeout_seconds_fn,
+                    ):
+                        raise JobInteractionTimeout()
+
+                    chosen_answers = job.answers
+                    if not chosen_answers:
+                        logger.info("Job %s clarification step skipped", job.job_id)
+                        job.questions = None
+                        return
 
                 brief_path = run_path / "brief" / "assignment.json"
                 brief = AssignmentBrief.model_validate_json(
@@ -422,7 +437,7 @@ async def run_pipeline_task(
                 if brief.clarifications is None:
                     brief.clarifications = []
                 brief.clarifications.extend(
-                    parse_validation_answers_fn(remaining, job.answers)
+                    parse_validation_answers_fn(remaining, chosen_answers)
                 )
                 brief_path.write_text(
                     brief.model_dump_json(indent=2, ensure_ascii=False),
@@ -500,9 +515,7 @@ async def run_pipeline_task(
                 config,
                 extra_prompt=prompt,
                 token_tracker=tracker,
-                on_questions=_on_questions
-                if config.writing.interactive_validation
-                else None,
+                on_questions=_on_questions,
                 on_optional_source_pdfs=_on_optional_pdfs,
                 on_source_shortfall=_on_source_shortfall,
                 min_sources=min_sources,
