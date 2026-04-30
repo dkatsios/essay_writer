@@ -26,6 +26,21 @@ from src.web_jobs import async_wait_for_job_signal as _async_wait_for_job_signal
 client = TestClient(app)
 
 
+def _write_assignment_brief(run_dir: Path) -> None:
+    brief_dir = run_dir / "brief"
+    brief_dir.mkdir(parents=True, exist_ok=True)
+    (brief_dir / "assignment.json").write_text(
+        json.dumps(
+            {
+                "topic": "Test topic",
+                "language": "English",
+                "description": "Test description",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+
 def _essay_console_handlers() -> list[logging.Handler]:
     return [
         handler
@@ -244,14 +259,27 @@ async def test_pipeline_task_respects_interactive_validation_setting(
     monkeypatch.setattr("src.web.load_config", lambda: config)
     monkeypatch.setattr("src.web.create_async_client", lambda *args, **kwargs: object())
 
+    class _Question:
+        question = "Need clarification?"
+        options = ["Yes", "No"]
+        suggested_option_index = 0
+
     async def fake_run_pipeline(*args, **kwargs):
         captured.update(kwargs)
+        _write_assignment_brief(Path(tmp_path))
+        await kwargs["on_questions"]([_Question()], Path(tmp_path))
 
     monkeypatch.setattr("src.web.run_pipeline", fake_run_pipeline)
 
     await _run_pipeline_task(job, upload_dir=None, prompt="Test prompt")
 
-    assert captured["on_questions"] is None
+    saved = json.loads((Path(tmp_path) / "brief" / "assignment.json").read_text())
+    assert callable(captured["on_questions"])
+    assert job.questions is None
+    assert job.status == "done"
+    assert saved["clarifications"] == [
+        {"question": "Need clarification?", "answer": "Yes"}
+    ]
 
 
 async def test_pipeline_task_stops_after_question_timeout(tmp_path, monkeypatch):
@@ -259,6 +287,7 @@ async def test_pipeline_task_stops_after_question_timeout(tmp_path, monkeypatch)
     captured = {"continued": False}
 
     config = EssayWriterConfig()
+    config.writing.interactive_validation = True
 
     monkeypatch.setattr("src.web.load_config", lambda: config)
     monkeypatch.setattr("src.web.create_async_client", lambda *args, **kwargs: object())
