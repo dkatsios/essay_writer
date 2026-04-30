@@ -122,6 +122,24 @@ def test_download_keeps_job_until_cleanup(tmp_path):
     assert not run_dir.exists()
 
 
+def test_download_uses_run_dir_name_for_zip_filename(tmp_path):
+    run_dir = Path(tmp_path) / "essay_20260430_130501_123456_abcd1234"
+    run_dir.mkdir(parents=True)
+    (run_dir / "hello.txt").write_text("hello", encoding="utf-8")
+    job_id = "518c425779f4"
+    _jobs[job_id] = Job(job_id=job_id, run_dir=run_dir, status="done")
+
+    try:
+        response = client.get(f"/download/{job_id}")
+        assert response.status_code == 200
+        assert response.headers["content-disposition"] == (
+            "attachment; "
+            "filename=essay_20260430_130501_123456_abcd1234.zip"
+        )
+    finally:
+        _jobs.pop(job_id, None)
+
+
 def test_download_includes_full_run_contents(tmp_path):
     run_dir = Path(tmp_path) / "run"
     (run_dir / "sources" / "notes").mkdir(parents=True)

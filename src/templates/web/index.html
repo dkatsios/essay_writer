@@ -1019,6 +1019,20 @@
       setActiveJobId(null);
     }
 
+    function filenameFromDisposition(headerValue) {
+      if (!headerValue) return null;
+      const utf8Match = headerValue.match(/filename\*=UTF-8''([^;]+)/i);
+      if (utf8Match) {
+        try {
+          return decodeURIComponent(utf8Match[1]);
+        } catch {
+          return utf8Match[1];
+        }
+      }
+      const plainMatch = headerValue.match(/filename="?([^";]+)"?/i);
+      return plainMatch ? plainMatch[1] : null;
+    }
+
     async function downloadZip() {
       if (!jobId || downloadInProgress) return;
       downloadInProgress = true;
@@ -1049,9 +1063,11 @@
         const blobUrl = URL.createObjectURL(blob);
         const a = document.createElement('a');
         a.href = blobUrl;
-        a.download = wantDocx
-          ? 'essay_' + currentJobId + '.docx'
-          : 'essay_' + currentJobId + '.zip';
+        a.download =
+          filenameFromDisposition(res.headers.get('Content-Disposition')) ||
+          (wantDocx
+            ? 'essay_' + currentJobId + '.docx'
+            : 'essay_' + currentJobId + '.zip');
         a.rel = 'noopener';
         document.body.appendChild(a);
         a.click();

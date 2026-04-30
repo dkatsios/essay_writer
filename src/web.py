@@ -84,6 +84,11 @@ def _run_dir_prefix(now: datetime | None = None) -> str:
     return f"essay_{timestamp}_"
 
 
+def _download_basename(job: Job) -> str:
+    name = job.run_dir.name.strip()
+    return name or f"essay_{job.job_id}"
+
+
 @app.get("/health")
 async def health():
     """Liveness probe for platforms (e.g. Render) — no API keys required."""
@@ -424,7 +429,7 @@ async def download(job_id: str, format: str | None = Query(None)):
             _iter_docx(),
             media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
             headers={
-                "Content-Disposition": f"attachment; filename=essay_{job_id}.docx"
+                "Content-Disposition": f"attachment; filename={_download_basename(job)}.docx"
             },
         )
 
@@ -440,7 +445,9 @@ async def download(job_id: str, format: str | None = Query(None)):
     return StreamingResponse(
         _iter_zip(),
         media_type="application/zip",
-        headers={"Content-Disposition": f"attachment; filename=essay_{job_id}.zip"},
+        headers={
+            "Content-Disposition": f"attachment; filename={_download_basename(job)}.zip"
+        },
     )
 
 
