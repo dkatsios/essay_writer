@@ -40,3 +40,41 @@ class TestRendering:
         env1 = get_env("/tmp/dummy")
         env2 = get_env("/tmp/dummy")
         assert env1 is env2
+
+    def test_writer_and_reviewer_templates_split_style_responsibilities(self):
+        from src.rendering import render_prompt
+
+        writer_prompt = render_prompt(
+            "essay_writing.j2",
+            brief_json="{}",
+            plan_json="{}",
+            source_notes=[],
+            source_catalog="- s1",
+            total_selected_sources=1,
+            target_words=1000,
+            tolerance_percent=10,
+            min_words=900,
+            language="English",
+            min_sources=1,
+        )
+        assert writer_prompt.system is not None
+        assert "Argument-led prose" in writer_prompt.system
+        assert "Paragraph progression" in writer_prompt.system
+
+        reviewer_prompt = render_prompt(
+            "essay_review.j2",
+            brief_json="{}",
+            plan_json="{}",
+            draft_text="# Title\n\nBody text.",
+            target_words=1000,
+            draft_words=950,
+            tolerance_ratio=0.1,
+            tolerance_percent=10,
+            tolerance_ratio_over=0.2,
+            tolerance_percent_over=20,
+            language="English",
+            min_sources=1,
+        )
+        assert reviewer_prompt.system is not None
+        assert "Essay-about-the-essay scaffolding" in reviewer_prompt.system
+        assert "Paraphrastic repetition" in reviewer_prompt.system

@@ -6,6 +6,7 @@ AI-powered academic essay generator for Greek university students. Uses a determ
 
 - Deterministic Python pipeline for intake, planning, research, writing, review, and export
 - Three model roles: worker (fast model for research/planning), writer (quality model for essay text), and reviewer (highest-quality model for polishing)
+- Writer prompts keep style guidance compact and positive, while reviewer prompts carry the cleanup checklist for templated academic prose
 - OpenAI SDK + Instructor for model calls with no orchestration framework or middleware layer
 - Instructor-powered structured output with automatic Pydantic validation and retry
 - Interactive validation: catches incomplete assignments and prompts for missing info before proceeding
