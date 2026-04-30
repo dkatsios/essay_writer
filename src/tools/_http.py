@@ -23,6 +23,7 @@ logger = logging.getLogger(__name__)
 
 _CLIENT_LOCK = threading.Lock()
 _HTTP_CLIENT: httpx.Client | None = None
+_PDF_POOL = ThreadPoolExecutor(max_workers=4)
 
 
 def _default_headers() -> dict[str, str]:
@@ -489,7 +490,7 @@ def _get_proxy_session(proxy: ProxySettings) -> ProxySession:
 
 
 def close_http_clients() -> None:
-    """Close the shared httpx client and all cached proxy sessions."""
+    """Close the shared httpx client, proxy sessions, and PDF thread pool."""
     global _HTTP_CLIENT
     with _CLIENT_LOCK:
         if _HTTP_CLIENT is not None:
@@ -500,6 +501,7 @@ def close_http_clients() -> None:
             if session._session is not None:
                 session._session.close()
         _PROXY_SESSIONS.clear()
+    _PDF_POOL.shutdown(wait=False)
 
 
 def _resolve_proxy_settings(
@@ -699,27 +701,26 @@ def pdf_get(
         proxy_resp: PdfResponse | None = None
         proxy_err: Exception | None = None
 
-        with ThreadPoolExecutor(max_workers=2) as pool:
-            direct_fut = pool.submit(
-                _pdf_fetch_one, url, session=None, label="direct", **retry_kw
-            )
-            proxy_fut = pool.submit(
-                _pdf_fetch_one,
-                proxy_url,
-                session=proxy_session,
-                label="proxy",
-                **retry_kw,
-            )
+        direct_fut = _PDF_POOL.submit(
+            _pdf_fetch_one, url, session=None, label="direct", **retry_kw
+        )
+        proxy_fut = _PDF_POOL.submit(
+            _pdf_fetch_one,
+            proxy_url,
+            session=proxy_session,
+            label="proxy",
+            **retry_kw,
+        )
 
-            try:
-                direct_resp = direct_fut.result()
-            except Exception as exc:
-                direct_err = exc
+        try:
+            direct_resp = direct_fut.result()
+        except Exception as exc:
+            direct_err = exc
 
-            try:
-                proxy_resp = proxy_fut.result()
-            except Exception as exc:
-                proxy_err = exc
+        try:
+            proxy_resp = proxy_fut.result()
+        except Exception as exc:
+            proxy_err = exc
 
         # Both raised — re-raise the direct error (more common path)
         if direct_resp is None and proxy_resp is None:
