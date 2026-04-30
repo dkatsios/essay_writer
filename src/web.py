@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import datetime
 import json
 import logging
 import tempfile
@@ -78,6 +79,11 @@ async def _lifespan(app: FastAPI):
 app = FastAPI(title="Essay Writer", lifespan=_lifespan)
 
 
+def _run_dir_prefix(now: datetime | None = None) -> str:
+    timestamp = (now or datetime.now()).strftime("%Y%m%d_%H%M%S_%f")
+    return f"essay_{timestamp}_"
+
+
 @app.get("/health")
 async def health():
     """Liveness probe for platforms (e.g. Render) — no API keys required."""
@@ -106,7 +112,7 @@ async def submit(
     """Accept form data, start the pipeline as a background task."""
     job_id = uuid.uuid4().hex[:12]
 
-    run_dir = Path(tempfile.mkdtemp(prefix=f"essay_{job_id}_"))
+    run_dir = Path(tempfile.mkdtemp(prefix=_run_dir_prefix()))
     target_words_value = (
         target_words if target_words is not None and target_words > 0 else None
     )

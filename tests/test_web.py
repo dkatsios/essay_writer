@@ -3,6 +3,7 @@
 import asyncio
 import json
 import logging
+import re
 import time
 import zipfile
 from io import BytesIO
@@ -37,6 +38,39 @@ def test_health():
     response = client.get("/health")
     assert response.status_code == 200
     assert response.json() == {"status": "ok"}
+
+
+def test_submit_uses_timestamped_run_dir_prefix(tmp_path, monkeypatch):
+    captured: dict[str, object] = {}
+    created_dir = tmp_path / "essay_created"
+
+    class _Uuid:
+        hex = "abcdef1234567890"
+
+    def fake_mkdtemp(*, prefix: str):
+        captured["prefix"] = prefix
+        created_dir.mkdir()
+        return str(created_dir)
+
+    def fake_create_task(coro):
+        captured["task_created"] = True
+        coro.close()
+        return MagicMock()
+
+    monkeypatch.setattr("src.web.uuid.uuid4", lambda: _Uuid())
+    monkeypatch.setattr("src.web.tempfile.mkdtemp", fake_mkdtemp)
+    monkeypatch.setattr("src.web.asyncio.create_task", fake_create_task)
+
+    response = client.post("/submit", data={"prompt": "Test prompt"})
+
+    assert response.status_code == 200
+    assert response.json() == {"job_id": "abcdef123456"}
+    assert captured["task_created"] is True
+    assert re.fullmatch(r"essay_\d{8}_\d{6}_\d{6}_", str(captured["prefix"]))
+    assert "abcdef123456" not in str(captured["prefix"])
+
+    job = _jobs.pop("abcdef123456")
+    assert job.run_dir == created_dir
 
 
 def test_web_logging_bootstrap_is_idempotent():
@@ -231,7 +265,9 @@ async def test_pipeline_task_stops_after_question_timeout(tmp_path, monkeypatch)
     assert job.finished_at is not None
 
 
-async def test_pipeline_task_stops_after_source_shortfall_timeout(tmp_path, monkeypatch):
+async def test_pipeline_task_stops_after_source_shortfall_timeout(
+    tmp_path, monkeypatch
+):
     job = Job(job_id="shortfall001", run_dir=Path(tmp_path), status="running")
     captured = {"continued": False}
 
