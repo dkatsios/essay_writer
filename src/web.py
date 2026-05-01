@@ -20,6 +20,7 @@ from src import web_jobs  # noqa: E402
 from src.agent import create_async_client  # noqa: E402
 from src.intake import build_extracted_text, scan  # noqa: E402
 from src.pipeline import run_pipeline  # noqa: E402
+from src.run_history_store import run_history  # noqa: E402
 from src.run_logging import configure_web_logging, run_id_context  # noqa: E402
 from src.runtime import parse_validation_answers  # noqa: E402
 from src.tools._http import close_http_clients  # noqa: E402
@@ -94,6 +95,51 @@ async def health():
     return JSONResponse({"status": "ok"})
 
 
+@app.get("/history", response_class=HTMLResponse)
+async def history_page():
+    """Serve the run history inspection page."""
+    template = _jinja_env.get_template("history.html")
+    return template.render()
+
+
+@app.get("/history/jobs")
+async def history_jobs(
+    limit: int = Query(50, ge=1, le=200),
+    status: str | None = Query(None),
+):
+    """List persisted run summaries for inspection/debugging."""
+    summaries = run_history.list_runtime_summaries(limit=limit, status=status)
+    return JSONResponse({"jobs": summaries, "count": len(summaries)})
+
+
+@app.get("/history/jobs/{job_id}")
+async def history_job_detail(
+    job_id: str,
+    available_artifacts_only: bool = Query(False),
+):
+    """Return persisted run history for one job, plus live status when available."""
+    summary = run_history.get_runtime_summary(job_id)
+    steps = run_history.list_step_metrics(job_id)
+    artifacts = run_history.list_artifacts(job_id)
+    if available_artifacts_only:
+        artifacts = [item for item in artifacts if item["is_available"]]
+
+    live_job = _jobs.get(job_id)
+    if summary is None and not steps and not artifacts and live_job is None:
+        return JSONResponse({"error": "Job not found"}, status_code=404)
+
+    payload: dict[str, object] = {
+        "job_id": job_id,
+        "summary": summary,
+        "steps": steps,
+        "artifacts": artifacts,
+    }
+    if live_job is not None:
+        payload["live_status"] = _build_status_payload(live_job)
+
+    return JSONResponse(payload)
+
+
 @app.get("/", response_class=HTMLResponse)
 async def index():
     """Serve the single-page form."""
@@ -145,7 +191,7 @@ async def submit(
         provider=provider_value,
         api_key=api_key.strip(),
     )
-    _jobs[job_id] = job
+    _save_job(job)
 
     with run_id_context(job_id):
         logger.info(

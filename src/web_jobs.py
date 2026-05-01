@@ -89,6 +89,33 @@ class Job:
 jobs = JobStore()
 
 
+def _persist_run_history_snapshot(job: Job) -> None:
+    tracker = job.tracker
+    if tracker is not None and hasattr(tracker, "build_runtime_summary"):
+        payload = tracker.build_runtime_summary(
+            job.run_dir,
+            status=job.status,
+            provider=job.provider,
+        )
+    else:
+        payload = {
+            "status": job.status,
+            "provider": job.provider,
+            "total_cost_usd": 0.0,
+            "total_input_tokens": 0,
+            "total_output_tokens": 0,
+            "total_thinking_tokens": 0,
+            "total_duration_seconds": 0.0,
+            "step_count": 0,
+            "target_words": job.target_words,
+            "draft_words": 0,
+            "final_words": 0,
+        }
+    if payload.get("target_words") is None and job.target_words is not None:
+        payload["target_words"] = job.target_words
+    run_history.save_runtime_summary(job.job_id, **payload)
+
+
 def _persist_terminal_run_history(job: Job, *, status: str) -> None:
     tracker = job.tracker
     if tracker is not None and hasattr(tracker, "build_runtime_summary"):
@@ -117,7 +144,9 @@ def _persist_terminal_run_history(job: Job, *, status: str) -> None:
 
 def save_job(job: Job) -> Job:
     """Persist the current durable view of *job* and remember local transients."""
-    return jobs.save(job)
+    saved = jobs.save(job)
+    _persist_run_history_snapshot(saved)
+    return saved
 
 
 def notify_job(job: Job) -> None:

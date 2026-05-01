@@ -1,0 +1,618 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Essay Writer History</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; }
+    :root {
+      --bg: #f1f5f9;
+      --surface: #ffffff;
+      --surface-alt: #e2e8f0;
+      --text: #0f172a;
+      --text-muted: #475569;
+      --border: #cbd5e1;
+      --accent: #2563eb;
+      --accent-hover: #1d4ed8;
+      --radius: 12px;
+      --shadow: 0 1px 3px rgba(15, 23, 42, 0.06), 0 12px 32px rgba(15, 23, 42, 0.06);
+      --ok-bg: #dcfce7;
+      --ok-text: #166534;
+      --warn-bg: #fef3c7;
+      --warn-text: #92400e;
+      --bad-bg: #fee2e2;
+      --bad-text: #991b1b;
+    }
+    html { color-scheme: light; }
+    body {
+      margin: 0;
+      background: linear-gradient(180deg, #f8fafc 0%, #eef2ff 100%);
+      color: var(--text);
+      font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+      -webkit-font-smoothing: antialiased;
+    }
+    .page {
+      max-width: 1120px;
+      margin: 0 auto;
+      padding: 2rem 1.25rem 3rem;
+    }
+    .page-header {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 1rem;
+      margin-bottom: 1.5rem;
+    }
+    .page-title h1 {
+      margin: 0;
+      font-size: 1.6rem;
+      letter-spacing: -0.03em;
+    }
+    .page-title p {
+      margin: .4rem 0 0;
+      color: var(--text-muted);
+      max-width: 42rem;
+    }
+    .nav-link {
+      align-self: center;
+      color: var(--accent);
+      text-decoration: none;
+      font-weight: 600;
+      white-space: nowrap;
+    }
+    .nav-link:hover { color: var(--accent-hover); }
+    .toolbar,
+    .panel {
+      background: rgba(255, 255, 255, 0.84);
+      backdrop-filter: blur(10px);
+      border: 1px solid rgba(148, 163, 184, 0.3);
+      border-radius: var(--radius);
+      box-shadow: var(--shadow);
+    }
+    .toolbar {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: end;
+      gap: .9rem 1rem;
+      padding: 1rem 1.1rem;
+      margin-bottom: 1rem;
+    }
+    .field {
+      display: flex;
+      flex-direction: column;
+      gap: .35rem;
+      min-width: 8rem;
+    }
+    .field label {
+      font-size: .78rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: .05em;
+      color: var(--text-muted);
+    }
+    .field select,
+    .field input {
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: .55rem .7rem;
+      background: #fff;
+      color: var(--text);
+      font: inherit;
+    }
+    .field select:focus,
+    .field input:focus {
+      outline: none;
+      border-color: var(--accent);
+      box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.14);
+    }
+    .toolbar-actions {
+      display: flex;
+      align-items: center;
+      gap: .75rem;
+      margin-left: auto;
+    }
+    .toolbar-actions button {
+      border: none;
+      border-radius: 8px;
+      padding: .65rem 1rem;
+      background: var(--accent);
+      color: #fff;
+      font: inherit;
+      font-weight: 600;
+      cursor: pointer;
+    }
+    .toolbar-actions button:hover { background: var(--accent-hover); }
+    .toolbar-meta {
+      color: var(--text-muted);
+      font-size: .9rem;
+    }
+    .layout {
+      display: grid;
+      grid-template-columns: minmax(0, 340px) minmax(0, 1fr);
+      gap: 1rem;
+      align-items: start;
+    }
+    .panel {
+      padding: 1rem;
+    }
+    .panel h2 {
+      margin: 0 0 .9rem;
+      font-size: 1rem;
+      letter-spacing: -0.02em;
+    }
+    .job-list {
+      display: grid;
+      gap: .75rem;
+    }
+    .job-item {
+      width: 100%;
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      background: #fff;
+      padding: .85rem .9rem;
+      text-align: left;
+      cursor: pointer;
+      transition: border-color .15s, transform .12s, box-shadow .15s;
+    }
+    .job-item:hover {
+      border-color: #93c5fd;
+      transform: translateY(-1px);
+      box-shadow: 0 8px 24px rgba(37, 99, 235, 0.08);
+    }
+    .job-item.active {
+      border-color: var(--accent);
+      box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.12);
+    }
+    .job-topline,
+    .detail-inline {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: .75rem;
+      flex-wrap: wrap;
+    }
+    .job-id {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: .84rem;
+      font-weight: 600;
+    }
+    .status-pill {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-width: 4.8rem;
+      border-radius: 999px;
+      padding: .22rem .55rem;
+      font-size: .72rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: .04em;
+    }
+    .status-pill.done { background: var(--ok-bg); color: var(--ok-text); }
+    .status-pill.running,
+    .status-pill.questions,
+    .status-pill.optional_pdfs,
+    .status-pill.source_shortfall { background: var(--warn-bg); color: var(--warn-text); }
+    .status-pill.error,
+    .status-pill.gone { background: var(--bad-bg); color: var(--bad-text); }
+    .job-meta,
+    .muted {
+      color: var(--text-muted);
+      font-size: .88rem;
+    }
+    .summary-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+      gap: .75rem;
+      margin-bottom: 1rem;
+    }
+    .metric-card {
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      background: linear-gradient(180deg, #fff, #f8fafc);
+      padding: .8rem .85rem;
+    }
+    .metric-card .label {
+      display: block;
+      color: var(--text-muted);
+      font-size: .76rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: .05em;
+      margin-bottom: .35rem;
+    }
+    .metric-card .value {
+      font-size: 1.2rem;
+      font-weight: 700;
+      letter-spacing: -0.03em;
+    }
+    .detail-section {
+      margin-top: 1rem;
+    }
+    .detail-section h3 {
+      margin: 0 0 .65rem;
+      font-size: .95rem;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: .9rem;
+    }
+    th, td {
+      padding: .6rem .55rem;
+      border-bottom: 1px solid #e2e8f0;
+      vertical-align: top;
+      text-align: left;
+    }
+    th {
+      color: var(--text-muted);
+      font-size: .75rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: .05em;
+    }
+    .empty-state,
+    .loading-state,
+    .error-state {
+      border: 1px dashed var(--border);
+      border-radius: 10px;
+      padding: 1rem;
+      color: var(--text-muted);
+      background: rgba(248, 250, 252, 0.8);
+    }
+    .error-state {
+      color: var(--bad-text);
+      background: #fff5f5;
+      border-color: #fecaca;
+    }
+    .detail-header {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 1rem;
+      margin-bottom: 1rem;
+    }
+    .detail-header h2 { margin: 0 0 .35rem; }
+    .detail-subtext { color: var(--text-muted); font-size: .9rem; }
+    .artifact-unavailable { color: var(--bad-text); font-weight: 600; }
+    @media (max-width: 900px) {
+      .layout { grid-template-columns: 1fr; }
+      .toolbar-actions { margin-left: 0; }
+    }
+    @media (max-width: 640px) {
+      .page-header { flex-direction: column; }
+      .toolbar { padding: .9rem; }
+      .panel { padding: .9rem; }
+      .summary-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    }
+  </style>
+</head>
+<body>
+  <main class="page">
+    <header class="page-header">
+      <div class="page-title">
+        <h1>Run History</h1>
+        <p>Inspect finished and active jobs from the SQL-backed runtime history store, including token/cost summaries, step-level metrics, and artifact availability.</p>
+      </div>
+      <a class="nav-link" href="/">Back to Essay Writer</a>
+    </header>
+
+    <section class="toolbar">
+      <div class="field">
+        <label for="status-filter">Status</label>
+        <select id="status-filter">
+          <option value="">All statuses</option>
+          <option value="done">Done</option>
+          <option value="running">Running</option>
+          <option value="error">Error</option>
+          <option value="questions">Questions</option>
+          <option value="optional_pdfs">Optional PDFs</option>
+          <option value="source_shortfall">Source Shortfall</option>
+          <option value="gone">Gone</option>
+        </select>
+      </div>
+      <div class="field">
+        <label for="limit-filter">Rows</label>
+        <select id="limit-filter">
+          <option value="20">20</option>
+          <option value="50" selected>50</option>
+          <option value="100">100</option>
+          <option value="200">200</option>
+        </select>
+      </div>
+      <div class="toolbar-actions">
+        <button type="button" id="refresh-btn">Refresh</button>
+        <div class="toolbar-meta" id="history-meta">Loading history…</div>
+      </div>
+    </section>
+
+    <section class="layout">
+      <aside class="panel">
+        <h2>Jobs</h2>
+        <div id="job-list" class="job-list">
+          <div class="loading-state">Loading persisted run summaries…</div>
+        </div>
+      </aside>
+
+      <section class="panel">
+        <div id="detail-panel" class="empty-state">Select a job to inspect its summary, steps, and artifacts.</div>
+      </section>
+    </section>
+  </main>
+
+  <script>
+    const jobListEl = document.getElementById('job-list');
+    const detailPanelEl = document.getElementById('detail-panel');
+    const historyMetaEl = document.getElementById('history-meta');
+    const statusFilterEl = document.getElementById('status-filter');
+    const limitFilterEl = document.getElementById('limit-filter');
+    const refreshBtnEl = document.getElementById('refresh-btn');
+
+    let selectedJobId = null;
+
+    function formatDateTime(value) {
+      if (!value) return 'Unknown';
+      const date = new Date(value * 1000);
+      if (Number.isNaN(date.getTime())) return 'Unknown';
+      return date.toLocaleString();
+    }
+
+    function formatInteger(value) {
+      if (value === null || value === undefined) return '0';
+      return Number(value).toLocaleString();
+    }
+
+    function formatSeconds(value) {
+      if (value === null || value === undefined) return '0.0s';
+      return Number(value).toFixed(1) + 's';
+    }
+
+    function formatUsd(value) {
+      if (value === null || value === undefined) return '$0.00';
+      return new Intl.NumberFormat('en-US', {
+        style: 'currency',
+        currency: 'USD',
+        minimumFractionDigits: 2,
+        maximumFractionDigits: 4,
+      }).format(Number(value));
+    }
+
+    function escapeHtml(value) {
+      return String(value ?? '')
+        .replaceAll('&', '&amp;')
+        .replaceAll('<', '&lt;')
+        .replaceAll('>', '&gt;')
+        .replaceAll('"', '&quot;')
+        .replaceAll("'", '&#39;');
+    }
+
+    function statusPill(status) {
+      const value = status || 'unknown';
+      return `<span class="status-pill ${escapeHtml(value)}">${escapeHtml(value)}</span>`;
+    }
+
+    function currentFilters() {
+      const params = new URLSearchParams();
+      params.set('limit', limitFilterEl.value || '50');
+      if (statusFilterEl.value) {
+        params.set('status', statusFilterEl.value);
+      }
+      return params;
+    }
+
+    function updateJobQuery(jobId) {
+      const url = new URL(window.location.href);
+      if (jobId) {
+        url.searchParams.set('job', jobId);
+      } else {
+        url.searchParams.delete('job');
+      }
+      window.history.replaceState({}, '', url);
+    }
+
+    async function fetchJson(url) {
+      const response = await fetch(url, { headers: { 'Accept': 'application/json' } });
+      if (!response.ok) {
+        const payload = await response.json().catch(() => ({}));
+        throw new Error(payload.error || `Request failed with ${response.status}`);
+      }
+      return response.json();
+    }
+
+    function renderJobList(jobs) {
+      if (!jobs.length) {
+        jobListEl.innerHTML = '<div class="empty-state">No persisted jobs matched the current filter.</div>';
+        return;
+      }
+      jobListEl.innerHTML = jobs.map((job) => {
+        const activeClass = job.job_id === selectedJobId ? ' active' : '';
+        return `
+          <button type="button" class="job-item${activeClass}" data-job-id="${escapeHtml(job.job_id)}">
+            <div class="job-topline">
+              <span class="job-id">${escapeHtml(job.job_id)}</span>
+              ${statusPill(job.status)}
+            </div>
+            <p class="job-meta">${escapeHtml(job.provider || 'default provider')} · updated ${escapeHtml(formatDateTime(job.updated_at))}</p>
+            <div class="detail-inline muted">
+              <span>${escapeHtml(formatUsd(job.total_cost_usd))}</span>
+              <span>${escapeHtml(formatInteger(job.final_words || job.draft_words || 0))} words</span>
+              <span>${escapeHtml(formatInteger(job.step_count || 0))} steps</span>
+            </div>
+          </button>
+        `;
+      }).join('');
+
+      for (const button of jobListEl.querySelectorAll('.job-item')) {
+        button.addEventListener('click', () => loadJobDetail(button.dataset.jobId, { pushUrl: true }));
+      }
+    }
+
+    function renderSummary(summary, liveStatus) {
+      if (!summary) {
+        return '<div class="empty-state">No persisted runtime summary is available yet for this job.</div>';
+      }
+
+      const liveMarkup = liveStatus
+        ? `<div class="detail-inline"><span class="detail-subtext">Live status</span>${statusPill(liveStatus.status)}</div>`
+        : '';
+
+      return `
+        <div class="detail-header">
+          <div>
+            <h2>${escapeHtml(summary.job_id || selectedJobId)}</h2>
+            <div class="detail-subtext">${escapeHtml(summary.provider || 'default provider')} · updated ${escapeHtml(formatDateTime(summary.updated_at))}</div>
+          </div>
+          ${liveMarkup}
+        </div>
+        <div class="summary-grid">
+          <div class="metric-card"><span class="label">Status</span><div class="value">${escapeHtml(summary.status || 'unknown')}</div></div>
+          <div class="metric-card"><span class="label">Total Cost</span><div class="value">${escapeHtml(formatUsd(summary.total_cost_usd))}</div></div>
+          <div class="metric-card"><span class="label">Input Tokens</span><div class="value">${escapeHtml(formatInteger(summary.total_input_tokens))}</div></div>
+          <div class="metric-card"><span class="label">Output Tokens</span><div class="value">${escapeHtml(formatInteger(summary.total_output_tokens))}</div></div>
+          <div class="metric-card"><span class="label">Duration</span><div class="value">${escapeHtml(formatSeconds(summary.total_duration_seconds))}</div></div>
+          <div class="metric-card"><span class="label">Final Words</span><div class="value">${escapeHtml(formatInteger(summary.final_words || summary.draft_words || 0))}</div></div>
+        </div>
+      `;
+    }
+
+    function renderSteps(steps) {
+      if (!steps.length) {
+        return '<div class="empty-state">No step metrics persisted yet.</div>';
+      }
+      return `
+        <div class="detail-section">
+          <h3>Step Metrics</h3>
+          <table>
+            <thead>
+              <tr>
+                <th>Step</th>
+                <th>Status</th>
+                <th>Model</th>
+                <th>Cost</th>
+                <th>Tokens</th>
+                <th>Duration</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${steps.map((step) => `
+                <tr>
+                  <td>${escapeHtml(step.step_name)}</td>
+                  <td>${statusPill(step.status)}</td>
+                  <td>${escapeHtml(step.model || 'n/a')}</td>
+                  <td>${escapeHtml(formatUsd(step.cost_usd))}</td>
+                  <td>${escapeHtml(formatInteger(step.input_tokens + step.output_tokens + step.thinking_tokens))}</td>
+                  <td>${escapeHtml(formatSeconds(step.duration_seconds))}</td>
+                </tr>
+              `).join('')}
+            </tbody>
+          </table>
+        </div>
+      `;
+    }
+
+    function renderArtifacts(artifacts) {
+      if (!artifacts.length) {
+        return '<div class="empty-state">No artifact metadata persisted yet.</div>';
+      }
+      return `
+        <div class="detail-section">
+          <h3>Artifacts</h3>
+          <table>
+            <thead>
+              <tr>
+                <th>Path</th>
+                <th>Type</th>
+                <th>Size</th>
+                <th>Availability</th>
+                <th>Updated</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${artifacts.map((artifact) => `
+                <tr>
+                  <td>${escapeHtml(artifact.relative_path)}</td>
+                  <td>${escapeHtml(artifact.artifact_type)}</td>
+                  <td>${escapeHtml(formatInteger(artifact.size_bytes))} B</td>
+                  <td>${artifact.is_available ? 'Available' : '<span class="artifact-unavailable">Deleted locally</span>'}</td>
+                  <td>${escapeHtml(formatDateTime(artifact.updated_at))}</td>
+                </tr>
+              `).join('')}
+            </tbody>
+          </table>
+        </div>
+      `;
+    }
+
+    async function loadJobDetail(jobId, { pushUrl } = { pushUrl: false }) {
+      if (!jobId) {
+        selectedJobId = null;
+        updateJobQuery(null);
+        detailPanelEl.innerHTML = 'Select a job to inspect its summary, steps, and artifacts.';
+        return;
+      }
+
+      selectedJobId = jobId;
+      if (pushUrl) {
+        updateJobQuery(jobId);
+      }
+      detailPanelEl.innerHTML = '<div class="loading-state">Loading run detail…</div>';
+      renderSelectionState();
+
+      try {
+        const detail = await fetchJson(`/history/jobs/${encodeURIComponent(jobId)}`);
+        detailPanelEl.innerHTML = [
+          renderSummary(detail.summary, detail.live_status),
+          renderSteps(detail.steps || []),
+          renderArtifacts(detail.artifacts || []),
+        ].join('');
+      } catch (error) {
+        detailPanelEl.innerHTML = `<div class="error-state">${escapeHtml(error.message)}</div>`;
+      }
+    }
+
+    function renderSelectionState() {
+      for (const button of jobListEl.querySelectorAll('.job-item')) {
+        button.classList.toggle('active', button.dataset.jobId === selectedJobId);
+      }
+    }
+
+    async function loadHistoryList() {
+      historyMetaEl.textContent = 'Loading history…';
+      jobListEl.innerHTML = '<div class="loading-state">Loading persisted run summaries…</div>';
+      try {
+        const params = currentFilters();
+        const payload = await fetchJson(`/history/jobs?${params.toString()}`);
+        historyMetaEl.textContent = `${payload.count} job${payload.count === 1 ? '' : 's'} loaded`;
+        renderJobList(payload.jobs || []);
+
+        const requestedJobId = new URL(window.location.href).searchParams.get('job');
+        if (requestedJobId) {
+          await loadJobDetail(requestedJobId, { pushUrl: false });
+          return;
+        }
+
+        if (!selectedJobId && payload.jobs && payload.jobs.length) {
+          await loadJobDetail(payload.jobs[0].job_id, { pushUrl: true });
+          return;
+        }
+
+        renderSelectionState();
+      } catch (error) {
+        historyMetaEl.textContent = 'History failed to load';
+        jobListEl.innerHTML = `<div class="error-state">${escapeHtml(error.message)}</div>`;
+      }
+    }
+
+    statusFilterEl.addEventListener('change', () => {
+      selectedJobId = null;
+      updateJobQuery(null);
+      loadHistoryList();
+    });
+    limitFilterEl.addEventListener('change', () => loadHistoryList());
+    refreshBtnEl.addEventListener('click', () => loadHistoryList());
+
+    loadHistoryList();
+  </script>
+</body>
+</html>

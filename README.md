@@ -98,6 +98,8 @@ Default settings are defined in `config/settings.py`. Override them with environ
 
 The web layer database URL lives at `ESSAY_WRITER_DATABASE__URL`. The database now stores web job state, runtime summaries, per-step metrics, and artifact metadata in SQL while still keeping run artifacts (`.md`, `.docx`, uploaded files, logs) on the local run directory.
 
+For inspection/debugging, the web server exposes a browser history page at `GET /history` plus JSON history endpoints: `GET /history/jobs` lists persisted run summaries, including active jobs immediately after submission, and `GET /history/jobs/{job_id}` returns the summary, step metrics, artifact manifest, and live status (when the job is still active).
+
 Database schema changes are managed through Alembic. Run `uv run alembic upgrade head` before starting the app in a fresh environment or after pulling schema changes.
 
 If your local Postgres database was created before Alembic support and already contains a `web_jobs` table, use `uv run python scripts/db_upgrade_local.py` for the one-time upgrade path. It backs up existing `web_jobs` rows, recreates the table through Alembic, and restores the saved rows. Avoid `alembic stamp head` unless you have verified that the existing schema matches the migration exactly.

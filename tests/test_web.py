@@ -55,6 +55,188 @@ def test_health():
     assert response.json() == {"status": "ok"}
 
 
+def test_index_links_to_history_page():
+    response = client.get("/")
+
+    assert response.status_code == 200
+    assert 'href="/history"' in response.text
+
+
+def test_history_page_renders():
+    response = client.get("/history")
+
+    assert response.status_code == 200
+    assert "Run History" in response.text
+    assert "Loading persisted run summaries" in response.text
+
+
+def test_history_jobs_lists_runtime_summaries_in_updated_order():
+    from src.run_history_store import run_history
+
+    run_history.save_runtime_summary(
+        "jobolder001",
+        status="done",
+        provider="google",
+        total_cost_usd=1.0,
+        total_input_tokens=100,
+        total_output_tokens=50,
+        total_thinking_tokens=0,
+        total_duration_seconds=10.0,
+        step_count=3,
+        updated_at=10.0,
+    )
+    run_history.save_runtime_summary(
+        "jobnewer001",
+        status="error",
+        provider="openai",
+        total_cost_usd=2.0,
+        total_input_tokens=200,
+        total_output_tokens=75,
+        total_thinking_tokens=10,
+        total_duration_seconds=20.0,
+        step_count=4,
+        updated_at=20.0,
+    )
+
+    response = client.get("/history/jobs", params={"limit": 10})
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["count"] == 2
+    assert [job["job_id"] for job in body["jobs"]] == [
+        "jobnewer001",
+        "jobolder001",
+    ]
+
+
+def test_history_jobs_can_filter_by_status():
+    from src.run_history_store import run_history
+
+    run_history.save_runtime_summary(
+        "jobdone001",
+        status="done",
+        provider="google",
+        total_cost_usd=1.0,
+        total_input_tokens=100,
+        total_output_tokens=50,
+        total_thinking_tokens=0,
+        total_duration_seconds=10.0,
+        step_count=3,
+        updated_at=10.0,
+    )
+    run_history.save_runtime_summary(
+        "joberror001",
+        status="error",
+        provider="openai",
+        total_cost_usd=2.0,
+        total_input_tokens=200,
+        total_output_tokens=75,
+        total_thinking_tokens=10,
+        total_duration_seconds=20.0,
+        step_count=4,
+        updated_at=20.0,
+    )
+
+    response = client.get("/history/jobs", params={"status": "done"})
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["count"] == 1
+    assert body["jobs"][0]["job_id"] == "jobdone001"
+
+
+def test_history_job_detail_returns_summary_steps_artifacts_and_live_status(tmp_path):
+    from src.run_history_store import run_history
+
+    run_dir = Path(tmp_path) / "run"
+    run_dir.mkdir(parents=True)
+    (run_dir / "report.md").write_text("# Report", encoding="utf-8")
+
+    run_history.save_runtime_summary(
+        "jobdetail001",
+        status="done",
+        provider="google",
+        total_cost_usd=1.5,
+        total_input_tokens=300,
+        total_output_tokens=120,
+        total_thinking_tokens=15,
+        total_duration_seconds=30.0,
+        step_count=5,
+        updated_at=10.0,
+    )
+    run_history.save_step_metric(
+        "jobdetail001",
+        "plan",
+        status="completed",
+        model="gpt-5.4",
+        cost_usd=0.25,
+        call_count=1,
+        input_tokens=120,
+        output_tokens=60,
+        thinking_tokens=5,
+        duration_seconds=3.5,
+        step_index=2,
+        step_count=7,
+        updated_at=11.0,
+    )
+    run_history.sync_artifacts("jobdetail001", run_dir, current_time=12.0)
+
+    live_job = Job(job_id="jobdetail001", run_dir=run_dir, status="running")
+    _jobs["jobdetail001"] = live_job
+
+    try:
+        response = client.get("/history/jobs/jobdetail001")
+    finally:
+        _jobs.pop("jobdetail001", None)
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["job_id"] == "jobdetail001"
+    assert body["summary"]["provider"] == "google"
+    assert body["steps"][0]["step_name"] == "plan"
+    assert body["artifacts"][0]["relative_path"] == "report.md"
+    assert body["live_status"]["status"] == "running"
+
+
+def test_history_job_detail_can_filter_unavailable_artifacts(tmp_path):
+    from src.run_history_store import run_history
+
+    run_dir = Path(tmp_path) / "run"
+    run_dir.mkdir(parents=True)
+    (run_dir / "report.md").write_text("# Report", encoding="utf-8")
+
+    run_history.save_runtime_summary(
+        "jobfilter001",
+        status="done",
+        provider="google",
+        total_cost_usd=1.5,
+        total_input_tokens=300,
+        total_output_tokens=120,
+        total_thinking_tokens=15,
+        total_duration_seconds=30.0,
+        step_count=5,
+        updated_at=10.0,
+    )
+    run_history.sync_artifacts("jobfilter001", run_dir, current_time=12.0)
+    run_history.mark_artifacts_deleted("jobfilter001", current_time=13.0)
+
+    response = client.get(
+        "/history/jobs/jobfilter001",
+        params={"available_artifacts_only": "true"},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["artifacts"] == []
+
+
+def test_history_job_detail_404_when_job_is_unknown():
+    response = client.get("/history/jobs/missingjob001")
+
+    assert response.status_code == 404
+    assert response.json() == {"error": "Job not found"}
+
+
 def test_submit_uses_timestamped_run_dir_prefix(tmp_path, monkeypatch):
     captured: dict[str, object] = {}
     created_dir = tmp_path / "essay_created"
@@ -86,6 +268,50 @@ def test_submit_uses_timestamped_run_dir_prefix(tmp_path, monkeypatch):
 
     job = _jobs.pop("abcdef123456")
     assert job.run_dir == created_dir
+
+
+def test_submit_adds_running_job_to_history_before_background_finishes(
+    tmp_path, monkeypatch
+):
+    from src.run_history_store import run_history
+
+    created_dir = tmp_path / "essay_created"
+
+    class _Uuid:
+        hex = "feedfacecafe1234"
+
+    def fake_mkdtemp(*, prefix: str):
+        created_dir.mkdir()
+        return str(created_dir)
+
+    def fake_create_task(coro):
+        coro.close()
+        return MagicMock()
+
+    monkeypatch.setattr("src.web.uuid.uuid4", lambda: _Uuid())
+    monkeypatch.setattr("src.web.tempfile.mkdtemp", fake_mkdtemp)
+    monkeypatch.setattr("src.web.asyncio.create_task", fake_create_task)
+
+    response = client.post(
+        "/submit",
+        data={"prompt": "Test prompt", "target_words": 1200, "provider": "openai"},
+    )
+
+    assert response.status_code == 200
+    job_id = response.json()["job_id"]
+
+    summary = run_history.get_runtime_summary(job_id)
+    history = client.get("/history/jobs").json()["jobs"]
+
+    assert summary is not None
+    assert summary["status"] == "running"
+    assert summary["provider"] == "openai"
+    assert summary["target_words"] == 1200
+    assert any(
+        item["job_id"] == job_id and item["status"] == "running" for item in history
+    )
+
+    _jobs.pop(job_id, None)
 
 
 def test_web_logging_bootstrap_is_idempotent():

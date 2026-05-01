@@ -200,6 +200,24 @@ class RunHistoryStore:
             )
         return dict(row) if row is not None else None
 
+    def list_runtime_summaries(
+        self,
+        *,
+        limit: int = 50,
+        status: str | None = None,
+    ) -> list[dict[str, Any]]:
+        query = select(_runtime_summaries_table).order_by(
+            _runtime_summaries_table.c.updated_at.desc(),
+            _runtime_summaries_table.c.job_id.desc(),
+        )
+        if status is not None:
+            query = query.where(_runtime_summaries_table.c.status == status)
+        query = query.limit(limit)
+
+        with self._session() as session:
+            rows = session.execute(query).mappings().all()
+        return [dict(row) for row in rows]
+
     def save_step_metric(self, job_id: str, step_name: str, **payload: Any) -> None:
         current_time = float(payload.pop("updated_at", time.time()))
         record = {
