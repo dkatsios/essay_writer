@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+
 import pytest
 
 
@@ -128,3 +130,59 @@ class TestPricing:
             "gpt-4o", input_tokens=1000, output_tokens=100, thinking_tokens=500
         )
         assert cost_with_think > cost_no_think
+
+
+class TestTokenTrackerSnapshots:
+    def test_snapshot_step_metric_includes_cost_and_status(self):
+        from src.runtime import TokenTracker
+
+        tracker = TokenTracker()
+        tracker.set_current_step("plan")
+        tracker.record("openai:gpt-4o", 1000, 100, 50)
+        tracker.record_duration("plan", 4.5)
+
+        snapshot = tracker.snapshot_step_metric(
+            "plan", status="completed", step_index=2, step_count=7
+        )
+
+        assert snapshot["status"] == "completed"
+        assert snapshot["model"] == "gpt-4o"
+        assert snapshot["call_count"] == 1
+        assert snapshot["duration_seconds"] == 4.5
+        assert snapshot["cost_usd"] > 0
+
+    def test_build_runtime_summary_reads_run_outputs(self, tmp_path):
+        from src.runtime import TokenTracker
+
+        tracker = TokenTracker()
+        tracker.set_current_step("write")
+        tracker.record("google_genai:gemini-2.5-flash", 2000, 400, 0)
+        tracker.record_duration("write", 8.0)
+
+        (tmp_path / "plan").mkdir(parents=True)
+        (tmp_path / "essay").mkdir(parents=True)
+        (tmp_path / "sources").mkdir(parents=True)
+        (tmp_path / "plan" / "plan.json").write_text(
+            json.dumps({"total_word_target": 1200}), encoding="utf-8"
+        )
+        (tmp_path / "essay" / "draft.md").write_text(
+            "one two three four", encoding="utf-8"
+        )
+        (tmp_path / "essay" / "reviewed.md").write_text(
+            "one two three four five", encoding="utf-8"
+        )
+        (tmp_path / "sources" / "selected.json").write_text(
+            json.dumps({"source-1": {"title": "A"}}), encoding="utf-8"
+        )
+
+        summary = tracker.build_runtime_summary(
+            tmp_path, status="done", provider="google"
+        )
+
+        assert summary["status"] == "done"
+        assert summary["provider"] == "google"
+        assert summary["step_count"] == 1
+        assert summary["target_words"] == 1200
+        assert summary["draft_words"] == 4
+        assert summary["final_words"] == 5
+        assert summary["selected_source_count"] == 1

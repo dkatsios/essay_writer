@@ -72,9 +72,7 @@ async def _do_plan(ctx: PipelineContext) -> None:
         brief_json=brief_json,
         language=get_brief_language(ctx.run_dir),
     )
-    plan = await async_structured_call(
-        ctx.async_worker, prompt, EssayPlan, ctx.tracker
-    )
+    plan = await async_structured_call(ctx.async_worker, prompt, EssayPlan, ctx.tracker)
     write_json(ctx.run_dir / "plan" / "plan.json", plan)
 
 
@@ -164,6 +162,8 @@ async def run_pipeline(
     min_sources: int | None = None,
     user_sources_dir: Path | None = None,
     resume: bool = False,
+    job_id: str | None = None,
+    run_history_store=None,
 ) -> None:
     """Execute the essay writing pipeline.
 
@@ -203,6 +203,8 @@ async def run_pipeline(
         user_sources_dir=user_sources_dir,
         on_optional_source_pdfs=on_optional_source_pdfs,
         on_source_shortfall=on_source_shortfall,
+        job_id=job_id,
+        run_history_store=run_history_store,
     )
 
     for subdir in ("brief", "plan", "sources", "essay"):
@@ -268,9 +270,7 @@ async def run_pipeline(
     )
 
     # Compute source counts once, read the brief once, write once.
-    brief = AssignmentBrief.model_validate_json(
-        brief_path.read_text(encoding="utf-8")
-    )
+    brief = AssignmentBrief.model_validate_json(brief_path.read_text(encoding="utf-8"))
     user_min_sources = min_sources
     if user_min_sources is None:
         user_min_sources = brief.min_sources

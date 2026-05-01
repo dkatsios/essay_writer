@@ -96,7 +96,7 @@ The service exposes the web UI on the port assigned by Render. Optional: set `ES
 
 Default settings are defined in `config/settings.py`. Override them with environment variables using the `ESSAY_WRITER_` prefix. `EssayWriterConfig` also reads the repo-root `.env`, including direct provider variables such as `GOOGLE_API_KEY`, `GOOGLE_CLOUD_PROJECT`, `GOOGLE_CLOUD_LOCATION`, `AI_BASE_URL`, and `AI_API_KEY`, so the runtime no longer depends on ad hoc `os.environ` reads or entrypoint-specific dotenv loading.
 
-The web layer database URL lives at `ESSAY_WRITER_DATABASE__URL`. Phase 1 of persistence stores web job state and metadata in SQL while still keeping run artifacts (`.md`, `.docx`, uploaded files, logs) on the local run directory.
+The web layer database URL lives at `ESSAY_WRITER_DATABASE__URL`. The database now stores web job state, runtime summaries, per-step metrics, and artifact metadata in SQL while still keeping run artifacts (`.md`, `.docx`, uploaded files, logs) on the local run directory.
 
 Database schema changes are managed through Alembic. Run `uv run alembic upgrade head` before starting the app in a fresh environment or after pulling schema changes.
 

@@ -28,6 +28,7 @@ from src.schemas import AssignmentBrief, EssayPlan, SourceNote
 
 if TYPE_CHECKING:
     from config.settings import EssayWriterConfig
+    from src.run_history_store import RunHistoryStore
 
 logger = logging.getLogger(__name__)
 
@@ -56,6 +57,8 @@ class PipelineContext:
         Callable[[Path, dict], Awaitable[tuple[bool, list[str]]]] | None
     ) = None
     brief: AssignmentBrief | None = None
+    job_id: str | None = None
+    run_history_store: RunHistoryStore | None = None
 
 
 @dataclass
@@ -105,6 +108,29 @@ def save_checkpoint(run_dir: Path, step_name: str) -> None:
     )
 
 
+def _persist_step_history(
+    ctx: PipelineContext,
+    *,
+    step_name: str,
+    status: str,
+    step_index: int,
+    step_count: int | None,
+) -> None:
+    if ctx.job_id is None or ctx.run_history_store is None or ctx.tracker is None:
+        return
+    snapshot_step_metric = getattr(ctx.tracker, "snapshot_step_metric", None)
+    if callable(snapshot_step_metric):
+        payload = snapshot_step_metric(
+            step_name,
+            status=status,
+            step_index=step_index,
+            step_count=step_count,
+        )
+        ctx.run_history_store.save_step_metric(ctx.job_id, step_name, **payload)
+    if status == "completed":
+        ctx.run_history_store.sync_artifacts(ctx.job_id, ctx.run_dir)
+
+
 async def execute(
     steps: list[PipelineStep],
     ctx: PipelineContext,
@@ -141,10 +167,24 @@ async def execute(
             logger.error("FAIL %s (%.1fs)", step.name, duration)
             if ctx.tracker is not None:
                 ctx.tracker.record_duration(step.name, duration)
+            _persist_step_history(
+                ctx,
+                step_name=step.name,
+                status="failed",
+                step_index=step_offset + running_idx,
+                step_count=total_steps,
+            )
             raise
         if ctx.tracker is not None:
             ctx.tracker.record_duration(step.name, duration)
         save_checkpoint(ctx.run_dir, step.name)
+        _persist_step_history(
+            ctx,
+            step_name=step.name,
+            status="completed",
+            step_index=step_offset + running_idx,
+            step_count=total_steps,
+        )
         running_idx += 1
 
 

@@ -10,6 +10,7 @@ def reset_settings_cache(monkeypatch, tmp_path: Path):
     from alembic import command
     from alembic.config import Config
     from config.settings import EssayWriterConfig, reset_config_cache
+    from src.run_history_store import run_history
     from src.web_jobs import jobs
 
     original_env_file = EssayWriterConfig.model_config.get("env_file")
@@ -21,6 +22,7 @@ def reset_settings_cache(monkeypatch, tmp_path: Path):
     )
     reset_config_cache()
     jobs.reset_for_tests()
+    run_history.reset_for_tests()
 
     alembic_config = Config(str(Path(__file__).resolve().parents[1] / "alembic.ini"))
     alembic_config.set_main_option("sqlalchemy.url", database_url)
@@ -29,5 +31,6 @@ def reset_settings_cache(monkeypatch, tmp_path: Path):
 
     yield
     jobs.reset_for_tests()
+    run_history.reset_for_tests()
     EssayWriterConfig.model_config["env_file"] = original_env_file
     reset_config_cache()

@@ -571,9 +571,7 @@ class TestLongEssayContextHelpers:
             config=EssayWriterConfig(),
             async_writer=None,
             async_reviewer=object(),
-            brief=AssignmentBrief(
-                topic="Test", language="English", description="Test"
-            ),
+            brief=AssignmentBrief(topic="Test", language="English", description="Test"),
         )
 
         await make_review_full(target_words=1000, citation_min_sources=3)(ctx)
@@ -583,3 +581,95 @@ class TestLongEssayContextHelpers:
         assert "source_catalog" not in kwargs
         assert "uncited_ids" not in kwargs
         assert "total_selected_sources" not in kwargs
+
+
+class _HistoryRecorder:
+    def __init__(self) -> None:
+        self.saved_steps: list[tuple[str, str, dict]] = []
+        self.synced_job_ids: list[str] = []
+
+    def save_step_metric(self, job_id: str, step_name: str, **payload):
+        self.saved_steps.append((job_id, step_name, payload))
+
+    def sync_artifacts(self, job_id: str, _run_dir):
+        self.synced_job_ids.append(job_id)
+
+
+async def test_execute_persists_completed_step_history(tmp_path):
+    from src.pipeline_support import PipelineContext, PipelineStep, execute
+    from src.runtime import TokenTracker
+
+    tracker = TokenTracker()
+    history = _HistoryRecorder()
+    ctx = PipelineContext(
+        worker=None,
+        async_worker=None,
+        writer=None,
+        reviewer=None,
+        run_dir=tmp_path,
+        config=EssayWriterConfig(),
+        tracker=tracker,
+        job_id="job123",
+        run_history_store=history,
+    )
+
+    async def _step(current_ctx):
+        current_ctx.tracker.record("openai:gpt-4o", 100, 25, 5)
+        (current_ctx.run_dir / "brief").mkdir(parents=True, exist_ok=True)
+        (current_ctx.run_dir / "brief" / "assignment.json").write_text(
+            "{}", encoding="utf-8"
+        )
+
+    await execute(
+        [PipelineStep("plan", _step)],
+        ctx,
+        step_offset=2,
+        total_steps=7,
+    )
+
+    assert history.synced_job_ids == ["job123"]
+    assert len(history.saved_steps) == 1
+    job_id, step_name, payload = history.saved_steps[0]
+    assert job_id == "job123"
+    assert step_name == "plan"
+    assert payload["status"] == "completed"
+    assert payload["step_index"] == 2
+    assert payload["step_count"] == 7
+    assert payload["cost_usd"] > 0
+
+
+async def test_execute_persists_failed_step_history(tmp_path):
+    from src.pipeline_support import PipelineContext, PipelineStep, execute
+    from src.runtime import TokenTracker
+
+    tracker = TokenTracker()
+    history = _HistoryRecorder()
+    ctx = PipelineContext(
+        worker=None,
+        async_worker=None,
+        writer=None,
+        reviewer=None,
+        run_dir=tmp_path,
+        config=EssayWriterConfig(),
+        tracker=tracker,
+        job_id="job123",
+        run_history_store=history,
+    )
+
+    async def _step(current_ctx):
+        current_ctx.tracker.record("openai:gpt-4o", 10, 0, 0)
+        raise RuntimeError("boom")
+
+    with pytest.raises(RuntimeError, match="boom"):
+        await execute(
+            [PipelineStep("write", _step)],
+            ctx,
+            step_offset=5,
+            total_steps=7,
+        )
+
+    assert history.synced_job_ids == []
+    assert len(history.saved_steps) == 1
+    _, step_name, payload = history.saved_steps[0]
+    assert step_name == "write"
+    assert payload["status"] == "failed"

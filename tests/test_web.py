@@ -117,11 +117,14 @@ def test_run_logging_captures_root_warnings_and_skips_access_log(tmp_path):
 
 
 def test_download_keeps_job_until_cleanup(tmp_path):
+    from src.run_history_store import run_history
+
     run_dir = Path(tmp_path) / "run"
     run_dir.mkdir(parents=True)
     (run_dir / "hello.txt").write_text("hello", encoding="utf-8")
     job_id = "abc123def456"
     _jobs[job_id] = Job(job_id=job_id, run_dir=run_dir, status="done")
+    run_history.sync_artifacts(job_id, run_dir, current_time=10.0)
 
     response = client.get(f"/download/{job_id}")
     assert response.status_code == 200
@@ -133,8 +136,10 @@ def test_download_keeps_job_until_cleanup(tmp_path):
     cleanup = client.post(f"/download/{job_id}/cleanup")
     assert cleanup.status_code == 200
 
+    artifacts = run_history.list_artifacts(job_id)
     assert job_id not in _jobs
     assert not run_dir.exists()
+    assert artifacts[0]["is_available"] is False
 
 
 def test_download_uses_run_dir_name_for_zip_filename(tmp_path):
@@ -183,6 +188,8 @@ def test_download_includes_full_run_contents(tmp_path):
 
 
 def test_job_ttl_sweep_removes_stale_done(tmp_path, monkeypatch):
+    from src.run_history_store import run_history
+
     monkeypatch.setenv("ESSAY_WEB_JOB_TTL_SECONDS", "120")
     run_dir = Path(tmp_path) / "ttl_run"
     run_dir.mkdir()
@@ -194,9 +201,12 @@ def test_job_ttl_sweep_removes_stale_done(tmp_path, monkeypatch):
         status="done",
         finished_at=time.time() - 200,
     )
+    run_history.sync_artifacts(jid, run_dir, current_time=time.time() - 150)
     assert job_ttl_sweep_once() == 1
+    artifacts = run_history.list_artifacts(jid)
     assert jid not in _jobs
     assert not run_dir.exists()
+    assert artifacts[0]["is_available"] is False
 
 
 def test_job_ttl_sweep_keeps_recent_done(tmp_path, monkeypatch):

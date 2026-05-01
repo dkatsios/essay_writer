@@ -16,6 +16,7 @@ from urllib.parse import urlparse
 
 from config.settings import load_config
 from src.job_store import JobStore
+from src.run_history_store import run_history
 from src.runtime import TokenTracker
 from src.schemas import AssignmentBrief, Clarification, ValidationQuestion
 from src.pipeline_sources import SourceShortfallAbort
@@ -86,6 +87,32 @@ class Job:
 
 
 jobs = JobStore()
+
+
+def _persist_terminal_run_history(job: Job, *, status: str) -> None:
+    tracker = job.tracker
+    if tracker is not None and hasattr(tracker, "build_runtime_summary"):
+        payload = tracker.build_runtime_summary(
+            job.run_dir,
+            status=status,
+            provider=job.provider,
+        )
+    else:
+        payload = {
+            "status": status,
+            "provider": job.provider,
+            "total_cost_usd": 0.0,
+            "total_input_tokens": 0,
+            "total_output_tokens": 0,
+            "total_thinking_tokens": 0,
+            "total_duration_seconds": 0.0,
+            "step_count": 0,
+            "target_words": job.target_words,
+            "draft_words": 0,
+            "final_words": 0,
+        }
+    run_history.save_runtime_summary(job.job_id, **payload)
+    run_history.sync_artifacts(job.job_id, job.run_dir)
 
 
 def save_job(job: Job) -> Job:
@@ -222,6 +249,7 @@ def delete_job_artifacts(job_id: str) -> bool:
     job = jobs.pop(job_id, None)
     if job is None:
         return False
+    run_history.mark_artifacts_deleted(job_id)
     shutil.rmtree(job.run_dir, ignore_errors=True)
     return True
 
@@ -234,6 +262,7 @@ def job_ttl_sweep_once(now: float | None = None) -> int:
     removed = 0
     for job in jobs.expired_finished_jobs(current_time=current_time, ttl_seconds=ttl):
         jobs.pop(job.job_id, None)
+        run_history.mark_artifacts_deleted(job.job_id, current_time=current_time)
         shutil.rmtree(job.run_dir, ignore_errors=True)
         removed += 1
         logger.info(
@@ -327,6 +356,7 @@ async def run_pipeline_task(
                 job.error = "Provide at least a prompt or upload files."
                 job.finished_at = time.time()
                 save_job(job)
+                _persist_terminal_run_history(job, status="error")
                 notify_job(job)
                 return
 
@@ -525,9 +555,12 @@ async def run_pipeline_task(
                 async_worker=async_worker,
                 async_writer=async_writer,
                 async_reviewer=async_reviewer,
+                job_id=job.job_id,
+                run_history_store=run_history,
             )
 
             tracker.write_report(run_dir)
+            _persist_terminal_run_history(job, status="done")
             job.status = "done"
             job.finished_at = time.time()
             save_job(job)
@@ -535,13 +568,16 @@ async def run_pipeline_task(
             notify_job(job)
 
         except JobInteractionTimeout:
+            _persist_terminal_run_history(job, status="error")
             return
         except SourceShortfallAbort as exc:
             logger.warning("Job %s aborted after source shortfall: %s", job.job_id, exc)
             set_job_error(job, str(exc))
+            _persist_terminal_run_history(job, status="error")
         except Exception:
             logger.exception("Pipeline failed for job %s", job.job_id)
             set_job_error(job, "Pipeline failed. Check server logs for details.")
+            _persist_terminal_run_history(job, status="error")
         finally:
             if log_handler is not None:
                 teardown_run_logging(log_handler)
@@ -605,4 +641,5 @@ def apply_optional_pdf_bytes(
         json.dumps(registry, ensure_ascii=False, indent=2),
         encoding="utf-8",
     )
+    run_history.sync_artifacts(job.job_id, job.run_dir)
     return None
