@@ -5,7 +5,9 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import shutil
+import socket
 import time
 import unicodedata
 import zipfile
@@ -58,6 +60,9 @@ class Job:
 
     job_id: str
     status: str = "running"
+    worker_id: str = ""
+    leased_at: float | None = None
+    lease_expires_at: float | None = None
     run_dir: Path = field(default_factory=lambda: Path("."))
     questions: list[dict] | None = None
     answers_event: asyncio.Event = field(default_factory=asyncio.Event)
@@ -82,6 +87,9 @@ class Job:
     optional_pdf_choices: dict[str, str] = field(default_factory=dict)
     fast_track: bool = False
     provider: str = ""
+    current_step: str = ""
+    step_index: int | None = None
+    step_count: int | None = None
     api_key: str = ""
     _sse_event: asyncio.Event = field(default_factory=asyncio.Event)
 
@@ -159,14 +167,30 @@ def notify_job(job: Job) -> None:
 
 def build_status_payload(job: Job) -> dict:
     payload: dict = {"status": job.status}
-    if job.status == "running" and job.tracker is not None:
-        payload["stage"] = job.tracker.get_current_step()
-        with job.tracker._lock:
-            payload["step_index"] = job.tracker.step_index
-            payload["step_count"] = job.tracker.step_count
-            if job.tracker.sub_total > 0:
-                payload["sub_done"] = job.tracker.sub_done
-                payload["sub_total"] = job.tracker.sub_total
+    if job.status == "running":
+        stage = job.current_step
+        if not stage and job.tracker is not None:
+            stage = job.tracker.get_current_step()
+        if stage:
+            payload["stage"] = stage
+
+        if job.step_index is not None:
+            payload["step_index"] = job.step_index
+        elif job.tracker is not None:
+            with job.tracker._lock:
+                payload["step_index"] = job.tracker.step_index
+
+        if job.step_count is not None:
+            payload["step_count"] = job.step_count
+        elif job.tracker is not None:
+            with job.tracker._lock:
+                payload["step_count"] = job.tracker.step_count
+
+        if job.tracker is not None:
+            with job.tracker._lock:
+                if job.tracker.sub_total > 0:
+                    payload["sub_done"] = job.tracker.sub_done
+                    payload["sub_total"] = job.tracker.sub_total
     if job.status == "questions" and job.questions:
         payload["questions"] = job.questions
     if job.status == "optional_pdfs" and job.optional_pdf_items:
@@ -261,6 +285,28 @@ class JobInteractionTimeout(Exception):
     """Raised when a web job waits too long for user interaction."""
 
 
+def _copy_job_state(target: Job, latest: Job) -> None:
+    target.status = latest.status
+    target.worker_id = latest.worker_id
+    target.leased_at = latest.leased_at
+    target.lease_expires_at = latest.lease_expires_at
+    target.questions = latest.questions
+    target.answers = latest.answers
+    target.optional_pdf_items = latest.optional_pdf_items
+    target.optional_pdf_allowed_ids = latest.optional_pdf_allowed_ids
+    target.source_shortfall = latest.source_shortfall
+    target.source_shortfall_decision = latest.source_shortfall_decision
+    target.source_shortfall_added_ids = list(latest.source_shortfall_added_ids)
+    target.error = latest.error
+    target.finished_at = latest.finished_at
+    target.clarification_rounds = list(latest.clarification_rounds)
+    target.optional_pdf_rounds = list(latest.optional_pdf_rounds)
+    target.optional_pdf_choices = dict(latest.optional_pdf_choices)
+    target.current_step = latest.current_step
+    target.step_index = latest.step_index
+    target.step_count = latest.step_count
+
+
 async def async_wait_for_job_signal(
     job: Job,
     event: asyncio.Event,
@@ -270,12 +316,27 @@ async def async_wait_for_job_signal(
     interaction_timeout_seconds_fn=interaction_timeout_seconds,
 ) -> bool:
     wait_seconds = interaction_timeout_seconds_fn() if timeout is None else timeout
-    try:
-        await asyncio.wait_for(event.wait(), timeout=wait_seconds)
-        return True
-    except TimeoutError:
-        set_job_error(job, error_message)
-        return False
+    expected_status = job.status
+    deadline = time.monotonic() + wait_seconds
+    while True:
+        if event.is_set():
+            return True
+
+        latest = jobs.refresh(job.job_id)
+        if latest is not None:
+            _copy_job_state(job, latest)
+            if latest.status != expected_status:
+                return True
+
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            set_job_error(job, error_message)
+            return False
+
+        try:
+            await asyncio.wait_for(event.wait(), timeout=min(1.0, remaining))
+        except TimeoutError:
+            pass
 
 
 def delete_job_artifacts(job_id: str) -> bool:
@@ -335,6 +396,32 @@ def mark_stale_jobs_on_startup() -> int:
     if count:
         logger.warning("Marked %d stale active job(s) as failed on startup", count)
     return count
+
+
+def build_job_extra_prompt(job: Job) -> str | None:
+    extra_prompt = job.submit_prompt.strip() or None
+    if job.target_words is not None and job.target_words > 0:
+        words_line = f"Target word count: {job.target_words} words."
+        extra_prompt = f"{words_line}\n{extra_prompt}" if extra_prompt else words_line
+    if job.academic_level:
+        level_line = f"Academic level: {job.academic_level}."
+        extra_prompt = f"{level_line}\n{extra_prompt}" if extra_prompt else level_line
+    return extra_prompt
+
+
+def infer_job_upload_dirs(job: Job) -> tuple[Path | None, Path | None]:
+    upload_dir = job.run_dir / "uploads"
+    user_sources_dir = job.run_dir / "user_sources"
+    return (
+        upload_dir if upload_dir.exists() and any(upload_dir.iterdir()) else None,
+        user_sources_dir
+        if user_sources_dir.exists() and any(user_sources_dir.iterdir())
+        else None,
+    )
+
+
+def worker_identity() -> str:
+    return f"{socket.gethostname()}:{os.getpid()}"
 
 
 async def run_pipeline_task(
@@ -406,7 +493,16 @@ async def run_pipeline_task(
 
             tracker = TokenTracker()
             job.tracker = tracker
-            tracker.set_on_progress(lambda: notify_job(job))
+
+            def _on_progress() -> None:
+                job.current_step = tracker.get_current_step() or ""
+                with tracker._lock:
+                    job.step_index = tracker.step_index
+                    job.step_count = tracker.step_count
+                save_job(job)
+                notify_job(job)
+
+            tracker.set_on_progress(_on_progress)
             save_job(job)
 
             async def _on_questions(
@@ -598,6 +694,9 @@ async def run_pipeline_task(
             tracker.write_report(run_dir)
             _persist_terminal_run_history(job, status="done")
             job.status = "done"
+            job.current_step = ""
+            job.step_index = None
+            job.step_count = None
             job.finished_at = time.time()
             save_job(job)
             logger.info("Job %s completed successfully", job.job_id)

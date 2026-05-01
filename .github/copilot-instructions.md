@@ -21,6 +21,9 @@ git config core.hooksPath .githooks
 # Run the web UI
 uv run uvicorn src.web:app --reload
 
+# Run the background worker
+uv run python -m src.worker
+
 # Docker
 docker build -t essay-writer .
 docker run -p 8000:8000 --env-file .env essay-writer
@@ -35,6 +38,8 @@ uv run python -c "from src.agent import create_client, _retry_with_backoff"
 ## Architecture
 
 Deterministic Python pipeline for academic essay writing using the OpenAI SDK + Instructor rather than a deepagents/LangGraph orchestration layer. Produces academic essays as formatted `.docx` files in the language specified by the assignment brief (defaults to Greek). The orchestration entrypoint in `src/pipeline.py` delegates to focused helper modules: shared execution helpers in `src/pipeline_support.py`, source-processing steps in `src/pipeline_sources.py`, and writing/export steps in `src/pipeline_writing.py`. Three LLM model roles — **worker**, **writer**, and **reviewer** — perform the language tasks.
+
+The web process (`src/web.py`) no longer runs the pipeline inline. It persists submitted jobs as queued rows in `web_jobs`. The background worker process (`src/worker.py`) claims jobs with a DB lease, renews that lease while running, and executes the existing pipeline callbacks. SSE and history endpoints must therefore rely on persisted DB state rather than process-local task ownership.
 
 ### Flow
 
@@ -128,6 +133,10 @@ No `default.yaml` exists; field defaults in `settings.py` are canonical.
 
 **Database-backed web state** — `database.url` in `config/settings.py` controls the SQL store used for web job state. Phase 1 defaults to a repo-local SQLite file for development/tests, but production should set `ESSAY_WRITER_DATABASE__URL` to Postgres. This persistence layer stores web job status, interaction payloads, UI history, runtime summaries, per-step metrics, and artifact metadata; run artifacts themselves still remain on the local run directory for now. Schema changes are managed via Alembic migrations; do not recreate tables from application startup code. For older local databases created before Alembic support, `uv run python scripts/db_upgrade_local.py` is the safe one-time upgrade path: it backs up existing `web_jobs` rows, recreates the table through Alembic, and restores those rows. Do not use `alembic stamp head` unless the pre-existing schema has been verified to match the migration exactly.
 
+**Worker/web filesystem constraint** — Postgres now stores queue state, interactions, history, metrics, and artifact metadata, but the actual run files (`.docx`, markdown, uploads, extracted text, ZIP contents) still live on the local filesystem under each run directory. A separate web process and worker process are safe only when they share that filesystem. Do not assume the current implementation supports multi-host execution without adding shared artifact storage first.
+
+**Current deployment shape** — `scripts/start_web_and_worker.sh` starts both `uvicorn src.web:app` and `python -m src.worker` in the same container. Keep Render/Docker aligned with that single-container shape until artifact storage is moved off the local filesystem.
+
 **Google credentials** — for the direct Google provider path, `GOOGLE_API_KEY` may be either a classic Gemini Developer API key or a Vertex AI `AQ.` API key. The web UI's explicit credential field also accepts pasted Vertex service-account JSON. `AQ.` keys must have `GOOGLE_CLOUD_PROJECT` and `GOOGLE_CLOUD_LOCATION` set so `src/agent.py` can route the request through the Vertex provider alias. For pasted service-account JSON, `src/agent.py` may use the JSON `project_id` when `GOOGLE_CLOUD_PROJECT` is unset, but `GOOGLE_CLOUD_LOCATION` is still required. When `AI_BASE_URL` is set, model calls use the gateway credentials instead of direct Google credential autodetection.
 
 **Proxy credentials** — `search.proxy_prefix`, `search.proxy_username`, and `search.proxy_password` default to empty strings in code. Provide proxy access only through environment configuration such as `ESSAY_WRITER_SEARCH__PROXY_PREFIX`, `ESSAY_WRITER_SEARCH__PROXY_USERNAME`, and `ESSAY_WRITER_SEARCH__PROXY_PASSWORD`.
@@ -181,4 +190,4 @@ Place test assignment directories under `examples/`. Each subdirectory is a self
 
 - **SSE (`/stream/{job_id}`)** — the primary status channel. The server holds a long-lived `text/event-stream` connection and pushes `data: {JSON}\n\n` events whenever persisted job state or local pipeline progress changes. The client uses the native `EventSource` API which handles automatic reconnection. `_notify_job(job)` sets a process-local `asyncio.Event` on each state transition; the SSE generator wakes on that signal or after a 2-second timeout (to catch stage changes within `running`). Terminal states (`done`, `error`, `gone`) close the generator so `EventSource` does not reconnect.
 - **Download lifecycle** — `GET /download/{job_id}` returns the ZIP without deleting it so interrupted transfers can retry safely. The browser UI follows that with `POST /download/{job_id}/cleanup` after it has received the blob, which deletes the temp directory and removes the persisted job row. Jobs that finish (`done` or `error`) but are never cleaned up are removed automatically after a TTL (default 24h). Optional environment variables: `ESSAY_WEB_JOB_TTL_SECONDS` (default `86400`, use `0` to disable TTL cleanup only), `ESSAY_WEB_JOB_SWEEP_INTERVAL_SECONDS` (default `300`, minimum `60` between sweeps), and `ESSAY_WEB_INTERACTION_TIMEOUT_SECONDS` (default `1800`) for paused `questions` / `optional_pdfs` waits before the job fails.
-- **Startup recovery** — phase 1 does not resume in-flight work across process restarts. On startup, any persisted active jobs (`running`, `questions`, `optional_pdfs`, `source_shortfall`) are marked failed with a restart message so the UI sees a deterministic terminal state.
+- **Worker lease recovery** — queued and active jobs are owned by workers via `worker_id`, `leased_at`, and `lease_expires_at` in `web_jobs`. If a worker dies, another worker may reclaim jobs whose lease expired. The web process should not mark active jobs failed on startup just because it restarted.

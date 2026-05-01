@@ -22,6 +22,9 @@ _DEFAULT_DATABASE_URL = f"sqlite+pysqlite:///{_PROJECT_ROOT / '.essay_writer_job
 _DEFAULT_JOB_TTL_SECONDS = 86_400
 _DEFAULT_JOB_SWEEP_INTERVAL_SECONDS = 300
 _DEFAULT_INTERACTION_TIMEOUT_SECONDS = 1_800
+_DEFAULT_WORKER_POLL_INTERVAL_SECONDS = 2
+_DEFAULT_WORKER_LEASE_SECONDS = 60
+_DEFAULT_WORKER_HEARTBEAT_INTERVAL_SECONDS = 15
 
 
 def _alias_choices(*names: str) -> AliasChoices:
@@ -299,6 +302,30 @@ class EssayWriterConfig(BaseSettings):
             "ESSAY_WEB_LOG_FORMAT",
             "ESSAY_WRITER_WEB_LOG_FORMAT",
         ),
+    )
+    worker_poll_interval_seconds: int = Field(
+        default=_DEFAULT_WORKER_POLL_INTERVAL_SECONDS,
+        validation_alias=_alias_choices(
+            "ESSAY_WORKER_POLL_INTERVAL_SECONDS",
+            "ESSAY_WRITER_WORKER_POLL_INTERVAL_SECONDS",
+        ),
+        ge=1,
+    )
+    worker_lease_seconds: int = Field(
+        default=_DEFAULT_WORKER_LEASE_SECONDS,
+        validation_alias=_alias_choices(
+            "ESSAY_WORKER_LEASE_SECONDS",
+            "ESSAY_WRITER_WORKER_LEASE_SECONDS",
+        ),
+        ge=5,
+    )
+    worker_heartbeat_interval_seconds: int = Field(
+        default=_DEFAULT_WORKER_HEARTBEAT_INTERVAL_SECONDS,
+        validation_alias=_alias_choices(
+            "ESSAY_WORKER_HEARTBEAT_INTERVAL_SECONDS",
+            "ESSAY_WRITER_WORKER_HEARTBEAT_INTERVAL_SECONDS",
+        ),
+        ge=1,
     )
 
     @field_validator(

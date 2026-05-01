@@ -46,11 +46,16 @@ git config core.hooksPath .githooks
 
 # Run the web UI
 uv run uvicorn src.web:app --reload
+
+# Run the background worker in a second terminal
+uv run python -m src.worker
 ```
 
 Open http://localhost:8000. Upload assignment files, optionally upload your own reference sources, enter a prompt, set a target word count, and download the result as a ZIP.
 
-The browser UI downloads the ZIP first and then asks the server to clean up that completed job, which keeps failed or interrupted transfers retryable. Web job state is now stored in a SQL database: local development defaults to a SQLite file in the repo, while production should set `ESSAY_WRITER_DATABASE__URL` to Postgres. Jobs that are never cleaned up are removed after **24 hours** by default (database row plus temp directory). Override with `ESSAY_WEB_JOB_TTL_SECONDS` (seconds; set to `0` to disable only this automatic cleanup). Sweeps run every **300** seconds by default (`ESSAY_WEB_JOB_SWEEP_INTERVAL_SECONDS`, not below **60**). If a job is waiting on clarification answers or optional PDF input, it times out after **1800** seconds by default (`ESSAY_WEB_INTERACTION_TIMEOUT_SECONDS`). On startup, previously active jobs are marked failed so the UI sees a deterministic terminal state after a restart.
+The web process now enqueues jobs into the SQL store and the worker process claims them for execution. The browser UI downloads the ZIP first and then asks the server to clean up that completed job, which keeps failed or interrupted transfers retryable. Web job state is stored in a SQL database: local development defaults to a SQLite file in the repo, while production should set `ESSAY_WRITER_DATABASE__URL` to Postgres. Jobs that are never cleaned up are removed after **24 hours** by default (database row plus temp directory). Override with `ESSAY_WEB_JOB_TTL_SECONDS` (seconds; set to `0` to disable only this automatic cleanup). Sweeps run every **300** seconds by default (`ESSAY_WEB_JOB_SWEEP_INTERVAL_SECONDS`, not below **60**). If a job is waiting on clarification answers or optional PDF input, it times out after **1800** seconds by default (`ESSAY_WEB_INTERACTION_TIMEOUT_SECONDS`). Worker ownership is lease-based, so a different worker can reclaim a stuck job after the lease expires.
+
+For now, Postgres stores job state and history, but run artifacts still live on the local filesystem. That means the web process and worker process must share the same run directory filesystem unless you add shared object/file storage for artifacts.
 
 Source handling is intentionally staged: the system first builds a broad candidate pool, then applies a cheap deterministic metadata pretrim using weighted title overlap, abstract overlap, citations, and direct-PDF availability to cap the scoring pool to roughly `target_sources × 5`. It then runs the title+abstract LLM triage pass on that shortlist before fetching/extracting the final selected set. The final selected set is usable-only; if the usable pool is smaller than the original target, the writer and reviewer prompts are capped to the actually available selected sources.
 
@@ -89,6 +94,10 @@ The repo includes a `render.yaml` Blueprint for one-click deployment to [Render]
 2. Apply the Blueprint (or create a Web Service pointing at the Dockerfile).
 3. Set the required environment variables. For direct Google provider usage, `GOOGLE_API_KEY` can be either a classic Gemini Developer API key or a Vertex AI `AQ.` key. Vertex AI keys also require `GOOGLE_CLOUD_PROJECT` and `GOOGLE_CLOUD_LOCATION`. Optionally set `SEMANTIC_SCHOLAR_API_KEY`.
 4. Set `ESSAY_WRITER_DATABASE__URL` to your Postgres connection string in production. If unset, the web layer falls back to a local SQLite file, which is suitable only for local development and tests.
+
+The current Render deployment keeps the web app and background worker inside the same Docker service. That is intentional: the queue state lives in Postgres, but run artifacts still live on the local filesystem, so both processes must share the same container filesystem.
+
+If you later deploy web and worker as separate Render services on different filesystems, you also need shared artifact storage because `.docx`, markdown, uploads, and other run files are still written locally.
 
 The service exposes the web UI on the port assigned by Render. Optional: set `ESSAY_WEB_JOB_TTL_SECONDS` / `ESSAY_WEB_JOB_SWEEP_INTERVAL_SECONDS` if you need different retention for undownloaded jobs.
 

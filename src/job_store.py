@@ -32,6 +32,9 @@ _jobs_table = Table(
     _metadata,
     Column("job_id", String(32), primary_key=True),
     Column("status", String(32), nullable=False),
+    Column("worker_id", Text, nullable=True),
+    Column("leased_at", Float, nullable=True),
+    Column("lease_expires_at", Float, nullable=True),
     Column("run_dir", Text, nullable=False),
     Column("questions", JSON, nullable=True),
     Column("answers", Text, nullable=False, default=""),
@@ -52,6 +55,9 @@ _jobs_table = Table(
     Column("optional_pdf_choices", JSON, nullable=False, default=dict),
     Column("fast_track", Boolean, nullable=False, default=False),
     Column("provider", Text, nullable=False, default=""),
+    Column("current_step", Text, nullable=False, default=""),
+    Column("step_index", Integer, nullable=True),
+    Column("step_count", Integer, nullable=True),
 )
 
 
@@ -118,6 +124,9 @@ class JobStore:
         return {
             "job_id": job.job_id,
             "status": job.status,
+            "worker_id": job.worker_id or None,
+            "leased_at": job.leased_at,
+            "lease_expires_at": job.lease_expires_at,
             "run_dir": str(job.run_dir),
             "questions": job.questions,
             "answers": job.answers,
@@ -140,6 +149,9 @@ class JobStore:
             "optional_pdf_choices": dict(job.optional_pdf_choices),
             "fast_track": job.fast_track,
             "provider": job.provider,
+            "current_step": job.current_step,
+            "step_index": job.step_index,
+            "step_count": job.step_count,
         }
 
     def _hydrate_job(self, row: RowMapping) -> Job:
@@ -149,6 +161,15 @@ class JobStore:
         return Job(
             job_id=row["job_id"],
             status=row["status"],
+            worker_id=row["worker_id"] or "",
+            leased_at=(
+                float(row["leased_at"]) if row["leased_at"] is not None else None
+            ),
+            lease_expires_at=(
+                float(row["lease_expires_at"])
+                if row["lease_expires_at"] is not None
+                else None
+            ),
             run_dir=Path(row["run_dir"]),
             questions=row["questions"],
             answers_event=transient.answers_event,
@@ -177,6 +198,9 @@ class JobStore:
             optional_pdf_choices=dict(row["optional_pdf_choices"] or {}),
             fast_track=bool(row["fast_track"]),
             provider=row["provider"] or "",
+            current_step=row.get("current_step") or "",
+            step_index=row.get("step_index"),
+            step_count=row.get("step_count"),
             _sse_event=transient.sse_event,
         )
 
@@ -201,6 +225,9 @@ class JobStore:
         live_job = self._live_jobs.get(job_id)
         if live_job is not None:
             return live_job
+        return self.refresh(job_id, default=default)
+
+    def refresh(self, job_id: str, default: Job | None = None) -> Job | None:
         with self._session() as session:
             row = (
                 session.execute(
@@ -214,6 +241,113 @@ class JobStore:
         job = self._hydrate_job(row)
         self._live_jobs[job_id] = job
         return job
+
+    def claim_next_job(
+        self,
+        *,
+        worker_id: str,
+        lease_seconds: int,
+        current_time: float | None = None,
+    ) -> Job | None:
+        now = time.time() if current_time is None else current_time
+        lease_expires_at = now + lease_seconds
+        reclaimable_statuses = (
+            "running",
+            "questions",
+            "optional_pdfs",
+            "source_shortfall",
+        )
+
+        with self._session() as session:
+            candidate_ids = (
+                session.execute(
+                    select(_jobs_table.c.job_id)
+                    .where(
+                        (_jobs_table.c.status == "pending")
+                        | (
+                            _jobs_table.c.status.in_(reclaimable_statuses)
+                            & (
+                                _jobs_table.c.lease_expires_at.is_(None)
+                                | (_jobs_table.c.lease_expires_at < now)
+                            )
+                        )
+                    )
+                    .order_by(_jobs_table.c.created_at.asc())
+                )
+                .scalars()
+                .all()
+            )
+
+            for job_id in candidate_ids:
+                result = session.execute(
+                    update(_jobs_table)
+                    .where(_jobs_table.c.job_id == job_id)
+                    .where(
+                        (
+                            (_jobs_table.c.status == "pending")
+                            & (
+                                _jobs_table.c.worker_id.is_(None)
+                                | _jobs_table.c.lease_expires_at.is_(None)
+                                | (_jobs_table.c.lease_expires_at < now)
+                            )
+                        )
+                        | (
+                            _jobs_table.c.status.in_(reclaimable_statuses)
+                            & (
+                                _jobs_table.c.lease_expires_at.is_(None)
+                                | (_jobs_table.c.lease_expires_at < now)
+                            )
+                        )
+                    )
+                    .values(
+                        worker_id=worker_id,
+                        leased_at=now,
+                        lease_expires_at=lease_expires_at,
+                    )
+                )
+                if result.rowcount == 1:
+                    session.commit()
+                    return self.refresh(job_id)
+            session.rollback()
+        return None
+
+    def renew_lease(
+        self,
+        job_id: str,
+        *,
+        worker_id: str,
+        lease_seconds: int,
+        current_time: float | None = None,
+    ) -> bool:
+        now = time.time() if current_time is None else current_time
+        with self._session() as session:
+            result = session.execute(
+                update(_jobs_table)
+                .where(_jobs_table.c.job_id == job_id)
+                .where(_jobs_table.c.worker_id == worker_id)
+                .values(
+                    leased_at=now,
+                    lease_expires_at=now + lease_seconds,
+                )
+            )
+            session.commit()
+        return result.rowcount == 1
+
+    def release_claim(self, job_id: str, *, worker_id: str) -> bool:
+        with self._session() as session:
+            result = session.execute(
+                update(_jobs_table)
+                .where(_jobs_table.c.job_id == job_id)
+                .where(_jobs_table.c.worker_id == worker_id)
+                .values(
+                    worker_id=None,
+                    leased_at=None,
+                    lease_expires_at=None,
+                )
+            )
+            session.commit()
+        self._live_jobs.pop(job_id, None)
+        return result.rowcount == 1
 
     def __getitem__(self, job_id: str) -> Job:
         job = self.get(job_id)

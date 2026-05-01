@@ -1,6 +1,8 @@
 # Render Blueprint: https://render.com/docs/infrastructure-as-code
 # After connecting this repo, use "Apply" from the Blueprint or create a Web Service
-# that uses this file.
+# that uses this file. The Docker entrypoint starts both the web app and the
+# background worker in the same service because run artifacts still live on the
+# local filesystem.
 
 services:
   - type: web
@@ -13,6 +15,8 @@ services:
       - key: GOOGLE_API_KEY
         sync: false
       - key: SEMANTIC_SCHOLAR_API_KEY
+        sync: false
+      - key: ESSAY_WRITER_DATABASE__URL
         sync: false
       # Optional: undownloaded finished jobs are deleted after this many seconds (default 86400).
       # - key: ESSAY_WEB_JOB_TTL_SECONDS

@@ -38,6 +38,7 @@ _jobs = web_jobs.jobs
 _save_job = web_jobs.save_job
 _notify_job = web_jobs.notify_job
 _build_status_payload = web_jobs.build_status_payload
+_refresh_job = web_jobs.jobs.refresh
 job_ttl_sweep_once = web_jobs.job_ttl_sweep_once
 
 
@@ -70,7 +71,6 @@ async def _run_pipeline_task(
 async def _lifespan(app: FastAPI):
     configure_web_logging()
     logger.info("Web application logging configured")
-    web_jobs.mark_stale_jobs_on_startup()
     web_jobs.start_job_ttl_sweeper()
     yield
     close_http_clients()
@@ -124,7 +124,7 @@ async def history_job_detail(
     if available_artifacts_only:
         artifacts = [item for item in artifacts if item["is_available"]]
 
-    live_job = _jobs.get(job_id)
+    live_job = _refresh_job(job_id)
     if summary is None and not steps and not artifacts and live_job is None:
         return JSONResponse({"error": "Job not found"}, status_code=404)
 
@@ -159,7 +159,7 @@ async def submit(
     files: list[UploadFile] = [],  # noqa: B006
     sources: list[UploadFile] = [],  # noqa: B006
 ):
-    """Accept form data, start the pipeline as a background task."""
+    """Accept form data, persist a queued job, and return immediately."""
     job_id = uuid.uuid4().hex[:12]
 
     run_dir = Path(tempfile.mkdtemp(prefix=_run_dir_prefix()))
@@ -180,6 +180,7 @@ async def submit(
 
     job = Job(
         job_id=job_id,
+        status="pending",
         run_dir=run_dir,
         academic_level=academic_level.strip(),
         submit_prompt=prompt.strip(),
@@ -227,22 +228,8 @@ async def submit(
     if upload_dir is not None or user_sources_dir is not None:
         run_history.sync_artifacts(job_id, run_dir)
 
-    extra_prompt = prompt.strip() or None
-    if target_words and target_words > 0:
-        words_line = f"Target word count: {target_words} words."
-        extra_prompt = f"{words_line}\n{extra_prompt}" if extra_prompt else words_line
-    if academic_level:
-        level_line = f"Academic level: {academic_level}."
-        extra_prompt = f"{level_line}\n{extra_prompt}" if extra_prompt else level_line
-
-    asyncio.create_task(
-        _run_pipeline_task(
-            job, upload_dir, extra_prompt, min_sources_value, user_sources_dir
-        )
-    )
-
     with run_id_context(job_id):
-        logger.info("Job %s background task started", job_id)
+        logger.info("Job %s queued for worker execution", job_id)
 
     return JSONResponse({"job_id": job_id})
 
@@ -255,7 +242,7 @@ async def stream(job_id: str):
     """Server-Sent Events stream for real-time job status updates."""
 
     async def generate():
-        job = _jobs.get(job_id)
+        job = _refresh_job(job_id)
         if job is None:
             yield f"data: {json.dumps({'status': 'gone'})}\n\n"
             return
@@ -269,7 +256,7 @@ async def stream(job_id: str):
             return
 
         while True:
-            job = _jobs.get(job_id)
+            job = _refresh_job(job_id)
             if job is None:
                 yield f"data: {json.dumps({'status': 'gone'})}\n\n"
                 return
@@ -281,7 +268,7 @@ async def stream(job_id: str):
                 pass
             job._sse_event.clear()
 
-            job = _jobs.get(job_id)
+            job = _refresh_job(job_id)
             if job is None:
                 yield f"data: {json.dumps({'status': 'gone'})}\n\n"
                 return
@@ -309,7 +296,7 @@ async def stream(job_id: str):
 @app.post("/answer/{job_id}")
 async def answer(job_id: str, answers: str = Form("")):
     """Submit answers to validation questions, unblock the pipeline thread."""
-    job = _jobs.get(job_id)
+    job = _refresh_job(job_id)
     if not job:
         return JSONResponse({"error": "Job not found"}, status_code=404)
     if job.status != "questions":
@@ -340,7 +327,7 @@ async def optional_pdf_upload(
     file: UploadFile | None = None,
 ):
     """Attach a user PDF (file upload or http(s) URL) to a registry source."""
-    job = _jobs.get(job_id)
+    job = _refresh_job(job_id)
     if not job:
         return JSONResponse({"error": "Job not found"}, status_code=404)
     if job.status != "optional_pdfs":
@@ -391,7 +378,7 @@ async def optional_pdf_upload(
 @app.post("/optional-pdf/{job_id}/done")
 async def optional_pdf_done(job_id: str):
     """Continue the pipeline after optional PDF uploads (or skip)."""
-    job = _jobs.get(job_id)
+    job = _refresh_job(job_id)
     if not job:
         return JSONResponse({"error": "Job not found"}, status_code=404)
     if job.status != "optional_pdfs":
@@ -418,7 +405,7 @@ async def source_shortfall_decision(
     *added_ids* is an optional JSON array of source IDs the user picked from
     the borderline candidates list.
     """
-    job = _jobs.get(job_id)
+    job = _refresh_job(job_id)
     if not job:
         return JSONResponse({"error": "Job not found"}, status_code=404)
     if job.status != "source_shortfall":
@@ -463,7 +450,7 @@ async def source_shortfall_decision(
 @app.get("/download/{job_id}")
 async def download(job_id: str, format: str | None = Query(None)):
     """Return the result zip or just the docx."""
-    job = _jobs.get(job_id)
+    job = _refresh_job(job_id)
     if not job:
         return JSONResponse({"error": "Job not found"}, status_code=404)
     if job.status != "done":
@@ -511,7 +498,7 @@ async def download(job_id: str, format: str | None = Query(None)):
 @app.post("/download/{job_id}/cleanup")
 async def cleanup_download(job_id: str):
     """Delete a completed job after the client has received the ZIP."""
-    job = _jobs.get(job_id)
+    job = _refresh_job(job_id)
     if not job:
         return JSONResponse({"error": "Job not found"}, status_code=404)
     if job.status != "done":

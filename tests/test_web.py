@@ -18,6 +18,7 @@ from src.web import (
     _jobs,
     _notify_job,
     _run_pipeline_task,
+    _save_job,
     app,
     job_ttl_sweep_once,
 )
@@ -249,28 +250,22 @@ def test_submit_uses_timestamped_run_dir_prefix(tmp_path, monkeypatch):
         created_dir.mkdir()
         return str(created_dir)
 
-    def fake_create_task(coro):
-        captured["task_created"] = True
-        coro.close()
-        return MagicMock()
-
     monkeypatch.setattr("src.web.uuid.uuid4", lambda: _Uuid())
     monkeypatch.setattr("src.web.tempfile.mkdtemp", fake_mkdtemp)
-    monkeypatch.setattr("src.web.asyncio.create_task", fake_create_task)
 
     response = client.post("/submit", data={"prompt": "Test prompt"})
 
     assert response.status_code == 200
     assert response.json() == {"job_id": "abcdef123456"}
-    assert captured["task_created"] is True
     assert re.fullmatch(r"essay_\d{8}_\d{6}_\d{6}_", str(captured["prefix"]))
     assert "abcdef123456" not in str(captured["prefix"])
 
     job = _jobs.pop("abcdef123456")
     assert job.run_dir == created_dir
+    assert job.status == "pending"
 
 
-def test_submit_adds_running_job_to_history_before_background_finishes(
+def test_submit_adds_pending_job_to_history_before_worker_claims_it(
     tmp_path, monkeypatch
 ):
     from src.run_history_store import run_history
@@ -284,13 +279,8 @@ def test_submit_adds_running_job_to_history_before_background_finishes(
         created_dir.mkdir()
         return str(created_dir)
 
-    def fake_create_task(coro):
-        coro.close()
-        return MagicMock()
-
     monkeypatch.setattr("src.web.uuid.uuid4", lambda: _Uuid())
     monkeypatch.setattr("src.web.tempfile.mkdtemp", fake_mkdtemp)
-    monkeypatch.setattr("src.web.asyncio.create_task", fake_create_task)
 
     response = client.post(
         "/submit",
@@ -304,11 +294,11 @@ def test_submit_adds_running_job_to_history_before_background_finishes(
     history = client.get("/history/jobs").json()["jobs"]
 
     assert summary is not None
-    assert summary["status"] == "running"
+    assert summary["status"] == "pending"
     assert summary["provider"] == "openai"
     assert summary["target_words"] == 1200
     assert any(
-        item["job_id"] == job_id and item["status"] == "running" for item in history
+        item["job_id"] == job_id and item["status"] == "pending" for item in history
     )
 
     _jobs.pop(job_id, None)
@@ -328,13 +318,8 @@ def test_submit_tracks_uploaded_artifacts_before_background_finishes(
         created_dir.mkdir()
         return str(created_dir)
 
-    def fake_create_task(coro):
-        coro.close()
-        return MagicMock()
-
     monkeypatch.setattr("src.web.uuid.uuid4", lambda: _Uuid())
     monkeypatch.setattr("src.web.tempfile.mkdtemp", fake_mkdtemp)
-    monkeypatch.setattr("src.web.asyncio.create_task", fake_create_task)
 
     response = client.post(
         "/submit",
@@ -974,6 +959,7 @@ def test_stream_sse_notify_sends_update(tmp_path):
     # Transition to done
     job.status = "done"
     job.finished_at = time.time()
+    _save_job(job)
     _notify_job(job)
 
     t.join(timeout=5)

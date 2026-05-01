@@ -22,8 +22,11 @@ git config core.hooksPath .githooks
 
 # Run the web UI
 uv run uvicorn src.web:app --reload
+# Run the background worker in a second terminal/process
+uv run python -m src.worker
 # Web: optional ESSAY_WEB_JOB_TTL_SECONDS (default 86400, 0=disable stale-job sweeps), ESSAY_WEB_JOB_SWEEP_INTERVAL_SECONDS, ESSAY_WEB_INTERACTION_TIMEOUT_SECONDS (default 1800)
 # Web DB: ESSAY_WRITER_DATABASE__URL (production Postgres; local dev falls back to repo SQLite). Stores job state plus runtime summaries, step metrics, and artifact metadata; file bytes remain local.
+# Worker/web split: both processes must use the same DB and share the local run-artifact filesystem.
 # Optional PDF prompt: ESSAY_WRITER_SEARCH__OPTIONAL_PDF_PROMPT_TOP_N (default 5, 0=off), ESSAY_WRITER_SEARCH__OPTIONAL_PDF_MIN_BODY_WORDS
 # Source filtering: ESSAY_WRITER_SEARCH__TRIAGE_BATCH_SIZE (default 50), ESSAY_WRITER_SEARCH__MIN_RELEVANCE_SCORE (default 3)
 # Institutional proxy: ESSAY_WRITER_SEARCH__PROXY_PREFIX (e.g. 'https://login.proxy.eap.gr/login?url=')
@@ -46,3 +49,7 @@ uv run python -c "from src.agent import create_client, retry_with_backoff"
 ## Documentation Sync
 
 See `.github/instructions/documentation-sync.instructions.md`. On important changes, review CLAUDE.md, README.md, and `.github/copilot-instructions.md` together.
+
+## Deployment Note
+
+The current Render/Docker deployment starts both the web app and the worker in the same container via `scripts/start_web_and_worker.sh`, because run artifacts still live on the local filesystem and must be visible to both processes.
