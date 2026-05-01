@@ -34,6 +34,13 @@ AI-powered academic essay generator for Greek university students. Uses a determ
 # Install dependencies
 uv sync
 
+# Apply database migrations
+# Existing local DB from before Alembic: back up or remove the old web_jobs table first
+uv run alembic upgrade head
+
+# One-time local upgrade helper for pre-Alembic Postgres DBs
+uv run python scripts/db_upgrade_local.py
+
 # Enable the repo-managed pre-push hook once per clone
 git config core.hooksPath .githooks
 
@@ -90,6 +97,10 @@ The service exposes the web UI on the port assigned by Render. Optional: set `ES
 Default settings are defined in `config/settings.py`. Override them with environment variables using the `ESSAY_WRITER_` prefix. `EssayWriterConfig` also reads the repo-root `.env`, including direct provider variables such as `GOOGLE_API_KEY`, `GOOGLE_CLOUD_PROJECT`, `GOOGLE_CLOUD_LOCATION`, `AI_BASE_URL`, and `AI_API_KEY`, so the runtime no longer depends on ad hoc `os.environ` reads or entrypoint-specific dotenv loading.
 
 The web layer database URL lives at `ESSAY_WRITER_DATABASE__URL`. Phase 1 of persistence stores web job state and metadata in SQL while still keeping run artifacts (`.md`, `.docx`, uploaded files, logs) on the local run directory.
+
+Database schema changes are managed through Alembic. Run `uv run alembic upgrade head` before starting the app in a fresh environment or after pulling schema changes.
+
+If your local Postgres database was created before Alembic support and already contains a `web_jobs` table, use `uv run python scripts/db_upgrade_local.py` for the one-time upgrade path. It backs up existing `web_jobs` rows, recreates the table through Alembic, and restores the saved rows. Avoid `alembic stamp head` unless you have verified that the existing schema matches the migration exactly.
 
 PDF proxy credentials are no longer hardcoded in code. Set `ESSAY_WRITER_SEARCH__PROXY_PREFIX`, `ESSAY_WRITER_SEARCH__PROXY_USERNAME`, and `ESSAY_WRITER_SEARCH__PROXY_PASSWORD` in `.env` or the deployment environment when proxy access is needed.
 

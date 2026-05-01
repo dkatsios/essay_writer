@@ -10,6 +10,13 @@ For full architecture, conventions, and invariants, see `.github/copilot-instruc
 # Install dependencies
 uv sync
 
+# Apply database migrations
+# Existing local DB from before Alembic: back up or remove the old web_jobs table first
+uv run alembic upgrade head
+
+# One-time local upgrade helper for pre-Alembic Postgres DBs
+uv run python scripts/db_upgrade_local.py
+
 # Enable the repo-managed pre-push hook once per clone
 git config core.hooksPath .githooks
 

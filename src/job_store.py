@@ -93,7 +93,6 @@ class JobStore:
             echo=config.database.echo,
             connect_args=connect_args,
         )
-        _metadata.create_all(self._engine)
         self._engine_url = url
         self._session_factory = sessionmaker(
             bind=self._engine,
