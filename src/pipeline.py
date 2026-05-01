@@ -24,6 +24,7 @@ from src.pipeline_support import (
     load_checkpoint,
     parse_sections,
     read_text,
+    sync_artifacts_snapshot,
     write_json,
 )
 from src.pipeline_writing import (
@@ -232,6 +233,7 @@ async def run_pipeline(
             brief.model_dump_json(indent=2, ensure_ascii=False),
             encoding="utf-8",
         )
+        sync_artifacts_snapshot(ctx)
 
     await execute(
         [PipelineStep("validate", _do_validate)],
@@ -290,6 +292,7 @@ async def run_pipeline(
         brief.model_dump_json(indent=2, ensure_ascii=False),
         encoding="utf-8",
     )
+    sync_artifacts_snapshot(ctx)
     ctx.brief = brief
 
     logger.info(

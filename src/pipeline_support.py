@@ -128,7 +128,13 @@ def _persist_step_history(
         )
         ctx.run_history_store.save_step_metric(ctx.job_id, step_name, **payload)
     if status == "completed":
-        ctx.run_history_store.sync_artifacts(ctx.job_id, ctx.run_dir)
+        sync_artifacts_snapshot(ctx)
+
+
+def sync_artifacts_snapshot(ctx: PipelineContext) -> None:
+    if ctx.job_id is None or ctx.run_history_store is None:
+        return
+    ctx.run_history_store.sync_artifacts(ctx.job_id, ctx.run_dir)
 
 
 async def execute(

@@ -89,6 +89,10 @@ class Job:
 jobs = JobStore()
 
 
+def _sync_job_artifacts(job: Job, run_dir: Path | None = None) -> None:
+    run_history.sync_artifacts(job.job_id, run_dir or job.run_dir)
+
+
 def _persist_run_history_snapshot(job: Job) -> None:
     tracker = job.tracker
     if tracker is not None and hasattr(tracker, "build_runtime_summary"):
@@ -111,7 +115,7 @@ def _persist_run_history_snapshot(job: Job) -> None:
             "draft_words": 0,
             "final_words": 0,
         }
-    if payload.get("target_words") is None and job.target_words is not None:
+    if job.target_words is not None and not payload.get("target_words"):
         payload["target_words"] = job.target_words
     run_history.save_runtime_summary(job.job_id, **payload)
 
@@ -139,7 +143,7 @@ def _persist_terminal_run_history(job: Job, *, status: str) -> None:
             "final_words": 0,
         }
     run_history.save_runtime_summary(job.job_id, **payload)
-    run_history.sync_artifacts(job.job_id, job.run_dir)
+    _sync_job_artifacts(job)
 
 
 def save_job(job: Job) -> Job:
@@ -390,6 +394,7 @@ async def run_pipeline_task(
                 return
 
             (input_dir / "extracted.md").write_text(extracted_text, encoding="utf-8")
+            _sync_job_artifacts(job, run_dir)
 
             api_key = job.api_key or None
             job.api_key = ""
@@ -519,6 +524,7 @@ async def run_pipeline_task(
                 )
                 job.optional_pdf_event.clear()
                 job.status = "optional_pdfs"
+                _sync_job_artifacts(job, run_path)
                 save_job(job)
                 logger.info(
                     "Job %s waiting for optional PDFs for %d source(s)",
@@ -546,6 +552,7 @@ async def run_pipeline_task(
                 job.source_shortfall_added_ids = []
                 job.source_shortfall_event.clear()
                 job.status = "source_shortfall"
+                _sync_job_artifacts(job, run_path)
                 save_job(job)
                 logger.warning(
                     "Job %s waiting for source shortfall decision (%s/%s usable sources)",

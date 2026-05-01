@@ -314,6 +314,52 @@ def test_submit_adds_running_job_to_history_before_background_finishes(
     _jobs.pop(job_id, None)
 
 
+def test_submit_tracks_uploaded_artifacts_before_background_finishes(
+    tmp_path, monkeypatch
+):
+    from src.run_history_store import run_history
+
+    created_dir = tmp_path / "essay_created"
+
+    class _Uuid:
+        hex = "1234567890abcdef"
+
+    def fake_mkdtemp(*, prefix: str):
+        created_dir.mkdir()
+        return str(created_dir)
+
+    def fake_create_task(coro):
+        coro.close()
+        return MagicMock()
+
+    monkeypatch.setattr("src.web.uuid.uuid4", lambda: _Uuid())
+    monkeypatch.setattr("src.web.tempfile.mkdtemp", fake_mkdtemp)
+    monkeypatch.setattr("src.web.asyncio.create_task", fake_create_task)
+
+    response = client.post(
+        "/submit",
+        data={"prompt": "Test prompt"},
+        files=[
+            ("files", ("assignment.txt", b"assignment body", "text/plain")),
+            ("sources", ("paper.txt", b"paper body", "text/plain")),
+        ],
+    )
+
+    assert response.status_code == 200
+    job_id = response.json()["job_id"]
+
+    artifacts = {
+        item["relative_path"]: item for item in run_history.list_artifacts(job_id)
+    }
+
+    assert "uploads/assignment.txt" in artifacts
+    assert "user_sources/000_paper.txt" in artifacts
+    assert artifacts["uploads/assignment.txt"]["is_available"] is True
+    assert artifacts["user_sources/000_paper.txt"]["is_available"] is True
+
+    _jobs.pop(job_id, None)
+
+
 def test_web_logging_bootstrap_is_idempotent():
     from src.run_logging import configure_web_logging
 
@@ -599,6 +645,90 @@ async def test_pipeline_task_stops_after_source_shortfall_timeout(
     assert job.status == "error"
     assert job.error == "Timed out waiting for source shortfall decision."
     assert job.finished_at is not None
+
+
+async def test_pipeline_task_syncs_extracted_input_before_pipeline_runs(
+    tmp_path, monkeypatch
+):
+    from src.run_history_store import run_history
+
+    job = Job(
+        job_id="extractedsync001",
+        run_dir=Path(tmp_path),
+        status="running",
+        target_words=1200,
+    )
+    captured: dict[str, object] = {}
+
+    config = EssayWriterConfig()
+
+    monkeypatch.setattr("src.web.load_config", lambda: config)
+    monkeypatch.setattr("src.web.create_async_client", lambda *args, **kwargs: object())
+
+    async def fake_run_pipeline(*args, **kwargs):
+        captured["paths"] = {
+            item["relative_path"] for item in run_history.list_artifacts(job.job_id)
+        }
+        captured["summary"] = run_history.get_runtime_summary(job.job_id)
+
+    monkeypatch.setattr("src.web.run_pipeline", fake_run_pipeline)
+
+    await _run_pipeline_task(job, upload_dir=None, prompt="Test prompt")
+
+    assert "input/extracted.md" in captured["paths"]
+    assert captured["summary"] is not None
+    assert captured["summary"]["target_words"] == 1200
+
+
+async def test_pipeline_task_syncs_selected_sources_before_source_shortfall_wait(
+    tmp_path, monkeypatch
+):
+    from src.run_history_store import run_history
+
+    job = Job(job_id="shortfallart001", run_dir=Path(tmp_path), status="running")
+    captured: dict[str, object] = {}
+
+    config = EssayWriterConfig()
+
+    monkeypatch.setattr("src.web.load_config", lambda: config)
+    monkeypatch.setattr("src.web.create_async_client", lambda *args, **kwargs: object())
+
+    async def fake_wait(current_job, event, **kwargs):
+        captured["status"] = current_job.status
+        captured["paths"] = {
+            item["relative_path"]
+            for item in run_history.list_artifacts(current_job.job_id)
+        }
+        return False
+
+    monkeypatch.setattr("src.web_jobs.async_wait_for_job_signal", fake_wait)
+
+    async def fake_run_pipeline(*args, **kwargs):
+        sources_dir = Path(tmp_path) / "sources"
+        sources_dir.mkdir(parents=True, exist_ok=True)
+        (sources_dir / "selected.json").write_text(
+            json.dumps({"s1": {"title": "Paper A"}}, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        await kwargs["on_source_shortfall"](
+            Path(tmp_path),
+            {
+                "usable_sources": 1,
+                "target_sources": 2,
+                "scorable_candidates": 4,
+                "above_threshold": 2,
+                "total_candidates": 5,
+                "recovery_attempted": True,
+            },
+        )
+
+    monkeypatch.setattr("src.web.run_pipeline", fake_run_pipeline)
+
+    await _run_pipeline_task(job, upload_dir=None, prompt="Test prompt")
+
+    assert captured["status"] == "source_shortfall"
+    assert "sources/selected.json" in captured["paths"]
+    assert job.status == "source_shortfall"
 
 
 async def test_pipeline_task_passes_async_worker_without_storing_api_key(

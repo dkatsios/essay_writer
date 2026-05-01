@@ -224,6 +224,9 @@ async def submit(
                 )
                 destination.write_bytes(await file.read())
 
+    if upload_dir is not None or user_sources_dir is not None:
+        run_history.sync_artifacts(job_id, run_dir)
+
     extra_prompt = prompt.strip() or None
     if target_words and target_words > 0:
         words_line = f"Target word count: {target_words} words."
