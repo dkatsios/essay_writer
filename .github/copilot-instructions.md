@@ -112,14 +112,16 @@ Supported: `.md`, `.txt`, `.text`, `.rst`, `.csv`, `.tsv`, `.log`, `.pdf`, `.doc
 
 Uses `pydantic-settings` (`BaseSettings`) with two layers (highest wins):
 
-1. **Environment variables** — prefix `ESSAY_WRITER_`, nested with `__` (e.g., `ESSAY_WRITER_MODELS__PROVIDER=openai` or `ESSAY_WRITER_MODELS__WORKER=google_genai:gemini-2.5-flash`)
-2. **Field defaults** — in the Pydantic models at `config/schemas.py`
+1. **Environment variables** — prefix `ESSAY_WRITER_`, nested with `__` (e.g., `ESSAY_WRITER_MODELS__PROVIDER=openai` or `ESSAY_WRITER_MODELS__WORKER=google_genai:gemini-2.5-flash`). `config/settings.py` reads the repo-root `.env`, including direct provider variables like `GOOGLE_API_KEY`, `GOOGLE_CLOUD_PROJECT`, `GOOGLE_CLOUD_LOCATION`, `AI_BASE_URL`, and `AI_API_KEY`, and runtime code should consume them through `EssayWriterConfig` rather than reading `os.environ` directly.
+2. **Field defaults** — in the Pydantic models at `config/settings.py`
 
-No `default.yaml` exists; field defaults in `schemas.py` are canonical.
+No `default.yaml` exists; field defaults in `settings.py` are canonical.
 
-**Provider presets** — `_PROVIDER_PRESETS` in `config/schemas.py` maps `google`, `openai`, `anthropic` to default (worker, writer, reviewer) model specs. When `models.provider` is set, roles not explicitly overridden get the preset values. Explicit role settings always win.
+**Provider presets** — `PROVIDER_PRESETS` in `config/settings.py` maps `google`, `openai`, `anthropic` to default (worker, writer, reviewer) model specs. When `models.provider` is set, roles not explicitly overridden get the preset values. Explicit role settings always win.
 
 **Google credentials** — for the direct Google provider path, `GOOGLE_API_KEY` may be either a classic Gemini Developer API key or a Vertex AI `AQ.` API key. The web UI's explicit credential field also accepts pasted Vertex service-account JSON. `AQ.` keys must have `GOOGLE_CLOUD_PROJECT` and `GOOGLE_CLOUD_LOCATION` set so `src/agent.py` can route the request through the Vertex provider alias. For pasted service-account JSON, `src/agent.py` may use the JSON `project_id` when `GOOGLE_CLOUD_PROJECT` is unset, but `GOOGLE_CLOUD_LOCATION` is still required. When `AI_BASE_URL` is set, model calls use the gateway credentials instead of direct Google credential autodetection.
+
+**Proxy credentials** — `search.proxy_prefix`, `search.proxy_username`, and `search.proxy_password` default to empty strings in code. Provide proxy access only through environment configuration such as `ESSAY_WRITER_SEARCH__PROXY_PREFIX`, `ESSAY_WRITER_SEARCH__PROXY_USERNAME`, and `ESSAY_WRITER_SEARCH__PROXY_PASSWORD`.
 
 ### Key Invariants
 

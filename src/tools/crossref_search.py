@@ -9,11 +9,11 @@ No API key required — uses the polite pool with a mailto parameter.
 from __future__ import annotations
 
 import logging
-import os
 import re
 
 import httpx
 
+from config.settings import load_config
 from src.tools._http import DEFAULT_MAILTO, http_get
 from src.tools.author_names import surname_from_author_string
 
@@ -36,7 +36,7 @@ def search_crossref(
     prefer_fulltext: bool = False,
 ) -> tuple[list[dict], dict]:
     """Search Crossref and return (results, raw_api_response)."""
-    mailto = os.environ.get("CROSSREF_MAILTO", DEFAULT_MAILTO)
+    mailto = load_config().crossref_mailto or DEFAULT_MAILTO
     filters = ["has-abstract:true"]
     if prefer_fulltext:
         filters.append("has-full-text:true")

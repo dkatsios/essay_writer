@@ -3,12 +3,12 @@
 from __future__ import annotations
 
 import logging
-import os
 import threading
 import time
 
 import httpx
 
+from config.settings import load_config
 from src.tools._http import http_get
 
 logger = logging.getLogger(__name__)
@@ -44,7 +44,7 @@ def reset_throttle() -> None:
 def _get_headers() -> dict[str, str]:
     """Build request headers, including API key if available."""
     headers: dict[str, str] = {}
-    api_key = os.environ.get("SEMANTIC_SCHOLAR_API_KEY")
+    api_key = load_config().semantic_scholar_api_key
     if api_key:
         headers["x-api-key"] = api_key
     return headers

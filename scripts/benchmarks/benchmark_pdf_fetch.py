@@ -12,11 +12,12 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import sys
 import time
 from pathlib import Path
 from urllib.parse import urlparse
+
+from src.tools._http import get_ssl_verify
 
 # ---------------------------------------------------------------------------
 # SSL verification — reuse project convention
@@ -24,9 +25,7 @@ from urllib.parse import urlparse
 
 
 def _ssl_verify() -> str | bool:
-    return (
-        os.environ.get("SSL_CERT_FILE") or os.environ.get("REQUESTS_CA_BUNDLE") or True
-    )
+    return get_ssl_verify()
 
 
 # ---------------------------------------------------------------------------

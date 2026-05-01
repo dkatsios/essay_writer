@@ -5,7 +5,6 @@ from __future__ import annotations
 import html as html_mod
 import json
 import logging
-import os
 import re
 import threading
 import time
@@ -15,6 +14,8 @@ from urllib.parse import quote, urlparse
 
 import httpx
 from curl_cffi import requests as curl_requests
+
+from config.settings import load_config
 
 DEFAULT_MAILTO = "essay-writer@example.com"
 DEFAULT_TIMEOUT = 30.0
@@ -267,7 +268,9 @@ class ProxySession:
     def _has_session_cookie(self) -> bool:
         if self._session is None:
             return False
-        cookie_names = [str(name).lower() for name in dict(self._session.cookies).keys()]
+        cookie_names = [
+            str(name).lower() for name in dict(self._session.cookies).keys()
+        ]
         return any(
             name.startswith("ezproxy") or "session" in name or name.startswith("shib")
             for name in cookie_names
@@ -433,9 +436,7 @@ class ProxySession:
             else:
                 # No login form detected; assume URL-prefix mode without an auth step.
                 ok = True
-                logger.info(
-                    "Proxy auth: no login form detected, using URL-prefix mode"
-                )
+                logger.info("Proxy auth: no login form detected, using URL-prefix mode")
 
             self._authenticated = ok
             return ok
@@ -744,9 +745,8 @@ def pdf_get(
 
 def get_ssl_verify() -> str | bool:
     """Return the CA bundle path if set, otherwise default verification."""
-    return (
-        os.environ.get("SSL_CERT_FILE") or os.environ.get("REQUESTS_CA_BUNDLE") or True
-    )
+    config = load_config()
+    return config.ssl_cert_file or config.requests_ca_bundle or True
 
 
 def search_error_response(source: str, query: str, exc: Exception) -> str:

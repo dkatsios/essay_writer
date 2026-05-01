@@ -8,10 +8,10 @@ No API key required — uses the polite pool with a mailto parameter.
 from __future__ import annotations
 
 import logging
-import os
 
 import httpx
 
+from config.settings import load_config
 from src.tools._http import DEFAULT_MAILTO, http_get
 
 logger = logging.getLogger(__name__)
@@ -26,7 +26,7 @@ def search_openalex(
     prefer_fulltext: bool = False,
 ) -> tuple[list[dict], dict]:
     """Search OpenAlex and return (results, raw_api_response)."""
-    mailto = os.environ.get("OPENALEX_MAILTO", DEFAULT_MAILTO)
+    mailto = load_config().openalex_mailto or DEFAULT_MAILTO
     filters = ["has_abstract:true"]
     if prefer_fulltext:
         filters.append("has_fulltext:true")

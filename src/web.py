@@ -11,12 +11,9 @@ import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from dotenv import load_dotenv
 from fastapi import FastAPI, Form, Query, UploadFile
 from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from jinja2 import Environment, FileSystemLoader
-
-load_dotenv()
 
 from config.settings import ModelsConfig, PROVIDER_PRESETS, load_config  # noqa: E402
 from src import web_jobs  # noqa: E402

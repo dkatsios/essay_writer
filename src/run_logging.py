@@ -4,12 +4,13 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 from contextlib import contextmanager
 from contextvars import ContextVar, copy_context
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+
+from config.settings import load_config
 
 _run_id_var: ContextVar[str | None] = ContextVar("run_id", default=None)
 
@@ -65,7 +66,7 @@ class JsonFormatter(logging.Formatter):
 
 
 def _use_json_logging() -> bool:
-    return os.environ.get("ESSAY_WEB_LOG_FORMAT", "json").strip().lower() != "text"
+    return load_config().web_log_format != "text"
 
 
 def _ensure_src_logger_debug() -> logging.Logger:

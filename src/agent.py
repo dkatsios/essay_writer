@@ -13,12 +13,13 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import os
 import time
 from dataclasses import dataclass
 from typing import Any
 
 import instructor
+
+from config.settings import EssayWriterConfig, load_config
 
 logger = logging.getLogger(__name__)
 
@@ -35,11 +36,11 @@ _PROVIDER_ALIASES: dict[str, str] = {
     "anthropic": "anthropic",
 }
 
-_PROVIDER_KEY_ENV: dict[str, str] = {
-    "google_genai": "GOOGLE_API_KEY",
-    "google_vertexai": "GOOGLE_API_KEY",
-    "openai": "OPENAI_API_KEY",
-    "anthropic": "ANTHROPIC_API_KEY",
+_PROVIDER_KEY_FIELDS: dict[str, str] = {
+    "google_genai": "google_api_key",
+    "google_vertexai": "google_api_key",
+    "openai": "openai_api_key",
+    "anthropic": "anthropic_api_key",
 }
 
 _GATEWAY_PROVIDER_MAP: dict[str, str] = {
@@ -60,12 +61,16 @@ class GoogleCredential:
     project_id: str | None = None
 
 
-def _resolve_api_key(provider: str, api_key: str | None) -> str | None:
-    """Resolve the effective provider API key from args or environment."""
+def _resolve_api_key(
+    provider: str,
+    api_key: str | None,
+    config: EssayWriterConfig,
+) -> str | None:
+    """Resolve the effective provider API key from args or config."""
     if api_key:
         return api_key
-    key_env = _PROVIDER_KEY_ENV.get(provider, "OPENAI_API_KEY")
-    value = os.environ.get(key_env)
+    field_name = _PROVIDER_KEY_FIELDS.get(provider, "openai_api_key")
+    value = getattr(config, field_name)
     return value or None
 
 
@@ -131,13 +136,14 @@ def _classify_google_credential(raw_value: str | None) -> GoogleCredential:
 
 
 def _require_vertex_project_and_location(
+    config: EssayWriterConfig,
     *,
     project_fallback: str | None = None,
     credential_kind: str = "api_key",
 ) -> tuple[str, str]:
     """Return Vertex routing metadata or raise a configuration error."""
-    project = os.environ.get("GOOGLE_CLOUD_PROJECT") or project_fallback
-    location = os.environ.get("GOOGLE_CLOUD_LOCATION")
+    project = config.google_cloud_project or project_fallback
+    location = config.google_cloud_location
     if project and location:
         return project, location
     if credential_kind == "service_account":
@@ -156,6 +162,7 @@ def _normalize_google_model(
     provider: str,
     bare_name: str,
     credential: GoogleCredential,
+    config: EssayWriterConfig,
 ) -> tuple[str, dict[str, Any]]:
     """Normalize Google model specs across classic, Vertex key, and service account."""
     resolved_provider = provider
@@ -171,6 +178,7 @@ def _normalize_google_model(
         kwargs["api_key"] = credential.raw_value or "not-set"
     if resolved_provider == "google_vertexai":
         project, location = _require_vertex_project_and_location(
+            config,
             project_fallback=credential.project_id,
             credential_kind=credential.kind,
         )
@@ -370,20 +378,22 @@ def normalize_model_spec(
     model_spec: str,
     *,
     api_key: str | None = None,
+    config: EssayWriterConfig | None = None,
 ) -> tuple[str, dict[str, Any]]:
     """Convert config model specs into Instructor provider strings and kwargs."""
+    resolved_config = config or load_config()
     provider, _, bare_name = model_spec.partition(":")
     bare_name = bare_name or model_spec
-    effective_api_key = _resolve_api_key(provider, api_key)
+    effective_api_key = _resolve_api_key(provider, api_key, resolved_config)
     google_credential = (
         _classify_google_credential(effective_api_key)
         if provider in {"google_genai", "google_vertexai"}
         else None
     )
 
-    base_url = os.environ.get("AI_BASE_URL")
+    base_url = resolved_config.ai_base_url
     if base_url:
-        gateway_api_key = api_key or os.environ.get("AI_API_KEY", "not-set")
+        gateway_api_key = api_key or resolved_config.ai_api_key or "not-set"
         if google_credential is not None and google_credential.kind in {
             "vertex_api_key",
             "service_account",
@@ -392,16 +402,21 @@ def normalize_model_spec(
                 "AI_BASE_URL is set; direct Google Vertex credentials are skipped "
                 "and gateway credentials are used instead."
             )
-            gateway_api_key = os.environ.get("AI_API_KEY", "not-set")
+            gateway_api_key = resolved_config.ai_api_key or "not-set"
         gateway_prefix = _GATEWAY_PROVIDER_MAP.get(provider, "")
-        model_name = os.environ.get("AI_MODEL") or f"{gateway_prefix}{bare_name}"
+        model_name = resolved_config.ai_model or f"{gateway_prefix}{bare_name}"
         return f"openai/{model_name}", {
             "base_url": base_url,
             "api_key": gateway_api_key,
         }
 
     if google_credential is not None:
-        return _normalize_google_model(provider, bare_name, google_credential)
+        return _normalize_google_model(
+            provider,
+            bare_name,
+            google_credential,
+            resolved_config,
+        )
 
     alias = _PROVIDER_ALIASES.get(provider, provider)
     return f"{alias}/{bare_name}", {"api_key": effective_api_key or "not-set"}
@@ -430,11 +445,16 @@ class AsyncModelClient:
 
 def create_client(model_spec: str, *, api_key: str | None = None) -> ModelClient:
     """Build the sync Instructor client for the selected provider."""
-    normalized_model, kwargs = normalize_model_spec(model_spec, api_key=api_key)
+    config = load_config()
+    normalized_model, kwargs = normalize_model_spec(
+        model_spec,
+        api_key=api_key,
+        config=config,
+    )
     provider, _, _bare_name = model_spec.partition(":")
     if provider in {"google_genai", "google_vertexai"} and "api_key" not in kwargs:
         google_credential = _classify_google_credential(
-            _resolve_api_key(provider, api_key)
+            _resolve_api_key(provider, api_key, config)
         )
         if google_credential.service_account_info is not None:
             return _build_google_service_account_client(
@@ -459,11 +479,16 @@ def create_async_client(
     api_key: str | None = None,
 ) -> AsyncModelClient:
     """Build the async Instructor client for the selected provider."""
-    normalized_model, kwargs = normalize_model_spec(model_spec, api_key=api_key)
+    config = load_config()
+    normalized_model, kwargs = normalize_model_spec(
+        model_spec,
+        api_key=api_key,
+        config=config,
+    )
     provider, _, _bare_name = model_spec.partition(":")
     if provider in {"google_genai", "google_vertexai"} and "api_key" not in kwargs:
         google_credential = _classify_google_credential(
-            _resolve_api_key(provider, api_key)
+            _resolve_api_key(provider, api_key, config)
         )
         if google_credential.service_account_info is not None:
             return _build_google_service_account_client(

@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import os
 import shutil
 import time
 import unicodedata
@@ -15,6 +14,7 @@ from io import BytesIO
 from pathlib import Path
 from urllib.parse import urlparse
 
+from config.settings import load_config
 from src.runtime import TokenTracker
 from src.schemas import AssignmentBrief, Clarification, ValidationQuestion
 from src.pipeline_sources import SourceShortfallAbort
@@ -166,38 +166,15 @@ def append_optional_pdf_round_for_ui(job: Job) -> None:
 
 
 def interaction_timeout_seconds() -> int:
-    raw = os.environ.get(
-        "ESSAY_WEB_INTERACTION_TIMEOUT_SECONDS",
-        str(_DEFAULT_INTERACTION_TIMEOUT_SECONDS),
-    ).strip()
-    try:
-        timeout = int(raw)
-    except ValueError:
-        return _DEFAULT_INTERACTION_TIMEOUT_SECONDS
-    return max(1, timeout)
+    return load_config().web_interaction_timeout_seconds
 
 
 def _job_ttl_seconds() -> int:
-    raw = os.environ.get(
-        "ESSAY_WEB_JOB_TTL_SECONDS", str(_DEFAULT_JOB_TTL_SECONDS)
-    ).strip()
-    try:
-        ttl = int(raw)
-    except ValueError:
-        return _DEFAULT_JOB_TTL_SECONDS
-    return max(0, ttl)
+    return load_config().web_job_ttl_seconds
 
 
 def _job_sweep_interval_seconds() -> int:
-    raw = os.environ.get(
-        "ESSAY_WEB_JOB_SWEEP_INTERVAL_SECONDS",
-        str(_DEFAULT_SWEEP_INTERVAL_SECONDS),
-    ).strip()
-    try:
-        interval = int(raw)
-    except ValueError:
-        return _DEFAULT_SWEEP_INTERVAL_SECONDS
-    return max(60, interval)
+    return load_config().web_job_sweep_interval_seconds
 
 
 def set_job_error(job: Job, message: str) -> None:
