@@ -18,6 +18,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 _PROJECT_ROOT = Path(__file__).resolve().parents[1]
 _ENV_FILE = _PROJECT_ROOT / ".env"
 _DEFAULT_MAILTO = "essay-writer@example.com"
+_DEFAULT_DATABASE_URL = f"sqlite+pysqlite:///{_PROJECT_ROOT / '.essay_writer_jobs.db'}"
 _DEFAULT_JOB_TTL_SECONDS = 86_400
 _DEFAULT_JOB_SWEEP_INTERVAL_SECONDS = 300
 _DEFAULT_INTERACTION_TIMEOUT_SECONDS = 1_800
@@ -142,6 +143,20 @@ class SearchConfig(BaseModel):
     """Password for institutional proxy authentication."""
 
 
+class DatabaseConfig(BaseModel):
+    """Persistent job-state database settings."""
+
+    url: str = _DEFAULT_DATABASE_URL
+    echo: bool = False
+    mark_stale_jobs_on_startup: bool = True
+
+    @field_validator("url", mode="before")
+    @classmethod
+    def _normalize_url(cls, value: object) -> str:
+        text = str(value).strip() if value is not None else ""
+        return text or _DEFAULT_DATABASE_URL
+
+
 class EssayWriterConfig(BaseSettings):
     """Root configuration for the essay writer.
 
@@ -162,6 +177,7 @@ class EssayWriterConfig(BaseSettings):
     writing: WritingConfig = WritingConfig()
     formatting: FormattingConfig = FormattingConfig()
     search: SearchConfig = SearchConfig()
+    database: DatabaseConfig = DatabaseConfig()
     google_api_key: str | None = Field(
         default=None,
         validation_alias=_alias_choices(

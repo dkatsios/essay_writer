@@ -34,6 +34,7 @@ _jinja_env = Environment(
 Job = web_jobs.Job
 _JobInteractionTimeout = web_jobs.JobInteractionTimeout
 _jobs = web_jobs.jobs
+_save_job = web_jobs.save_job
 _notify_job = web_jobs.notify_job
 _build_status_payload = web_jobs.build_status_payload
 job_ttl_sweep_once = web_jobs.job_ttl_sweep_once
@@ -68,6 +69,7 @@ async def _run_pipeline_task(
 async def _lifespan(app: FastAPI):
     configure_web_logging()
     logger.info("Web application logging configured")
+    web_jobs.mark_stale_jobs_on_startup()
     web_jobs.start_job_ttl_sweeper()
     yield
     close_http_clients()
@@ -202,9 +204,9 @@ _SSE_POLL_INTERVAL = 2.0
 @app.get("/stream/{job_id}")
 async def stream(job_id: str):
     """Server-Sent Events stream for real-time job status updates."""
-    job = _jobs.get(job_id)
 
     async def generate():
+        job = _jobs.get(job_id)
         if job is None:
             yield f"data: {json.dumps({'status': 'gone'})}\n\n"
             return
@@ -218,6 +220,10 @@ async def stream(job_id: str):
             return
 
         while True:
+            job = _jobs.get(job_id)
+            if job is None:
+                yield f"data: {json.dumps({'status': 'gone'})}\n\n"
+                return
             try:
                 await asyncio.wait_for(
                     job._sse_event.wait(), timeout=_SSE_POLL_INTERVAL
@@ -226,7 +232,8 @@ async def stream(job_id: str):
                 pass
             job._sse_event.clear()
 
-            if job_id not in _jobs:
+            job = _jobs.get(job_id)
+            if job is None:
                 yield f"data: {json.dumps({'status': 'gone'})}\n\n"
                 return
 
@@ -270,6 +277,7 @@ async def answer(job_id: str, answers: str = Form("")):
             job, answers, parse_validation_answers_fn=parse_validation_answers
         )
         job.status = "running"
+        _save_job(job)
         _notify_job(job)
         job.answers_event.set()
     return JSONResponse({"status": "ok"})
@@ -321,6 +329,7 @@ async def optional_pdf_upload(
         if error:
             return JSONResponse({"error": error}, status_code=400)
         job.optional_pdf_choices[source_id_value] = "url" if pdf_url_value else "file"
+        _save_job(job)
         logger.info(
             "Job %s attached optional PDF for source %s via %s",
             job_id,
@@ -343,6 +352,7 @@ async def optional_pdf_done(job_id: str):
         logger.info("Job %s completed optional PDF input step", job_id)
         web_jobs.append_optional_pdf_round_for_ui(job)
         job.status = "running"
+        _save_job(job)
         _notify_job(job)
         job.optional_pdf_event.set()
     return JSONResponse({"status": "ok"})
@@ -393,6 +403,7 @@ async def source_shortfall_decision(
         job.source_shortfall_decision = choice
         job.source_shortfall_added_ids = parsed_ids
         job.status = "running"
+        _save_job(job)
         _notify_job(job)
         job.source_shortfall_event.set()
     return JSONResponse(

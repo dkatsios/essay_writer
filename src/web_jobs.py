@@ -15,6 +15,7 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 from config.settings import load_config
+from src.job_store import JobStore
 from src.runtime import TokenTracker
 from src.schemas import AssignmentBrief, Clarification, ValidationQuestion
 from src.pipeline_sources import SourceShortfallAbort
@@ -84,7 +85,12 @@ class Job:
     _sse_event: asyncio.Event = field(default_factory=asyncio.Event)
 
 
-jobs: dict[str, Job] = {}
+jobs = JobStore()
+
+
+def save_job(job: Job) -> Job:
+    """Persist the current durable view of *job* and remember local transients."""
+    return jobs.save(job)
 
 
 def notify_job(job: Job) -> None:
@@ -187,6 +193,7 @@ def set_job_error(job: Job, message: str) -> None:
     job.status = "error"
     job.error = message
     job.finished_at = time.time()
+    save_job(job)
     notify_job(job)
 
 
@@ -225,17 +232,13 @@ def job_ttl_sweep_once(now: float | None = None) -> int:
         return 0
     current_time = time.time() if now is None else now
     removed = 0
-    for job_id, job in list(jobs.items()):
-        if job.status not in ("done", "error") or job.finished_at is None:
-            continue
-        if current_time - job.finished_at <= ttl:
-            continue
-        jobs.pop(job_id, None)
+    for job in jobs.expired_finished_jobs(current_time=current_time, ttl_seconds=ttl):
+        jobs.pop(job.job_id, None)
         shutil.rmtree(job.run_dir, ignore_errors=True)
         removed += 1
         logger.info(
             "TTL cleanup removed job %s (status=%s, age=%.0fs)",
-            job_id,
+            job.job_id,
             job.status,
             current_time - job.finished_at,
         )
@@ -257,6 +260,19 @@ def start_job_ttl_sweeper() -> None:
         logger.info("ESSAY_WEB_JOB_TTL_SECONDS is 0; stale-job sweeper disabled")
         return
     asyncio.create_task(_job_ttl_sweeper_loop())
+
+
+def mark_stale_jobs_on_startup() -> int:
+    """Fail previously active jobs so the UI sees a deterministic terminal state."""
+    config = load_config()
+    if not config.database.mark_stale_jobs_on_startup:
+        return 0
+    count = jobs.mark_stale_active_jobs(
+        "Server restarted while this job was active. Please submit it again."
+    )
+    if count:
+        logger.warning("Marked %d stale active job(s) as failed on startup", count)
+    return count
 
 
 async def run_pipeline_task(
@@ -310,6 +326,7 @@ async def run_pipeline_task(
                 job.status = "error"
                 job.error = "Provide at least a prompt or upload files."
                 job.finished_at = time.time()
+                save_job(job)
                 notify_job(job)
                 return
 
@@ -326,6 +343,7 @@ async def run_pipeline_task(
             tracker = TokenTracker()
             job.tracker = tracker
             tracker.set_on_progress(lambda: notify_job(job))
+            save_job(job)
 
             async def _on_questions(
                 questions: list[ValidationQuestion], run_path: Path
@@ -387,6 +405,7 @@ async def run_pipeline_task(
                     ]
                     job.answers_event.clear()
                     job.status = "questions"
+                    save_job(job)
                     logger.info(
                         "Job %s waiting for %d clarification question(s)",
                         job.job_id,
@@ -405,6 +424,7 @@ async def run_pipeline_task(
                     if not chosen_answers:
                         logger.info("Job %s clarification step skipped", job.job_id)
                         job.questions = None
+                        save_job(job)
                         return
 
                 brief_path = run_path / "brief" / "assignment.json"
@@ -422,6 +442,7 @@ async def run_pipeline_task(
                 )
                 logger.info("Job %s clarification answers saved", job.job_id)
                 job.questions = None
+                save_job(job)
 
             async def _on_optional_pdfs(run_path: Path, items: list[dict]) -> None:
                 if not items:
@@ -439,6 +460,7 @@ async def run_pipeline_task(
                 )
                 job.optional_pdf_event.clear()
                 job.status = "optional_pdfs"
+                save_job(job)
                 logger.info(
                     "Job %s waiting for optional PDFs for %d source(s)",
                     job.job_id,
@@ -454,6 +476,7 @@ async def run_pipeline_task(
                     raise JobInteractionTimeout()
                 job.optional_pdf_items = None
                 job.optional_pdf_allowed_ids = None
+                save_job(job)
                 logger.info("Job %s optional PDF step resumed", job.job_id)
 
             async def _on_source_shortfall(
@@ -464,6 +487,7 @@ async def run_pipeline_task(
                 job.source_shortfall_added_ids = []
                 job.source_shortfall_event.clear()
                 job.status = "source_shortfall"
+                save_job(job)
                 logger.warning(
                     "Job %s waiting for source shortfall decision (%s/%s usable sources)",
                     job.job_id,
@@ -482,6 +506,7 @@ async def run_pipeline_task(
                 added_ids = list(job.source_shortfall_added_ids)
                 job.source_shortfall = None
                 job.source_shortfall_added_ids = []
+                save_job(job)
                 return decision == "proceed", added_ids
 
             await run_pipeline_fn(
@@ -505,6 +530,7 @@ async def run_pipeline_task(
             tracker.write_report(run_dir)
             job.status = "done"
             job.finished_at = time.time()
+            save_job(job)
             logger.info("Job %s completed successfully", job.job_id)
             notify_job(job)
 

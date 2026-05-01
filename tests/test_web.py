@@ -148,8 +148,7 @@ def test_download_uses_run_dir_name_for_zip_filename(tmp_path):
         response = client.get(f"/download/{job_id}")
         assert response.status_code == 200
         assert response.headers["content-disposition"] == (
-            "attachment; "
-            "filename=essay_20260430_130501_123456_abcd1234.zip"
+            "attachment; filename=essay_20260430_130501_123456_abcd1234.zip"
         )
     finally:
         _jobs.pop(job_id, None)
@@ -229,6 +228,24 @@ def test_job_ttl_zero_disables_sweep(tmp_path, monkeypatch):
     )
     assert job_ttl_sweep_once() == 0
     assert jid in _jobs
+
+
+def test_mark_stale_jobs_on_startup_marks_active_jobs_failed(tmp_path):
+    from src.web_jobs import mark_stale_jobs_on_startup
+
+    jid = "staleactive01"
+    _jobs[jid] = Job(job_id=jid, run_dir=Path(tmp_path), status="running")
+
+    count = mark_stale_jobs_on_startup()
+
+    assert count == 1
+    reloaded = _jobs[jid]
+    assert reloaded.status == "error"
+    assert (
+        reloaded.error
+        == "Server restarted while this job was active. Please submit it again."
+    )
+    assert reloaded.finished_at is not None
 
 
 async def test_wait_for_job_signal_times_out_and_marks_error(tmp_path):
@@ -312,7 +329,9 @@ async def test_pipeline_task_stops_after_question_timeout(tmp_path, monkeypatch)
     assert job.finished_at is not None
 
 
-async def test_pipeline_task_stops_after_source_shortfall_timeout(tmp_path, monkeypatch):
+async def test_pipeline_task_stops_after_source_shortfall_timeout(
+    tmp_path, monkeypatch
+):
     job = Job(job_id="shortfall001", run_dir=Path(tmp_path), status="running")
     captured = {"continued": False}
 
