@@ -49,6 +49,9 @@ uv run uvicorn src.web:app --reload
 
 # Run the background worker in a second terminal
 uv run python -m src.worker
+
+# Run 6 workers only (or pass a different count)
+uv run python -m src.start_workers 6
 ```
 
 Open http://localhost:8000. Upload assignment files, optionally upload your own reference sources, enter a prompt, set a target word count, and download the result as a ZIP.
@@ -95,11 +98,11 @@ The repo includes a `render.yaml` Blueprint for one-click deployment to [Render]
 3. Set the required environment variables. For direct Google provider usage, `GOOGLE_API_KEY` can be either a classic Gemini Developer API key or a Vertex AI `AQ.` key. Vertex AI keys also require `GOOGLE_CLOUD_PROJECT` and `GOOGLE_CLOUD_LOCATION`. Optionally set `SEMANTIC_SCHOLAR_API_KEY`.
 4. Set `ESSAY_WRITER_DATABASE__URL` to your Postgres connection string in production. If unset, the web layer falls back to a local SQLite file, which is suitable only for local development and tests.
 
-The current Render deployment keeps the web app and background worker inside the same Docker service. That is intentional: the queue state lives in Postgres, but run artifacts still live on the local filesystem, so both processes must share the same container filesystem.
+The web process and worker processes still need the same database and shared artifact filesystem, but this repo no longer includes a combined startup script. Start the web app explicitly with `uv run uvicorn src.web:app --reload` and start workers explicitly with `uv run python -m src.start_workers 6` (or another count).
 
 If you later deploy web and worker as separate Render services on different filesystems, you also need shared artifact storage because `.docx`, markdown, uploads, and other run files are still written locally.
 
-The service exposes the web UI on the port assigned by Render. Optional: set `ESSAY_WEB_JOB_TTL_SECONDS` / `ESSAY_WEB_JOB_SWEEP_INTERVAL_SECONDS` if you need different retention for undownloaded jobs.
+The service exposes the web UI on the port assigned by Render. Set `ESSAY_WEB_JOB_TTL_SECONDS` / `ESSAY_WEB_JOB_SWEEP_INTERVAL_SECONDS` if you need different retention for undownloaded jobs.
 
 ## Configuration
 

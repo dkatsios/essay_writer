@@ -24,6 +24,8 @@ git config core.hooksPath .githooks
 uv run uvicorn src.web:app --reload
 # Run the background worker in a second terminal/process
 uv run python -m src.worker
+# Run multiple workers only (default 6 if omitted)
+uv run python -m src.start_workers 6
 # Web: optional ESSAY_WEB_JOB_TTL_SECONDS (default 86400, 0=disable stale-job sweeps), ESSAY_WEB_JOB_SWEEP_INTERVAL_SECONDS, ESSAY_WEB_INTERACTION_TIMEOUT_SECONDS (default 1800)
 # Web DB: ESSAY_WRITER_DATABASE__URL (production Postgres; local dev falls back to repo SQLite). Stores job state plus runtime summaries, step metrics, and artifact metadata; file bytes remain local.
 # Worker/web split: both processes must use the same DB and share the local run-artifact filesystem.
@@ -52,4 +54,4 @@ See `.github/instructions/documentation-sync.instructions.md`. On important chan
 
 ## Deployment Note
 
-The current Render/Docker deployment starts both the web app and the worker in the same container via `scripts/start_web_and_worker.sh`, because run artifacts still live on the local filesystem and must be visible to both processes.
+The repo no longer includes a combined web+worker startup script. Start the web app with `uv run uvicorn src.web:app --reload` and workers with `uv run python -m src.start_workers 6` (or another count). Both sides still need the same DB and shared local artifact filesystem.

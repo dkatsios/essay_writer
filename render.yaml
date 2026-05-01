@@ -1,8 +1,8 @@
 # Render Blueprint: https://render.com/docs/infrastructure-as-code
 # After connecting this repo, use "Apply" from the Blueprint or create a Web Service
-# that uses this file. The Docker entrypoint starts both the web app and the
-# background worker in the same service because run artifacts still live on the
-# local filesystem.
+# that uses this file. This Docker entrypoint starts only the web app; start
+# workers separately with `uv run python -m src.start_workers 6` (or your chosen
+# count) in your worker environment.
 
 services:
   - type: web

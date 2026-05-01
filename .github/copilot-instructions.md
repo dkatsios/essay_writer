@@ -24,6 +24,9 @@ uv run uvicorn src.web:app --reload
 # Run the background worker
 uv run python -m src.worker
 
+# Run multiple workers only (default 6 if omitted)
+uv run python -m src.start_workers 6
+
 # Docker
 docker build -t essay-writer .
 docker run -p 8000:8000 --env-file .env essay-writer
@@ -135,7 +138,7 @@ No `default.yaml` exists; field defaults in `settings.py` are canonical.
 
 **Worker/web filesystem constraint** — Postgres now stores queue state, interactions, history, metrics, and artifact metadata, but the actual run files (`.docx`, markdown, uploads, extracted text, ZIP contents) still live on the local filesystem under each run directory. A separate web process and worker process are safe only when they share that filesystem. Do not assume the current implementation supports multi-host execution without adding shared artifact storage first.
 
-**Current deployment shape** — `scripts/start_web_and_worker.sh` starts both `uvicorn src.web:app` and `python -m src.worker` in the same container. Keep Render/Docker aligned with that single-container shape until artifact storage is moved off the local filesystem.
+**Current start commands** — start the web process with `uv run uvicorn src.web:app --reload`. Start workers separately with `uv run python -m src.start_workers [count]` (default `6` if omitted) or `uv run python -m src.worker` for a single worker. Both sides still need the same DB and shared local artifact filesystem.
 
 **Google credentials** — for the direct Google provider path, `GOOGLE_API_KEY` may be either a classic Gemini Developer API key or a Vertex AI `AQ.` API key. The web UI's explicit credential field also accepts pasted Vertex service-account JSON. `AQ.` keys must have `GOOGLE_CLOUD_PROJECT` and `GOOGLE_CLOUD_LOCATION` set so `src/agent.py` can route the request through the Vertex provider alias. For pasted service-account JSON, `src/agent.py` may use the JSON `project_id` when `GOOGLE_CLOUD_PROJECT` is unset, but `GOOGLE_CLOUD_LOCATION` is still required. When `AI_BASE_URL` is set, model calls use the gateway credentials instead of direct Google credential autodetection.
 
