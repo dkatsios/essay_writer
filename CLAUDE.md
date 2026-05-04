@@ -40,6 +40,8 @@ uv run python -m src.start_workers 6
 # Docker
 docker build -t essay-writer .
 docker run -p 8000:8000 --env-file .env essay-writer
+# Combined container entrypoint starts web + workers together
+# Override worker count with ESSAY_WORKER_COUNT or ESSAY_WRITER_WORKER_COUNT (default 6)
 
 # Lint
 uv run ruff check src/ tests/
@@ -57,4 +59,4 @@ See `.github/instructions/documentation-sync.instructions.md`. On important chan
 
 ## Deployment Note
 
-The repo no longer includes a combined web+worker startup script. Start the web app with `uv run uvicorn src.web:app --reload` and workers with `uv run python -m src.start_workers 6` (or another count). Both sides need the same DB credentials. With R2 backend, both need R2 credentials; with local backend (`ESSAY_WRITER_STORAGE__BACKEND=local`), both need access to the same `local_dir` path.
+The Docker image now uses a combined container entrypoint that starts the web app plus `src.start_workers` together. Worker count comes from `EssayWriterConfig.worker_count`; override it with `ESSAY_WORKER_COUNT` or `ESSAY_WRITER_WORKER_COUNT` (default `6`). Outside Docker, start the web app with `uv run uvicorn src.web:app --reload` and workers with `uv run python -m src.start_workers 6` (or another count). Both sides need the same DB credentials. With R2 backend, both need R2 credentials; with local backend (`ESSAY_WRITER_STORAGE__BACKEND=local`), both need access to the same `local_dir` path.

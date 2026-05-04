@@ -1,29 +1,14 @@
-"""Start multiple worker processes from one Python entrypoint."""
+"""Start the web server and worker launcher in one container process."""
 
 from __future__ import annotations
 
-import argparse
+import os
 import signal
 import subprocess
 import sys
 import time
 
 from config.settings import load_config
-
-
-def _parse_args() -> argparse.Namespace:
-    config = load_config()
-    parser = argparse.ArgumentParser(
-        description="Start one or more essay worker processes.",
-    )
-    parser.add_argument(
-        "count",
-        nargs="?",
-        type=int,
-        default=config.worker_count,
-        help="Number of worker processes to start (default: config.worker_count).",
-    )
-    return parser.parse_args()
 
 
 def _terminate(processes: list[subprocess.Popen[bytes]]) -> None:
@@ -33,14 +18,24 @@ def _terminate(processes: list[subprocess.Popen[bytes]]) -> None:
 
 
 def main() -> int:
-    args = _parse_args()
-    if args.count < 1:
-        print("worker count must be at least 1", file=sys.stderr)
-        return 1
-
+    config = load_config()
+    port = os.environ.get("PORT", "8000")
     processes = [
-        subprocess.Popen([sys.executable, "-m", "src.worker"])
-        for _ in range(args.count)
+        subprocess.Popen(
+            [sys.executable, "-m", "src.start_workers", str(config.worker_count)]
+        ),
+        subprocess.Popen(
+            [
+                sys.executable,
+                "-m",
+                "uvicorn",
+                "src.web:app",
+                "--host",
+                "0.0.0.0",
+                "--port",
+                port,
+            ]
+        ),
     ]
 
     def _handle_signal(signum, frame) -> None:  # type: ignore[unused-argument]
@@ -56,6 +51,8 @@ def main() -> int:
                 if exit_code is not None:
                     _terminate(processes)
                     for other in processes:
+                        if other is process:
+                            continue
                         try:
                             other.wait(timeout=5)
                         except subprocess.TimeoutExpired:

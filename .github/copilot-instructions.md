@@ -30,6 +30,8 @@ uv run python -m src.start_workers 6
 # Docker
 docker build -t essay-writer .
 docker run -p 8000:8000 --env-file .env essay-writer
+# Combined container entrypoint starts web + workers together
+# Override worker count with ESSAY_WORKER_COUNT or ESSAY_WRITER_WORKER_COUNT (default 6)
 
 # Run tests
 uv run python -m pytest tests/ -v
@@ -138,7 +140,7 @@ No `default.yaml` exists; field defaults in `settings.py` are canonical.
 
 **Artifact storage** — run artifacts (`.docx`, markdown, uploads, extracted text, source notes) are stored via a pluggable backend controlled by `ESSAY_WRITER_STORAGE__BACKEND` (`"r2"` for Cloudflare R2 production, `"local"` for local filesystem development). All three implementations — `RunStorage` (R2/S3), `LocalRunStorage` (filesystem under `storage.local_dir`, default `runs/`), `MemoryRunStorage` (in-memory, tests) — share the `BaseRunStorage` ABC in `src/storage.py`. `create_run_storage(job_id)` is the factory that picks the backend from config. `Job.run_dir` is a string prefix (e.g. `runs/{job_id}/`), not a filesystem path. Configure R2 via `ESSAY_WRITER_STORAGE__R2_ENDPOINT_URL`, `ESSAY_WRITER_STORAGE__R2_BUCKET`, `ESSAY_WRITER_STORAGE__R2_ACCESS_KEY_ID`, `ESSAY_WRITER_STORAGE__R2_SECRET_ACCESS_KEY`.
 
-**Current start commands** — start the web process with `uv run uvicorn src.web:app --reload`. Start workers separately with `uv run python -m src.start_workers [count]` (default `6` if omitted) or `uv run python -m src.worker` for a single worker. Both sides need the same DB credentials. When using R2 backend, both sides also need the same R2 credentials; with local backend, both sides need access to the same `local_dir` filesystem path.
+**Current start commands** — start the web process with `uv run uvicorn src.web:app --reload`. Start workers separately with `uv run python -m src.start_workers [count]` (default `6` if omitted) or `uv run python -m src.worker` for a single worker. The Docker image entrypoint starts both the web process and `src.start_workers` together, using the settings-backed `worker_count` value. Override it with `ESSAY_WORKER_COUNT` or `ESSAY_WRITER_WORKER_COUNT`. Both sides need the same DB credentials. When using R2 backend, both sides also need the same R2 credentials; with local backend, both sides need access to the same `local_dir` filesystem path.
 
 **Google credentials** — for the direct Google provider path, `GOOGLE_API_KEY` may be either a classic Gemini Developer API key or a Vertex AI `AQ.` API key. The web UI's explicit credential field also accepts pasted Vertex service-account JSON. `AQ.` keys must have `GOOGLE_CLOUD_PROJECT` and `GOOGLE_CLOUD_LOCATION` set so `src/agent.py` can route the request through the Vertex provider alias. For pasted service-account JSON, `src/agent.py` may use the JSON `project_id` when `GOOGLE_CLOUD_PROJECT` is unset, but `GOOGLE_CLOUD_LOCATION` is still required. When `AI_BASE_URL` is set, model calls use the gateway credentials instead of direct Google credential autodetection.
 

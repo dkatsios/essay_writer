@@ -70,6 +70,12 @@ docker build -t essay-writer .
 docker run -p 8000:8000 --env-file .env essay-writer
 ```
 
+The container now starts both the web server and the worker launcher. Worker count comes from `config/settings.py` and can be overridden from `.env` or the deployment environment with `ESSAY_WORKER_COUNT` (or `ESSAY_WRITER_WORKER_COUNT`). The default is `6`. For example:
+
+```bash
+docker run -p 8000:8000 --env-file .env -e ESSAY_WORKER_COUNT=4 essay-writer
+```
+
 ## Local Git Hook
 
 This repo includes a tracked pre-push hook at `.githooks/pre-push` that runs the test suite locally before `git push`.
@@ -98,7 +104,7 @@ The repo includes a `render.yaml` Blueprint for one-click deployment to [Render]
 4. Set `ESSAY_WRITER_DATABASE__URL` to your Postgres connection string in production. If unset, the web layer falls back to a local SQLite file, which is suitable only for local development and tests.
 5. Set `ESSAY_WRITER_STORAGE__BACKEND=r2` and configure `ESSAY_WRITER_STORAGE__R2_ENDPOINT_URL`, `ESSAY_WRITER_STORAGE__R2_BUCKET`, `ESSAY_WRITER_STORAGE__R2_ACCESS_KEY_ID`, and `ESSAY_WRITER_STORAGE__R2_SECRET_ACCESS_KEY` for artifact storage in Cloudflare R2. For local development, set `ESSAY_WRITER_STORAGE__BACKEND=local` to store artifacts on the local filesystem under `runs/`.
 
-The web process and worker processes need the same database and storage credentials. Start the web app explicitly with `uv run uvicorn src.web:app --reload` and start workers explicitly with `uv run python -m src.start_workers 6` (or another count).
+The web process and worker processes need the same database and storage credentials. Outside Docker, start the web app explicitly with `uv run uvicorn src.web:app --reload` and start workers explicitly with `uv run python -m src.start_workers 6` (or another count). Inside the Docker image, the default container entrypoint starts both processes together and uses the settings-backed `worker_count` value. Override it from `.env` or the deployment environment with `ESSAY_WORKER_COUNT` or `ESSAY_WRITER_WORKER_COUNT`.
 
 
 The service exposes the web UI on the port assigned by Render. Set `ESSAY_WEB_JOB_TTL_SECONDS` / `ESSAY_WEB_JOB_SWEEP_INTERVAL_SECONDS` if you need different retention for undownloaded jobs.
@@ -108,6 +114,8 @@ The service exposes the web UI on the port assigned by Render. Set `ESSAY_WEB_JO
 Default settings are defined in `config/settings.py`. Override them with environment variables using the `ESSAY_WRITER_` prefix. `EssayWriterConfig` also reads the repo-root `.env`, including direct provider variables such as `GOOGLE_API_KEY`, `GOOGLE_CLOUD_PROJECT`, `GOOGLE_CLOUD_LOCATION`, `AI_BASE_URL`, and `AI_API_KEY`, so the runtime no longer depends on ad hoc `os.environ` reads or entrypoint-specific dotenv loading.
 
 The web layer database URL lives at `ESSAY_WRITER_DATABASE__URL`. The database stores web job state, runtime summaries, per-step metrics, and artifact metadata in SQL. Run artifacts (`.md`, `.docx`, uploaded files, logs) are stored via the configured storage backend (`ESSAY_WRITER_STORAGE__BACKEND`): `local` for filesystem or `r2` for Cloudflare R2.
+
+Worker process count lives in `EssayWriterConfig.worker_count` with a default of `6`. Set `ESSAY_WORKER_COUNT` or `ESSAY_WRITER_WORKER_COUNT` in `.env` or your deployment environment to override it for `src.start_workers`, `scripts/start_workers.sh`, and the combined Docker entrypoint.
 
 For inspection/debugging, the web server exposes a browser history page at `GET /history` plus JSON history endpoints: `GET /history/jobs` lists persisted run summaries, including active jobs immediately after submission, and `GET /history/jobs/{job_id}` returns the summary, step metrics, artifact manifest, and live status (when the job is still active).
 

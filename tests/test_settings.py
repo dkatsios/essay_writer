@@ -77,3 +77,20 @@ def test_load_config_reads_direct_credentials_from_env_file(tmp_path, monkeypatc
     assert cfg.ssl_cert_file == "/tmp/test-ca.pem"
     assert cfg.web_job_ttl_seconds == 120
     assert cfg.web_log_format == "text"
+
+
+def test_load_config_reads_worker_count_from_env_file(tmp_path, monkeypatch):
+    from config.settings import EssayWriterConfig
+
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        "ESSAY_WORKER_COUNT=4\n",
+        encoding="utf-8",
+    )
+
+    monkeypatch.delenv("ESSAY_WORKER_COUNT", raising=False)
+    monkeypatch.delenv("ESSAY_WRITER_WORKER_COUNT", raising=False)
+
+    cfg = EssayWriterConfig(_env_file=env_file)
+
+    assert cfg.worker_count == 4

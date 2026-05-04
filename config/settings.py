@@ -22,6 +22,7 @@ _DEFAULT_DATABASE_URL = f"sqlite+pysqlite:///{_PROJECT_ROOT / '.essay_writer_job
 _DEFAULT_JOB_TTL_SECONDS = 86_400
 _DEFAULT_JOB_SWEEP_INTERVAL_SECONDS = 300
 _DEFAULT_INTERACTION_TIMEOUT_SECONDS = 1_800
+_DEFAULT_WORKER_COUNT = 6
 _DEFAULT_WORKER_POLL_INTERVAL_SECONDS = 2
 _DEFAULT_WORKER_LEASE_SECONDS = 60
 _DEFAULT_WORKER_HEARTBEAT_INTERVAL_SECONDS = 15
@@ -322,6 +323,14 @@ class EssayWriterConfig(BaseSettings):
             "ESSAY_WEB_LOG_FORMAT",
             "ESSAY_WRITER_WEB_LOG_FORMAT",
         ),
+    )
+    worker_count: int = Field(
+        default=_DEFAULT_WORKER_COUNT,
+        validation_alias=_alias_choices(
+            "ESSAY_WORKER_COUNT",
+            "ESSAY_WRITER_WORKER_COUNT",
+        ),
+        ge=1,
     )
     worker_poll_interval_seconds: int = Field(
         default=_DEFAULT_WORKER_POLL_INTERVAL_SECONDS,
