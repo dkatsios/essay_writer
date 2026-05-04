@@ -108,7 +108,7 @@ The web process and worker processes need the same database and storage credenti
 
 The checked-in Render blueprint pins `ESSAY_WORKER_COUNT=1` on the free plan because the combined web-plus-workers container can exceed 512 MiB if you let it boot the default `6` workers. If you deploy the Docker image manually in Render instead of using the blueprint, set that env var yourself.
 
-The Docker image runs from the baked project virtualenv at runtime; it does not call `uv run` during container startup. The combined runtime entrypoint also runs `python -m alembic upgrade head` before it starts the web process and workers, so the SQL schema exists in the same environment the app actually runs in. The checked-in Render blueprint keeps the same command as a pre-deploy step as well.
+The Docker image runs from the baked project virtualenv at runtime; it does not call `uv run` during container startup. The combined runtime entrypoint also runs the repo's legacy-safe DB upgrade helper before it starts the web process and workers, so the SQL schema exists in the same environment the app actually runs in. The checked-in Render blueprint uses that same helper as a pre-deploy step.
 
 
 The service exposes the web UI on the port assigned by Render. Set `ESSAY_WEB_JOB_TTL_SECONDS` / `ESSAY_WEB_JOB_SWEEP_INTERVAL_SECONDS` if you need different retention for undownloaded jobs.
@@ -125,7 +125,7 @@ For inspection/debugging, the web server exposes a browser history page at `GET 
 
 Database schema changes are managed through Alembic. Run `uv run alembic upgrade head` before starting the app in a fresh environment or after pulling schema changes.
 
-If your local Postgres database was created before Alembic support and already contains a `web_jobs` table, use `uv run python scripts/db_upgrade_local.py` for the one-time upgrade path. It backs up existing `web_jobs` rows, recreates the table through Alembic, and restores the saved rows. Avoid `alembic stamp head` unless you have verified that the existing schema matches the migration exactly.
+If your Postgres database was created before Alembic support and already contains a `web_jobs` table, use `uv run python scripts/db_upgrade_local.py` for the one-time upgrade path. It backs up existing `web_jobs` rows, recreates the table through Alembic, and restores the saved rows. Avoid `alembic stamp head` unless you have verified that the existing schema matches the migration exactly.
 
 PDF proxy credentials are no longer hardcoded in code. Set `ESSAY_WRITER_SEARCH__PROXY_PREFIX`, `ESSAY_WRITER_SEARCH__PROXY_USERNAME`, and `ESSAY_WRITER_SEARCH__PROXY_PASSWORD` in `.env` or the deployment environment when proxy access is needed.
 

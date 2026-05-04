@@ -10,6 +10,7 @@ import sys
 import time
 
 from config.settings import load_config
+from src.db_upgrade import upgrade_database
 
 
 def _terminate(processes: list[subprocess.Popen[bytes]]) -> None:
@@ -19,10 +20,7 @@ def _terminate(processes: list[subprocess.Popen[bytes]]) -> None:
 
 
 def _run_migrations() -> int:
-    return subprocess.run(
-        [sys.executable, "-m", "alembic", "upgrade", "head"],
-        check=False,
-    ).returncode
+    return upgrade_database(status=print)
 
 
 def _wait_for_port(port: int, *, timeout_seconds: float = 30.0) -> bool:
