@@ -143,87 +143,75 @@ class TestStructuredCallRepair:
 
 
 class TestSelectedSourceNotes:
-    def test_uses_selected_accessible_notes_when_available(self, tmp_path):
+    def test_uses_selected_accessible_notes_when_available(self):
         from src.pipeline_support import load_selected_source_notes
         from src.schemas import SourceNote
+        from src.storage import MemoryRunStorage
 
-        notes_dir = tmp_path / "sources" / "notes"
-        notes_dir.mkdir(parents=True)
+        storage = MemoryRunStorage("test/")
 
         note_a = SourceNote(source_id="alpha2024", is_accessible=True, title="A")
         note_b = SourceNote(source_id="beta2024", is_accessible=True, title="B")
-        (notes_dir / "alpha2024.json").write_text(
-            note_a.model_dump_json(), encoding="utf-8"
-        )
-        (notes_dir / "beta2024.json").write_text(
-            note_b.model_dump_json(), encoding="utf-8"
-        )
-
-        (tmp_path / "sources" / "selected.json").write_text(
-            json.dumps({"beta2024": {"title": "B"}}), encoding="utf-8"
+        storage.write_text("sources/notes/alpha2024.json", note_a.model_dump_json())
+        storage.write_text("sources/notes/beta2024.json", note_b.model_dump_json())
+        storage.write_text(
+            "sources/selected.json",
+            json.dumps({"beta2024": {"title": "B"}}),
         )
 
-        notes = load_selected_source_notes(tmp_path)
+        notes = load_selected_source_notes(storage)
         assert [note.source_id for note in notes] == ["beta2024"]
 
     def test_falls_back_to_all_accessible_notes_when_selection_is_unusable(
-        self, tmp_path, caplog
+        self, caplog
     ):
         from src.pipeline_support import load_selected_source_notes
         from src.schemas import SourceNote
+        from src.storage import MemoryRunStorage
 
-        notes_dir = tmp_path / "sources" / "notes"
-        notes_dir.mkdir(parents=True)
+        storage = MemoryRunStorage("test/")
 
         note_a = SourceNote(source_id="alpha2024", is_accessible=True, title="A")
         note_b = SourceNote(source_id="beta2024", is_accessible=True, title="B")
-        (notes_dir / "alpha2024.json").write_text(
-            note_a.model_dump_json(), encoding="utf-8"
-        )
-        (notes_dir / "beta2024.json").write_text(
-            note_b.model_dump_json(), encoding="utf-8"
-        )
-
-        (tmp_path / "sources" / "selected.json").write_text(
-            json.dumps({"missing2024": {"title": "Missing"}}), encoding="utf-8"
+        storage.write_text("sources/notes/alpha2024.json", note_a.model_dump_json())
+        storage.write_text("sources/notes/beta2024.json", note_b.model_dump_json())
+        storage.write_text(
+            "sources/selected.json",
+            json.dumps({"missing2024": {"title": "Missing"}}),
         )
 
         with caplog.at_level(logging.WARNING):
-            notes = load_selected_source_notes(tmp_path)
+            notes = load_selected_source_notes(storage)
 
         assert [note.source_id for note in notes] == ["alpha2024", "beta2024"]
         assert "Selected sources had no accessible notes" in caplog.text
 
-    def test_empty_selected_set_stays_empty(self, tmp_path):
+    def test_empty_selected_set_stays_empty(self):
         from src.pipeline_support import load_selected_source_notes
         from src.schemas import SourceNote
+        from src.storage import MemoryRunStorage
 
-        notes_dir = tmp_path / "sources" / "notes"
-        notes_dir.mkdir(parents=True)
+        storage = MemoryRunStorage("test/")
 
         note_a = SourceNote(source_id="alpha2024", is_accessible=True, title="A")
-        (notes_dir / "alpha2024.json").write_text(
-            note_a.model_dump_json(), encoding="utf-8"
-        )
+        storage.write_text("sources/notes/alpha2024.json", note_a.model_dump_json())
+        storage.write_text("sources/selected.json", json.dumps({}))
 
-        (tmp_path / "sources" / "selected.json").write_text(
-            json.dumps({}), encoding="utf-8"
-        )
-
-        assert load_selected_source_notes(tmp_path) == []
+        assert load_selected_source_notes(storage) == []
 
     async def test_write_full_clamps_min_sources_to_selected_usable_count(
-        self, tmp_path, monkeypatch
+        self, monkeypatch
     ):
         from types import SimpleNamespace
 
         from src.pipeline_support import PipelineContext
         from src.pipeline_writing import make_write_full
         from src.schemas import SourceNote
+        from src.storage import MemoryRunStorage
 
-        (tmp_path / "brief").mkdir(parents=True)
-        (tmp_path / "plan").mkdir(parents=True)
-        (tmp_path / "brief" / "assignment.json").write_text(
+        storage = MemoryRunStorage("test/")
+        storage.write_text(
+            "brief/assignment.json",
             json.dumps(
                 {
                     "language": "English",
@@ -231,13 +219,12 @@ class TestSelectedSourceNotes:
                     "description": "Test description",
                 }
             ),
-            encoding="utf-8",
         )
-        (tmp_path / "plan" / "plan.json").write_text(
+        storage.write_text(
+            "plan/plan.json",
             json.dumps(
                 {"title": "Test plan", "sections": [], "total_word_target": 1000}
             ),
-            encoding="utf-8",
         )
 
         source_notes = [
@@ -248,7 +235,7 @@ class TestSelectedSourceNotes:
 
         monkeypatch.setattr(
             "src.pipeline_writing.load_selected_source_notes",
-            lambda _run_dir: source_notes,
+            lambda _storage: source_notes,
         )
 
         def fake_render_prompt(_template: str, **kwargs) -> str:
@@ -270,7 +257,7 @@ class TestSelectedSourceNotes:
             writer=MagicMock(),
             async_writer=MagicMock(),
             reviewer=MagicMock(),
-            run_dir=tmp_path,
+            storage=storage,
             config=SimpleNamespace(
                 search=SimpleNamespace(section_source_full_detail_max=3),
                 writing=SimpleNamespace(word_count_tolerance=0.1),
@@ -286,9 +273,7 @@ class TestSelectedSourceNotes:
         await make_write_full(target_words=1000, citation_min_sources=5)(ctx)
 
         assert captured["min_sources"] == 2
-        assert (tmp_path / "essay" / "draft.md").read_text(encoding="utf-8") == (
-            "essay body"
-        )
+        assert storage.read_text("essay/draft.md") == "essay body"
 
 
 class TestSourceTargetScaling:
@@ -465,9 +450,11 @@ class TestLongEssayContextHelpers:
         assert "section one" not in context
         assert "section five" not in context
 
-    def test_parse_sections_passes_through_deferred_fields(self, tmp_path):
+    def test_parse_sections_passes_through_deferred_fields(self):
         from src.pipeline_support import parse_sections
+        from src.storage import MemoryRunStorage
 
+        storage = MemoryRunStorage("test/")
         plan = {
             "title": "Test essay",
             "thesis": "Test thesis",
@@ -499,10 +486,9 @@ class TestLongEssayContextHelpers:
             "research_queries": ["test"],
             "total_word_target": 800,
         }
-        (tmp_path / "plan").mkdir(parents=True, exist_ok=True)
-        (tmp_path / "plan" / "plan.json").write_text(json.dumps(plan), encoding="utf-8")
+        storage.write_text("plan/plan.json", json.dumps(plan))
 
-        sections = parse_sections(tmp_path)
+        sections = parse_sections(storage)
 
         assert [section.requires_full_context for section in sections] == [
             True,
@@ -512,28 +498,18 @@ class TestLongEssayContextHelpers:
         assert [section.deferred_order for section in sections] == [2, None, 1]
 
     @pytest.mark.asyncio
-    async def test_make_review_full_does_not_pass_source_context(
-        self, tmp_path, monkeypatch
-    ):
+    async def test_make_review_full_does_not_pass_source_context(self, monkeypatch):
         from src.pipeline_support import PipelineContext
         from src.pipeline_writing import make_review_full
+        from src.storage import MemoryRunStorage
 
-        run_dir = tmp_path / "run"
-        (run_dir / "brief").mkdir(parents=True)
-        (run_dir / "plan").mkdir(parents=True)
-        (run_dir / "essay").mkdir(parents=True)
-        (run_dir / "sources" / "notes").mkdir(parents=True)
-        (run_dir / "brief" / "assignment.json").write_text("{}", encoding="utf-8")
-        (run_dir / "plan" / "plan.json").write_text("{}", encoding="utf-8")
-        (run_dir / "essay" / "draft.md").write_text(
-            "# Draft\n\nParagraph with [[s1]].",
-            encoding="utf-8",
-        )
-        (run_dir / "sources" / "selected.json").write_text(
-            json.dumps(["s1"]),
-            encoding="utf-8",
-        )
-        (run_dir / "sources" / "notes" / "s1.json").write_text(
+        storage = MemoryRunStorage("test/")
+        storage.write_text("brief/assignment.json", "{}")
+        storage.write_text("plan/plan.json", "{}")
+        storage.write_text("essay/draft.md", "# Draft\n\nParagraph with [[s1]].")
+        storage.write_text("sources/selected.json", json.dumps(["s1"]))
+        storage.write_text(
+            "sources/notes/s1.json",
             json.dumps(
                 {
                     "source_id": "s1",
@@ -544,7 +520,6 @@ class TestLongEssayContextHelpers:
                     "fetched_fulltext": True,
                 }
             ),
-            encoding="utf-8",
         )
 
         captured: dict[str, object] = {}
@@ -567,7 +542,7 @@ class TestLongEssayContextHelpers:
             async_worker=None,
             writer=None,
             reviewer=None,
-            run_dir=run_dir,
+            storage=storage,
             config=EssayWriterConfig(),
             async_writer=None,
             async_reviewer=object(),
@@ -595,10 +570,12 @@ class _HistoryRecorder:
         self.synced_job_ids.append(job_id)
 
 
-async def test_execute_persists_completed_step_history(tmp_path):
+async def test_execute_persists_completed_step_history():
     from src.pipeline_support import PipelineContext, PipelineStep, execute
     from src.runtime import TokenTracker
+    from src.storage import MemoryRunStorage
 
+    storage = MemoryRunStorage("test/")
     tracker = TokenTracker()
     history = _HistoryRecorder()
     ctx = PipelineContext(
@@ -606,7 +583,7 @@ async def test_execute_persists_completed_step_history(tmp_path):
         async_worker=None,
         writer=None,
         reviewer=None,
-        run_dir=tmp_path,
+        storage=storage,
         config=EssayWriterConfig(),
         tracker=tracker,
         job_id="job123",
@@ -615,10 +592,7 @@ async def test_execute_persists_completed_step_history(tmp_path):
 
     async def _step(current_ctx):
         current_ctx.tracker.record("openai:gpt-4o", 100, 25, 5)
-        (current_ctx.run_dir / "brief").mkdir(parents=True, exist_ok=True)
-        (current_ctx.run_dir / "brief" / "assignment.json").write_text(
-            "{}", encoding="utf-8"
-        )
+        current_ctx.storage.write_text("brief/assignment.json", "{}")
 
     await execute(
         [PipelineStep("plan", _step)],
@@ -638,10 +612,12 @@ async def test_execute_persists_completed_step_history(tmp_path):
     assert payload["cost_usd"] > 0
 
 
-async def test_execute_persists_failed_step_history(tmp_path):
+async def test_execute_persists_failed_step_history():
     from src.pipeline_support import PipelineContext, PipelineStep, execute
     from src.runtime import TokenTracker
+    from src.storage import MemoryRunStorage
 
+    storage = MemoryRunStorage("test/")
     tracker = TokenTracker()
     history = _HistoryRecorder()
     ctx = PipelineContext(
@@ -649,7 +625,7 @@ async def test_execute_persists_failed_step_history(tmp_path):
         async_worker=None,
         writer=None,
         reviewer=None,
-        run_dir=tmp_path,
+        storage=storage,
         config=EssayWriterConfig(),
         tracker=tracker,
         job_id="job123",

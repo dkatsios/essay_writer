@@ -144,19 +144,21 @@ def test_optional_pdf_excludes_user_provided_and_fulltext() -> None:
     assert items == []
 
 
-def test_optional_pdf_corpus_reads_brief_and_plan(tmp_path) -> None:
-    (tmp_path / "brief").mkdir()
-    (tmp_path / "plan").mkdir()
-    (tmp_path / "brief" / "assignment.json").write_text(
-        '{"topic": "quantum computing ethics"}', encoding="utf-8"
+def test_optional_pdf_corpus_reads_brief_and_plan() -> None:
+    from src.storage import MemoryRunStorage
+
+    storage = MemoryRunStorage("test/")
+    storage.write_text(
+        "brief/assignment.json",
+        '{"topic": "quantum computing ethics"}',
     )
-    (tmp_path / "plan" / "plan.json").write_text(
+    storage.write_text(
+        "plan/plan.json",
         '{"title": "Plan", "thesis": "Privacy matters", '
         '"sections": [{"title": "Quantum threats"}], '
         '"research_queries": ["post-quantum crypto"]}',
-        encoding="utf-8",
     )
-    t = _optional_pdf_corpus_tokens(tmp_path)
+    t = _optional_pdf_corpus_tokens(storage)
     assert "quantum" in t
     assert "privacy" in t
     assert "crypto" in t

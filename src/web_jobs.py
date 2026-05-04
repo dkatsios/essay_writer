@@ -6,14 +6,12 @@ import asyncio
 import json
 import logging
 import os
-import shutil
 import socket
 import time
 import unicodedata
 import zipfile
 from dataclasses import dataclass, field
 from io import BytesIO
-from pathlib import Path
 from urllib.parse import urlparse
 
 from config.settings import load_config
@@ -27,6 +25,7 @@ from src.run_logging import (
     setup_run_logging,
     teardown_run_logging,
 )
+from src.storage import AnyStorage, create_run_storage
 from src.tools._http import pdf_get
 from src.tools.web_fetcher import extract_pdf_bytes_to_text
 
@@ -63,7 +62,7 @@ class Job:
     worker_id: str = ""
     leased_at: float | None = None
     lease_expires_at: float | None = None
-    run_dir: Path = field(default_factory=lambda: Path("."))
+    run_dir: str = ""  # R2 prefix key for this run's storage
     questions: list[dict] | None = None
     answers_event: asyncio.Event = field(default_factory=asyncio.Event)
     answers: str = ""
@@ -93,19 +92,23 @@ class Job:
     api_key: str = ""
     _sse_event: asyncio.Event = field(default_factory=asyncio.Event)
 
+    def get_storage(self) -> AnyStorage:
+        """Create storage for this job's run prefix."""
+        return create_run_storage(self.job_id)
+
 
 jobs = JobStore()
 
 
-def _sync_job_artifacts(job: Job, run_dir: Path | None = None) -> None:
-    run_history.sync_artifacts(job.job_id, run_dir or job.run_dir)
+def _sync_job_artifacts(job: Job) -> None:
+    run_history.sync_artifacts(job.job_id, job.get_storage())
 
 
 def _persist_run_history_snapshot(job: Job) -> None:
     tracker = job.tracker
     if tracker is not None and hasattr(tracker, "build_runtime_summary"):
         payload = tracker.build_runtime_summary(
-            job.run_dir,
+            job.get_storage(),
             status=job.status,
             provider=job.provider,
         )
@@ -132,7 +135,7 @@ def _persist_terminal_run_history(job: Job, *, status: str) -> None:
     tracker = job.tracker
     if tracker is not None and hasattr(tracker, "build_runtime_summary"):
         payload = tracker.build_runtime_summary(
-            job.run_dir,
+            job.get_storage(),
             status=status,
             provider=job.provider,
         )
@@ -344,7 +347,11 @@ def delete_job_artifacts(job_id: str) -> bool:
     if job is None:
         return False
     run_history.mark_artifacts_deleted(job_id)
-    shutil.rmtree(job.run_dir, ignore_errors=True)
+    try:
+        storage = job.get_storage()
+        storage.delete_all()
+    except Exception:
+        logger.warning("Failed to delete R2 artifacts for job %s", job_id)
     return True
 
 
@@ -357,7 +364,13 @@ def job_ttl_sweep_once(now: float | None = None) -> int:
     for job in jobs.expired_finished_jobs(current_time=current_time, ttl_seconds=ttl):
         jobs.pop(job.job_id, None)
         run_history.mark_artifacts_deleted(job.job_id, current_time=current_time)
-        shutil.rmtree(job.run_dir, ignore_errors=True)
+        try:
+            storage = job.get_storage()
+            storage.delete_all()
+        except Exception:
+            logger.warning(
+                "Failed to delete R2 artifacts for job %s during TTL sweep", job.job_id
+            )
         removed += 1
         logger.info(
             "TTL cleanup removed job %s (status=%s, age=%.0fs)",
@@ -409,15 +422,15 @@ def build_job_extra_prompt(job: Job) -> str | None:
     return extra_prompt
 
 
-def infer_job_upload_dirs(job: Job) -> tuple[Path | None, Path | None]:
-    upload_dir = job.run_dir / "uploads"
-    user_sources_dir = job.run_dir / "user_sources"
-    return (
-        upload_dir if upload_dir.exists() and any(upload_dir.iterdir()) else None,
-        user_sources_dir
-        if user_sources_dir.exists() and any(user_sources_dir.iterdir())
-        else None,
-    )
+def infer_job_has_uploads(job: Job) -> tuple[bool, bool]:
+    """Check if uploads and user_sources exist in storage.
+
+    Returns (has_uploads, has_user_sources).
+    """
+    storage = job.get_storage()
+    has_uploads = bool(storage.list_files("uploads/"))
+    has_user_sources = bool(storage.list_files("user_sources/"))
+    return has_uploads, has_user_sources
 
 
 def worker_identity() -> str:
@@ -426,10 +439,10 @@ def worker_identity() -> str:
 
 async def run_pipeline_task(
     job: Job,
-    upload_dir: Path | None,
+    has_uploads: bool,
     prompt: str | None,
     min_sources: int | None = None,
-    user_sources_dir: Path | None = None,
+    has_user_sources: bool = False,
     *,
     load_config_fn,
     models_config_cls,
@@ -443,9 +456,10 @@ async def run_pipeline_task(
 ) -> None:
     """Execute the essay pipeline as an asyncio task on uvicorn's event loop."""
     log_handler = None
+    storage = job.get_storage()
     with run_id_context(job.job_id):
         try:
-            log_handler = setup_run_logging(job.run_dir, job.job_id)
+            log_handler = setup_run_logging(None, job.job_id)
             logger.info(
                 "Job %s started (provider=%s, target_words=%s, min_sources=%s)",
                 job.job_id,
@@ -459,16 +473,22 @@ async def run_pipeline_task(
             if job.provider:
                 config.models = models_config_cls(provider=job.provider)
 
-            run_dir = job.run_dir
-            input_dir = run_dir / "input"
-            input_dir.mkdir(parents=True, exist_ok=True)
+            if has_uploads:
+                # Download uploaded files to temp, scan, extract text, write to storage
+                import tempfile
 
-            if upload_dir and any(upload_dir.iterdir()):
-                input_files = scan_fn(str(upload_dir))
-                extracted_text = build_extracted_text_fn(
-                    input_files, extra_prompt=prompt
-                )
-                del input_files
+                with tempfile.TemporaryDirectory() as tmpdir:
+                    from pathlib import Path
+
+                    tmp_path = Path(tmpdir)
+                    for subpath in storage.list_files("uploads/"):
+                        filename = subpath.rsplit("/", 1)[-1]
+                        (tmp_path / filename).write_bytes(storage.read_bytes(subpath))
+                    input_files = scan_fn(str(tmp_path))
+                    extracted_text = build_extracted_text_fn(
+                        input_files, extra_prompt=prompt
+                    )
+                    del input_files
             elif prompt:
                 extracted_text = f"# Assignment\n\n{prompt}\n"
             else:
@@ -480,8 +500,8 @@ async def run_pipeline_task(
                 notify_job(job)
                 return
 
-            (input_dir / "extracted.md").write_text(extracted_text, encoding="utf-8")
-            _sync_job_artifacts(job, run_dir)
+            storage.write_text("input/extracted.md", extracted_text)
+            _sync_job_artifacts(job)
 
             api_key = job.api_key or None
             job.api_key = ""
@@ -506,7 +526,7 @@ async def run_pipeline_task(
             save_job(job)
 
             async def _on_questions(
-                questions: list[ValidationQuestion], run_path: Path
+                questions: list[ValidationQuestion], run_storage: AnyStorage
             ) -> None:
                 remaining = questions
                 auto_clarifications: list[Clarification] = []
@@ -524,18 +544,17 @@ async def run_pipeline_task(
                             remaining.append(question)
 
                 if auto_clarifications:
-                    brief_path = run_path / "brief" / "assignment.json"
                     brief = AssignmentBrief.model_validate_json(
-                        brief_path.read_text(encoding="utf-8")
+                        run_storage.read_text("brief/assignment.json")
                     )
                     if brief.clarifications is None:
                         brief.clarifications = []
                     brief.clarifications.extend(auto_clarifications)
                     if not brief.academic_level:
                         brief.academic_level = job.academic_level
-                    brief_path.write_text(
+                    run_storage.write_text(
+                        "brief/assignment.json",
                         brief.model_dump_json(indent=2, ensure_ascii=False),
-                        encoding="utf-8",
                     )
 
                 if not remaining:
@@ -587,24 +606,25 @@ async def run_pipeline_task(
                         save_job(job)
                         return
 
-                brief_path = run_path / "brief" / "assignment.json"
                 brief = AssignmentBrief.model_validate_json(
-                    brief_path.read_text(encoding="utf-8")
+                    run_storage.read_text("brief/assignment.json")
                 )
                 if brief.clarifications is None:
                     brief.clarifications = []
                 brief.clarifications.extend(
                     parse_validation_answers_fn(remaining, chosen_answers)
                 )
-                brief_path.write_text(
+                run_storage.write_text(
+                    "brief/assignment.json",
                     brief.model_dump_json(indent=2, ensure_ascii=False),
-                    encoding="utf-8",
                 )
                 logger.info("Job %s clarification answers saved", job.job_id)
                 job.questions = None
                 save_job(job)
 
-            async def _on_optional_pdfs(run_path: Path, items: list[dict]) -> None:
+            async def _on_optional_pdfs(
+                run_storage: AnyStorage, items: list[dict]
+            ) -> None:
                 if not items:
                     return
                 if job.fast_track:
@@ -620,7 +640,7 @@ async def run_pipeline_task(
                 )
                 job.optional_pdf_event.clear()
                 job.status = "optional_pdfs"
-                _sync_job_artifacts(job, run_path)
+                _sync_job_artifacts(job)
                 save_job(job)
                 logger.info(
                     "Job %s waiting for optional PDFs for %d source(s)",
@@ -641,14 +661,14 @@ async def run_pipeline_task(
                 logger.info("Job %s optional PDF step resumed", job.job_id)
 
             async def _on_source_shortfall(
-                run_path: Path, summary: dict
+                run_storage: AnyStorage, summary: dict
             ) -> tuple[bool, list[str]]:
                 job.source_shortfall = summary
                 job.source_shortfall_decision = ""
                 job.source_shortfall_added_ids = []
                 job.source_shortfall_event.clear()
                 job.status = "source_shortfall"
-                _sync_job_artifacts(job, run_path)
+                _sync_job_artifacts(job)
                 save_job(job)
                 logger.warning(
                     "Job %s waiting for source shortfall decision (%s/%s usable sources)",
@@ -675,7 +695,7 @@ async def run_pipeline_task(
                 None,
                 None,
                 None,
-                run_dir,
+                storage,
                 config,
                 extra_prompt=prompt,
                 token_tracker=tracker,
@@ -683,7 +703,7 @@ async def run_pipeline_task(
                 on_optional_source_pdfs=_on_optional_pdfs,
                 on_source_shortfall=_on_source_shortfall,
                 min_sources=min_sources,
-                user_sources_dir=user_sources_dir,
+                user_sources_dir="user_sources" if has_user_sources else None,
                 async_worker=async_worker,
                 async_writer=async_writer,
                 async_reviewer=async_reviewer,
@@ -691,7 +711,7 @@ async def run_pipeline_task(
                 run_history_store=run_history,
             )
 
-            tracker.write_report(run_dir)
+            tracker.write_report(storage)
             _persist_terminal_run_history(job, status="done")
             job.status = "done"
             job.current_step = ""
@@ -718,13 +738,11 @@ async def run_pipeline_task(
                 teardown_run_logging(log_handler)
 
 
-def build_zip(run_dir: Path) -> BytesIO:
+def build_zip(storage: AnyStorage) -> BytesIO:
     buffer = BytesIO()
-    root = run_dir.resolve()
     with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as zip_file:
-        for path in sorted(root.rglob("*")):
-            if path.is_file():
-                zip_file.write(path, path.relative_to(root).as_posix())
+        for subpath in sorted(storage.iter_all_files()):
+            zip_file.writestr(subpath, storage.read_bytes(subpath))
     buffer.seek(0)
     return buffer
 
@@ -761,20 +779,18 @@ def apply_optional_pdf_bytes(
     if len(text) > 50_000:
         text = text[:50_000] + "\n\n[... truncated ...]"
 
-    supplement_dir = job.run_dir / "sources" / "supplement"
-    supplement_dir.mkdir(parents=True, exist_ok=True)
+    storage = job.get_storage()
     safe_name = "".join(c if c.isalnum() or c in "-_" else "_" for c in source_id)[:120]
-    text_path = supplement_dir / f"{safe_name}.txt"
-    text_path.write_text(text, encoding="utf-8")
+    content_subpath = f"sources/supplement/{safe_name}.txt"
+    storage.write_text(content_subpath, text)
 
-    registry_path = job.run_dir / "sources" / "registry.json"
-    registry = json.loads(registry_path.read_text(encoding="utf-8"))
+    registry = json.loads(storage.read_text("sources/registry.json"))
     if source_id not in registry:
         return "Source not in registry"
-    registry[source_id]["content_path"] = str(text_path.resolve())
-    registry_path.write_text(
+    registry[source_id]["content_path"] = content_subpath
+    storage.write_text(
+        "sources/registry.json",
         json.dumps(registry, ensure_ascii=False, indent=2),
-        encoding="utf-8",
     )
-    run_history.sync_artifacts(job.job_id, job.run_dir)
+    run_history.sync_artifacts(job.job_id, storage)
     return None

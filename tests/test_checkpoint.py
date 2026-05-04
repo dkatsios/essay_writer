@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-from pathlib import Path
 from unittest.mock import MagicMock
 
 import pytest
@@ -15,75 +14,66 @@ from src.pipeline_support import (
     load_checkpoint,
     save_checkpoint,
 )
+from src.storage import MemoryRunStorage
 
 
 @pytest.fixture
-def run_dir(tmp_path: Path) -> Path:
-    """Create a temporary run directory."""
-    return tmp_path / "run"
+def storage() -> MemoryRunStorage:
+    return MemoryRunStorage("test/")
 
 
 class TestLoadCheckpoint:
-    def test_missing_file_returns_empty(self, run_dir: Path):
-        assert load_checkpoint(run_dir) == set()
+    def test_missing_file_returns_empty(self, storage: MemoryRunStorage):
+        assert load_checkpoint(storage) == set()
 
-    def test_loads_completed_steps(self, run_dir: Path):
-        run_dir.mkdir(parents=True)
-        (run_dir / "checkpoint.json").write_text(
+    def test_loads_completed_steps(self, storage: MemoryRunStorage):
+        storage.write_text(
+            "checkpoint.json",
             json.dumps({"completed": ["intake", "validate", "plan"]}),
-            encoding="utf-8",
         )
-        assert load_checkpoint(run_dir) == {"intake", "validate", "plan"}
+        assert load_checkpoint(storage) == {"intake", "validate", "plan"}
 
-    def test_corrupt_json_returns_empty(self, run_dir: Path):
-        run_dir.mkdir(parents=True)
-        (run_dir / "checkpoint.json").write_text("not json", encoding="utf-8")
-        assert load_checkpoint(run_dir) == set()
+    def test_corrupt_json_returns_empty(self, storage: MemoryRunStorage):
+        storage.write_text("checkpoint.json", "not json")
+        assert load_checkpoint(storage) == set()
 
-    def test_empty_completed_returns_empty(self, run_dir: Path):
-        run_dir.mkdir(parents=True)
-        (run_dir / "checkpoint.json").write_text(
-            json.dumps({"completed": []}), encoding="utf-8"
-        )
-        assert load_checkpoint(run_dir) == set()
+    def test_empty_completed_returns_empty(self, storage: MemoryRunStorage):
+        storage.write_text("checkpoint.json", json.dumps({"completed": []}))
+        assert load_checkpoint(storage) == set()
 
 
 class TestSaveCheckpoint:
-    def test_creates_file(self, run_dir: Path):
-        run_dir.mkdir(parents=True)
-        save_checkpoint(run_dir, "intake")
-        data = json.loads((run_dir / "checkpoint.json").read_text(encoding="utf-8"))
+    def test_creates_file(self, storage: MemoryRunStorage):
+        save_checkpoint(storage, "intake")
+        data = json.loads(storage.read_text("checkpoint.json"))
         assert data["completed"] == ["intake"]
 
-    def test_appends_step(self, run_dir: Path):
-        run_dir.mkdir(parents=True)
-        save_checkpoint(run_dir, "intake")
-        save_checkpoint(run_dir, "validate")
-        data = json.loads((run_dir / "checkpoint.json").read_text(encoding="utf-8"))
+    def test_appends_step(self, storage: MemoryRunStorage):
+        save_checkpoint(storage, "intake")
+        save_checkpoint(storage, "validate")
+        data = json.loads(storage.read_text("checkpoint.json"))
         assert data["completed"] == ["intake", "validate"]
 
-    def test_no_duplicates(self, run_dir: Path):
-        run_dir.mkdir(parents=True)
-        save_checkpoint(run_dir, "intake")
-        save_checkpoint(run_dir, "intake")
-        data = json.loads((run_dir / "checkpoint.json").read_text(encoding="utf-8"))
+    def test_no_duplicates(self, storage: MemoryRunStorage):
+        save_checkpoint(storage, "intake")
+        save_checkpoint(storage, "intake")
+        data = json.loads(storage.read_text("checkpoint.json"))
         assert data["completed"] == ["intake"]
 
 
 class TestExecuteWithCheckpoint:
-    def _make_ctx(self, run_dir: Path) -> PipelineContext:
-        run_dir.mkdir(parents=True, exist_ok=True)
+    def _make_ctx(self, storage: MemoryRunStorage) -> PipelineContext:
         return PipelineContext(
             worker=MagicMock(),
             async_worker=None,
             writer=MagicMock(),
             reviewer=MagicMock(),
-            run_dir=run_dir,
+            storage=storage,
             config=MagicMock(),
         )
 
-    async def test_skips_completed_steps(self, run_dir: Path):
-        ctx = self._make_ctx(run_dir)
+    async def test_skips_completed_steps(self, storage: MemoryRunStorage):
+        ctx = self._make_ctx(storage)
         calls = []
         steps = [
             PipelineStep("a", lambda _ctx: calls.append("a")),
@@ -93,8 +83,8 @@ class TestExecuteWithCheckpoint:
         await execute(steps, ctx, checkpoint={"a", "b"})
         assert calls == ["c"]
 
-    async def test_no_checkpoint_runs_all(self, run_dir: Path):
-        ctx = self._make_ctx(run_dir)
+    async def test_no_checkpoint_runs_all(self, storage: MemoryRunStorage):
+        ctx = self._make_ctx(storage)
         calls = []
         steps = [
             PipelineStep("a", lambda _ctx: calls.append("a")),
@@ -103,18 +93,18 @@ class TestExecuteWithCheckpoint:
         await execute(steps, ctx)
         assert calls == ["a", "b"]
 
-    async def test_writes_checkpoint_after_each_step(self, run_dir: Path):
-        ctx = self._make_ctx(run_dir)
+    async def test_writes_checkpoint_after_each_step(self, storage: MemoryRunStorage):
+        ctx = self._make_ctx(storage)
         steps = [
             PipelineStep("a", lambda _ctx: None),
             PipelineStep("b", lambda _ctx: None),
         ]
         await execute(steps, ctx)
-        checkpoint = load_checkpoint(run_dir)
+        checkpoint = load_checkpoint(storage)
         assert checkpoint == {"a", "b"}
 
-    async def test_failed_step_not_checkpointed(self, run_dir: Path):
-        ctx = self._make_ctx(run_dir)
+    async def test_failed_step_not_checkpointed(self, storage: MemoryRunStorage):
+        ctx = self._make_ctx(storage)
 
         def _fail(_ctx):
             raise RuntimeError("boom")
@@ -126,11 +116,11 @@ class TestExecuteWithCheckpoint:
         with pytest.raises(RuntimeError, match="boom"):
             await execute(steps, ctx)
 
-        checkpoint = load_checkpoint(run_dir)
+        checkpoint = load_checkpoint(storage)
         assert checkpoint == {"a"}
 
-    async def test_empty_checkpoint_runs_all(self, run_dir: Path):
-        ctx = self._make_ctx(run_dir)
+    async def test_empty_checkpoint_runs_all(self, storage: MemoryRunStorage):
+        ctx = self._make_ctx(storage)
         calls = []
         steps = [
             PipelineStep("a", lambda _ctx: calls.append("a")),

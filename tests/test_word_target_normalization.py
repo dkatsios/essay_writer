@@ -178,12 +178,12 @@ class TestNormalizeSectionWordTargets:
         # No crash, values unchanged
         assert [s.word_target for s in sections] == [0, 0]
 
-    def test_parse_sections_normalizes(self, tmp_path):
+    def test_parse_sections_normalizes(self):
         """Integration: parse_sections applies normalization even for mismatched plans."""
         from src.pipeline_support import parse_sections
+        from src.storage import MemoryRunStorage
 
-        # sum(600+400)=1000 but total=500 → validator auto-corrects,
-        # then parse_sections normalizes again (no-op since already fixed).
+        storage = MemoryRunStorage("test/")
         plan = {
             "title": "Test",
             "thesis": "Thesis",
@@ -194,10 +194,9 @@ class TestNormalizeSectionWordTargets:
             ],
             "total_word_target": 500,
         }
-        (tmp_path / "plan").mkdir(parents=True, exist_ok=True)
-        (tmp_path / "plan" / "plan.json").write_text(json.dumps(plan), encoding="utf-8")
+        storage.write_text("plan/plan.json", json.dumps(plan))
 
-        sections = parse_sections(tmp_path)
+        sections = parse_sections(storage)
 
         assert sum(s.word_target for s in sections) == 500
         # 600 * (500/1000) = 300, 400 * (500/1000) = 200

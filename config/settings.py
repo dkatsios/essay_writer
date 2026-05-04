@@ -160,6 +160,25 @@ class DatabaseConfig(BaseModel):
         return text or _DEFAULT_DATABASE_URL
 
 
+class StorageConfig(BaseModel):
+    """Artifact storage settings — supports ``r2`` and ``local`` backends."""
+
+    backend: str = "r2"
+    """Storage backend: ``"r2"`` for Cloudflare R2 (production), ``"local"`` for filesystem (development)."""
+    local_dir: str = "runs"
+    """Base directory for local-backend artifacts (relative to project root)."""
+    r2_endpoint_url: str = ""
+    """S3-compatible endpoint URL (e.g. https://<account>.r2.cloudflarestorage.com)."""
+    r2_bucket: str = ""
+    """R2 bucket name."""
+    r2_access_key_id: str = ""
+    """R2 API access key ID."""
+    r2_secret_access_key: str = ""
+    """R2 API secret access key."""
+    run_prefix: str = "runs/"
+    """Key prefix for all run artifacts within the bucket (R2) or under local_dir (local)."""
+
+
 class EssayWriterConfig(BaseSettings):
     """Root configuration for the essay writer.
 
@@ -181,6 +200,7 @@ class EssayWriterConfig(BaseSettings):
     formatting: FormattingConfig = FormattingConfig()
     search: SearchConfig = SearchConfig()
     database: DatabaseConfig = DatabaseConfig()
+    storage: StorageConfig = StorageConfig()
     google_api_key: str | None = Field(
         default=None,
         validation_alias=_alias_choices(

@@ -3,17 +3,16 @@
 from __future__ import annotations
 
 import json
-from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 from src.pipeline_support import PipelineContext, parse_sections
 from src.pipeline_writing import make_review_sections, make_write_sections
 from src.schemas import AssignmentBrief
+from src.storage import MemoryRunStorage
 
 
-def _write_plan(run_dir: Path) -> None:
-    (run_dir / "plan").mkdir(parents=True, exist_ok=True)
+def _write_plan(storage: MemoryRunStorage) -> None:
     plan = {
         "title": "Test essay",
         "thesis": "Test thesis",
@@ -48,22 +47,21 @@ def _write_plan(run_dir: Path) -> None:
         "research_queries": ["test query"],
         "total_word_target": 1300,
     }
-    (run_dir / "plan" / "plan.json").write_text(json.dumps(plan), encoding="utf-8")
+    storage.write_text("plan/plan.json", json.dumps(plan))
 
 
-def _write_brief(run_dir: Path) -> None:
-    (run_dir / "brief").mkdir(parents=True, exist_ok=True)
+def _write_brief(storage: MemoryRunStorage) -> None:
     brief = {
         "topic": "Test topic",
         "description": "Test description",
         "language": "English",
     }
-    (run_dir / "brief" / "assignment.json").write_text(
-        json.dumps(brief), encoding="utf-8"
-    )
+    storage.write_text("brief/assignment.json", json.dumps(brief))
 
 
-def _make_ctx(run_dir: Path, tracker: object | None = None) -> PipelineContext:
+def _make_ctx(
+    storage: MemoryRunStorage, tracker: object | None = None
+) -> PipelineContext:
     config = SimpleNamespace(
         search=SimpleNamespace(section_source_full_detail_max=3),
         writing=SimpleNamespace(
@@ -78,7 +76,7 @@ def _make_ctx(run_dir: Path, tracker: object | None = None) -> PipelineContext:
         async_writer=MagicMock(),
         reviewer=MagicMock(),
         async_reviewer=MagicMock(),
-        run_dir=run_dir,
+        storage=storage,
         config=config,
         tracker=tracker,
         brief=AssignmentBrief(
@@ -87,21 +85,22 @@ def _make_ctx(run_dir: Path, tracker: object | None = None) -> PipelineContext:
     )
 
 
-def test_parse_sections_uses_plan_position_as_internal_id(tmp_path: Path) -> None:
-    _write_plan(tmp_path)
+def test_parse_sections_uses_plan_position_as_internal_id() -> None:
+    storage = MemoryRunStorage("test/")
+    _write_plan(storage)
 
-    sections = parse_sections(tmp_path)
+    sections = parse_sections(storage)
 
     assert [section.position for section in sections] == [1, 2, 3]
     assert [section.number for section in sections] == [1, 2, 2]
 
 
-async def test_write_sections_keeps_duplicate_numbers_distinct(
-    tmp_path: Path, monkeypatch
-) -> None:
-    _write_plan(tmp_path)
-    _write_brief(tmp_path)
-    (tmp_path / "plan" / "source_assignments.json").write_text(
+async def test_write_sections_keeps_duplicate_numbers_distinct(monkeypatch) -> None:
+    storage = MemoryRunStorage("test/")
+    _write_plan(storage)
+    _write_brief(storage)
+    storage.write_text(
+        "plan/source_assignments.json",
         json.dumps(
             {
                 "assignments": [
@@ -111,16 +110,15 @@ async def test_write_sections_keeps_duplicate_numbers_distinct(
                 ]
             }
         ),
-        encoding="utf-8",
     )
-    sections = parse_sections(tmp_path)
+    sections = parse_sections(storage)
     tracker = MagicMock()
     captured_assignments: dict[int, list[str]] = {}
     captured_context_flags: dict[int, bool] = {}
     captured_context_text: dict[int, str] = {}
 
     monkeypatch.setattr(
-        "src.pipeline_writing.load_selected_source_notes", lambda _run_dir: []
+        "src.pipeline_writing.load_selected_source_notes", lambda _storage: []
     )
 
     def fake_render_prompt(template: str, **kwargs) -> str:
@@ -138,7 +136,7 @@ async def test_write_sections_keeps_duplicate_numbers_distinct(
     monkeypatch.setattr("src.pipeline_writing.async_text_call", _fake_async_text_call)
 
     await make_write_sections(sections, target_words=1300, citation_min_sources=1)(
-        _make_ctx(tmp_path, tracker=tracker)
+        _make_ctx(storage, tracker=tracker)
     )
 
     assert captured_assignments == {
@@ -155,16 +153,10 @@ async def test_write_sections_keeps_duplicate_numbers_distinct(
     assert "draft:Body B" in captured_context_text[1]
     assert captured_context_text[2] == ""
     assert captured_context_text[3] == ""
-    assert (tmp_path / "essay" / "sections" / "01.md").read_text(
-        encoding="utf-8"
-    ) == "draft:Intro"
-    assert (tmp_path / "essay" / "sections" / "02.md").read_text(
-        encoding="utf-8"
-    ) == "draft:Body A"
-    assert (tmp_path / "essay" / "sections" / "03.md").read_text(
-        encoding="utf-8"
-    ) == "draft:Body B"
-    assert (tmp_path / "essay" / "draft.md").read_text(encoding="utf-8") == (
+    assert storage.read_text("essay/sections/01.md") == "draft:Intro"
+    assert storage.read_text("essay/sections/02.md") == "draft:Body A"
+    assert storage.read_text("essay/sections/03.md") == "draft:Body B"
+    assert storage.read_text("essay/draft.md") == (
         "draft:Intro\n\ndraft:Body A\n\ndraft:Body B"
     )
     write_steps = [args.args[0] for args in tracker.set_current_step.call_args_list]
@@ -172,18 +164,15 @@ async def test_write_sections_keeps_duplicate_numbers_distinct(
     assert sorted(write_steps[:-1]) == ["write", "write"]
 
 
-async def test_review_sections_keeps_duplicate_numbers_distinct(
-    tmp_path: Path, monkeypatch
-) -> None:
-    _write_plan(tmp_path)
-    _write_brief(tmp_path)
-    sections = parse_sections(tmp_path)
+async def test_review_sections_keeps_duplicate_numbers_distinct(monkeypatch) -> None:
+    storage = MemoryRunStorage("test/")
+    _write_plan(storage)
+    _write_brief(storage)
+    sections = parse_sections(storage)
     tracker = MagicMock()
-    sections_dir = tmp_path / "essay" / "sections"
-    sections_dir.mkdir(parents=True, exist_ok=True)
-    (sections_dir / "01.md").write_text("draft:Intro", encoding="utf-8")
-    (sections_dir / "02.md").write_text("draft:Body A", encoding="utf-8")
-    (sections_dir / "03.md").write_text("draft:Body B", encoding="utf-8")
+    storage.write_text("essay/sections/01.md", "draft:Intro")
+    storage.write_text("essay/sections/02.md", "draft:Body A")
+    storage.write_text("essay/sections/03.md", "draft:Body B")
 
     monkeypatch.setattr(
         "src.pipeline_writing.render_prompt",
@@ -196,19 +185,13 @@ async def test_review_sections_keeps_duplicate_numbers_distinct(
     monkeypatch.setattr("src.pipeline_writing.async_text_call", _fake_async_text_call)
 
     await make_review_sections(sections, target_words=1300)(
-        _make_ctx(tmp_path, tracker=tracker)
+        _make_ctx(storage, tracker=tracker)
     )
 
-    assert (tmp_path / "essay" / "reviewed" / "01.md").read_text(
-        encoding="utf-8"
-    ) == "review:Intro"
-    assert (tmp_path / "essay" / "reviewed" / "02.md").read_text(
-        encoding="utf-8"
-    ) == "review:Body A"
-    assert (tmp_path / "essay" / "reviewed" / "03.md").read_text(
-        encoding="utf-8"
-    ) == "review:Body B"
-    assert (tmp_path / "essay" / "reviewed.md").read_text(encoding="utf-8") == (
+    assert storage.read_text("essay/reviewed/01.md") == "review:Intro"
+    assert storage.read_text("essay/reviewed/02.md") == "review:Body A"
+    assert storage.read_text("essay/reviewed/03.md") == "review:Body B"
+    assert storage.read_text("essay/reviewed.md") == (
         "review:Intro\n\nreview:Body A\n\nreview:Body B"
     )
     assert sorted(args.args[0] for args in tracker.set_current_step.call_args_list) == [
@@ -219,18 +202,17 @@ async def test_review_sections_keeps_duplicate_numbers_distinct(
 
 
 async def test_review_sections_routes_reconciliation_notes_by_position(
-    tmp_path: Path, monkeypatch
+    monkeypatch,
 ) -> None:
-    _write_plan(tmp_path)
-    _write_brief(tmp_path)
-    sections = parse_sections(tmp_path)
-    sections_dir = tmp_path / "essay" / "sections"
-    sections_dir.mkdir(parents=True, exist_ok=True)
-    (sections_dir / "01.md").write_text("draft:Intro", encoding="utf-8")
-    (sections_dir / "02.md").write_text("draft:Body A", encoding="utf-8")
-    (sections_dir / "03.md").write_text("draft:Body B", encoding="utf-8")
-    (tmp_path / "essay").mkdir(parents=True, exist_ok=True)
-    (tmp_path / "essay" / "reconciliation.json").write_text(
+    storage = MemoryRunStorage("test/")
+    _write_plan(storage)
+    _write_brief(storage)
+    sections = parse_sections(storage)
+    storage.write_text("essay/sections/01.md", "draft:Intro")
+    storage.write_text("essay/sections/02.md", "draft:Body A")
+    storage.write_text("essay/sections/03.md", "draft:Body B")
+    storage.write_text(
+        "essay/reconciliation.json",
         json.dumps(
             {
                 "global_notes": [],
@@ -274,7 +256,6 @@ async def test_review_sections_routes_reconciliation_notes_by_position(
                 ],
             }
         ),
-        encoding="utf-8",
     )
     captured_notes: dict[int, list[str]] = {}
 
@@ -292,7 +273,7 @@ async def test_review_sections_routes_reconciliation_notes_by_position(
 
     monkeypatch.setattr("src.pipeline_writing.async_text_call", _fake_async_text_call)
 
-    await make_review_sections(sections, target_words=1300)(_make_ctx(tmp_path))
+    await make_review_sections(sections, target_words=1300)(_make_ctx(storage))
 
     assert captured_notes == {
         1: ["Align the introduction with the completed body."],

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-from pathlib import Path
 
 import pytest
 
@@ -19,6 +18,7 @@ from src.schemas import (
     SourceScoreItem,
     ValidationResult,
 )
+from src.storage import MemoryRunStorage
 
 # ---------------------------------------------------------------------------
 # Fake data
@@ -200,15 +200,21 @@ def _make_score_batch(kwargs: dict) -> SourceScoreBatch:
 
 
 def _fake_run_research(
-    queries, max_sources, sources_dir, fetch_per_api=20, prefer_fulltext=False
+    queries,
+    max_sources,
+    sources_dir=None,
+    fetch_per_api=20,
+    prefer_fulltext=False,
+    storage=None,
 ):
-    Path(sources_dir).mkdir(parents=True, exist_ok=True)
-    (Path(sources_dir) / "registry.json").write_text(
-        json.dumps(_REGISTRY, indent=2), encoding="utf-8"
-    )
+    if storage is not None:
+        storage.write_text(
+            "sources/registry.json",
+            json.dumps(_REGISTRY, indent=2),
+        )
 
 
-def _fake_fetch_url_content(url, sources_dir):
+def _fake_fetch_url_content(url, sources_dir=None):
     return "This is fake PDF content about software testing. " * 20
 
 
@@ -224,9 +230,8 @@ async def _fake_retry(fn, *, is_async=False):
 
 
 @pytest.mark.asyncio
-async def test_pipeline_e2e_short_essay(tmp_path, monkeypatch):
-    run_dir = tmp_path / "run"
-    run_dir.mkdir()
+async def test_pipeline_e2e_short_essay(monkeypatch):
+    storage = MemoryRunStorage("test/")
 
     config = EssayWriterConfig()
     config.search.min_sources = 2
@@ -253,12 +258,8 @@ async def test_pipeline_e2e_short_essay(tmp_path, monkeypatch):
         client=reviewer_client, model="fake-reviewer", model_spec="openai:fake-reviewer"
     )
 
-    monkeypatch.setattr(
-        "src.pipeline_support.retry_with_backoff", _fake_retry
-    )
-    monkeypatch.setattr(
-        "src.pipeline_sources.run_research", _fake_run_research
-    )
+    monkeypatch.setattr("src.pipeline_support.retry_with_backoff", _fake_retry)
+    monkeypatch.setattr("src.pipeline_sources.run_research", _fake_run_research)
     monkeypatch.setattr(
         "src.pipeline_sources.fetch_url_content", _fake_fetch_url_content
     )
@@ -267,7 +268,7 @@ async def test_pipeline_e2e_short_essay(tmp_path, monkeypatch):
         worker=None,
         writer=None,
         reviewer=None,
-        run_dir=run_dir,
+        storage=storage,
         config=config,
         async_worker=async_worker,
         async_writer=async_writer,
@@ -277,59 +278,56 @@ async def test_pipeline_e2e_short_essay(tmp_path, monkeypatch):
 
     # -- Brief --
     brief = AssignmentBrief.model_validate_json(
-        (run_dir / "brief" / "assignment.json").read_text(encoding="utf-8")
+        storage.read_text("brief/assignment.json")
     )
     assert brief.topic == "Software Testing"
 
     # -- Validation --
     validation = ValidationResult.model_validate_json(
-        (run_dir / "brief" / "validation.json").read_text(encoding="utf-8")
+        storage.read_text("brief/validation.json")
     )
     assert validation.is_pass is True
 
     # -- Plan --
-    plan = EssayPlan.model_validate_json(
-        (run_dir / "plan" / "plan.json").read_text(encoding="utf-8")
-    )
+    plan = EssayPlan.model_validate_json(storage.read_text("plan/plan.json"))
     assert len(plan.sections) == 3
     assert plan.total_word_target == 1000
 
     # -- Sources --
-    registry = json.loads(
-        (run_dir / "sources" / "registry.json").read_text(encoding="utf-8")
-    )
+    registry = json.loads(storage.read_text("sources/registry.json"))
     assert set(registry) == set(_SOURCE_IDS)
 
-    scores = json.loads(
-        (run_dir / "sources" / "scores.json").read_text(encoding="utf-8")
-    )
+    scores = json.loads(storage.read_text("sources/scores.json"))
     assert scores["scores"]
 
-    selected = json.loads(
-        (run_dir / "sources" / "selected.json").read_text(encoding="utf-8")
-    )
+    selected = json.loads(storage.read_text("sources/selected.json"))
     assert len(selected) >= 1
 
-    notes_dir = run_dir / "sources" / "notes"
-    note_files = list(notes_dir.glob("*.json"))
+    note_files = [
+        f for f in storage.list_files("sources/notes/") if f.endswith(".json")
+    ]
     assert len(note_files) >= 1
 
     # -- Essay --
-    draft = (run_dir / "essay" / "draft.md").read_text(encoding="utf-8")
+    draft = storage.read_text("essay/draft.md")
     assert "[[smith2024]]" in draft
 
-    reviewed = (run_dir / "essay" / "reviewed.md").read_text(encoding="utf-8")
+    reviewed = storage.read_text("essay/reviewed.md")
     assert "[[smith2024]]" in reviewed
 
     # -- DOCX export --
-    assert (run_dir / "essay.docx").exists()
+    assert storage.exists("essay.docx")
 
     # -- Checkpoint covers all steps --
-    checkpoint = json.loads(
-        (run_dir / "checkpoint.json").read_text(encoding="utf-8")
-    )
+    checkpoint = json.loads(storage.read_text("checkpoint.json"))
     expected_steps = {
-        "intake", "validate", "plan", "research",
-        "read_sources", "write", "review", "export",
+        "intake",
+        "validate",
+        "plan",
+        "research",
+        "read_sources",
+        "write",
+        "review",
+        "export",
     }
     assert expected_steps.issubset(set(checkpoint["completed"]))

@@ -10,7 +10,6 @@ from __future__ import annotations
 import asyncio
 import time
 from dataclasses import dataclass, field
-from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from sqlalchemy import JSON, Boolean, Float, Integer, MetaData, String, Table, Text
@@ -170,7 +169,7 @@ class JobStore:
                 if row["lease_expires_at"] is not None
                 else None
             ),
-            run_dir=Path(row["run_dir"]),
+            run_dir=row["run_dir"],
             questions=row["questions"],
             answers_event=transient.answers_event,
             answers=row["answers"] or "",

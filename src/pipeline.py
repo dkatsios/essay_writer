@@ -4,16 +4,18 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Awaitable, Callable
-from pathlib import Path
+from typing import Union
 
 from src.rendering import render_prompt
 from src.schemas import AssignmentBrief, EssayPlan, ValidationQuestion, ValidationResult
+from src.storage import MemoryRunStorage, RunStorage
 from src.pipeline_sources import (
     do_assign_sources,
     do_research,
     make_read_sources,
 )
 from src.pipeline_support import (
+    AnyStorage,
     PipelineContext,
     PipelineStep,
     async_structured_call,
@@ -40,8 +42,11 @@ logger = logging.getLogger(__name__)
 
 
 async def _do_intake(ctx: PipelineContext) -> None:
-    extracted_path = ctx.run_dir / "input" / "extracted.md"
-    extracted_text = read_text(extracted_path) if extracted_path.exists() else ""
+    extracted_text = (
+        ctx.storage.read_text("input/extracted.md")
+        if ctx.storage.exists("input/extracted.md")
+        else ""
+    )
     prompt = render_prompt(
         "intake.j2",
         extracted_text=extracted_text,
@@ -50,38 +55,39 @@ async def _do_intake(ctx: PipelineContext) -> None:
     brief = await async_structured_call(
         ctx.async_worker, prompt, AssignmentBrief, ctx.tracker
     )
-    write_json(ctx.run_dir / "brief" / "assignment.json", brief)
+    write_json(ctx.storage, "brief/assignment.json", brief)
 
 
 async def _do_validate(ctx: PipelineContext) -> None:
-    brief_json = read_text(ctx.run_dir / "brief" / "assignment.json")
+    brief_json = read_text(ctx.storage, "brief/assignment.json")
     prompt = render_prompt(
         "validate.j2",
         brief_json=brief_json,
-        language=get_brief_language(ctx.run_dir),
+        language=get_brief_language(ctx.storage),
     )
     result = await async_structured_call(
         ctx.async_worker, prompt, ValidationResult, ctx.tracker
     )
-    write_json(ctx.run_dir / "brief" / "validation.json", result)
+    write_json(ctx.storage, "brief/validation.json", result)
 
 
 async def _do_plan(ctx: PipelineContext) -> None:
-    brief_json = read_text(ctx.run_dir / "brief" / "assignment.json")
+    brief_json = read_text(ctx.storage, "brief/assignment.json")
     prompt = render_prompt(
         "plan.j2",
         brief_json=brief_json,
-        language=get_brief_language(ctx.run_dir),
+        language=get_brief_language(ctx.storage),
     )
     plan = await async_structured_call(ctx.async_worker, prompt, EssayPlan, ctx.tracker)
-    write_json(ctx.run_dir / "plan" / "plan.json", plan)
+    write_json(ctx.storage, "plan/plan.json", plan)
 
 
-def _read_validation(run_dir: Path) -> ValidationResult | None:
-    path = run_dir / "brief" / "validation.json"
-    if not path.exists():
+def _read_validation(storage: AnyStorage) -> ValidationResult | None:
+    if not storage.exists("brief/validation.json"):
         return None
-    return ValidationResult.model_validate_json(path.read_text(encoding="utf-8"))
+    return ValidationResult.model_validate_json(
+        storage.read_text("brief/validation.json")
+    )
 
 
 def _build_execution_steps(
@@ -107,7 +113,7 @@ def _build_execution_steps(
             PipelineStep("review", make_review_full(target_words, citation_min_sources))
         )
     else:
-        sections = parse_sections(ctx.run_dir)
+        sections = parse_sections(ctx.storage)
         if not sections:
             logger.warning("Could not parse sections -- falling back to short path")
             steps.append(
@@ -146,7 +152,7 @@ async def run_pipeline(
     worker,
     writer,
     reviewer,
-    run_dir: Path,
+    storage: AnyStorage,
     config,
     *,
     async_worker=None,
@@ -154,14 +160,14 @@ async def run_pipeline(
     async_reviewer=None,
     extra_prompt: str | None = None,
     token_tracker=None,
-    on_questions: Callable[[list[ValidationQuestion], Path], Awaitable[None]]
+    on_questions: Callable[[list[ValidationQuestion], AnyStorage], Awaitable[None]]
     | None = None,
-    on_optional_source_pdfs: Callable[[Path, list[dict]], Awaitable[None]]
+    on_optional_source_pdfs: Callable[[AnyStorage, list[dict]], Awaitable[None]]
     | None = None,
-    on_source_shortfall: Callable[[Path, dict], Awaitable[tuple[bool, list[str]]]]
+    on_source_shortfall: Callable[[AnyStorage, dict], Awaitable[tuple[bool, list[str]]]]
     | None = None,
     min_sources: int | None = None,
-    user_sources_dir: Path | None = None,
+    user_sources_dir: str | None = None,
     resume: bool = False,
     job_id: str | None = None,
     run_history_store=None,
@@ -186,7 +192,7 @@ async def run_pipeline(
             raise ValueError("Either async_reviewer or reviewer must be provided")
         async_reviewer = reviewer.to_async()
 
-    checkpoint = load_checkpoint(run_dir) if resume else set()
+    checkpoint = load_checkpoint(storage) if resume else set()
     if checkpoint:
         logger.info("Resuming — completed steps: %s", ", ".join(sorted(checkpoint)))
 
@@ -195,21 +201,17 @@ async def run_pipeline(
         async_worker=async_worker,
         writer=writer,
         reviewer=reviewer,
-        run_dir=run_dir,
+        storage=storage,
         config=config,
         async_writer=async_writer,
         async_reviewer=async_reviewer,
         extra_prompt=extra_prompt,
         tracker=token_tracker,
-        user_sources_dir=user_sources_dir,
         on_optional_source_pdfs=on_optional_source_pdfs,
         on_source_shortfall=on_source_shortfall,
         job_id=job_id,
         run_history_store=run_history_store,
     )
-
-    for subdir in ("brief", "plan", "sources", "essay"):
-        (run_dir / subdir).mkdir(parents=True, exist_ok=True)
 
     # Preliminary step count for progress (intake + validate + plan).
     preliminary_total = 3
@@ -223,15 +225,14 @@ async def run_pipeline(
     )
 
     # Apply user-supplied min_sources to the brief before validation.
-    brief_path = run_dir / "brief" / "assignment.json"
-    if min_sources is not None and brief_path.exists():
+    if min_sources is not None and storage.exists("brief/assignment.json"):
         brief = AssignmentBrief.model_validate_json(
-            brief_path.read_text(encoding="utf-8")
+            storage.read_text("brief/assignment.json")
         )
         brief.min_sources = min_sources
-        brief_path.write_text(
+        storage.write_text(
+            "brief/assignment.json",
             brief.model_dump_json(indent=2, ensure_ascii=False),
-            encoding="utf-8",
         )
         sync_artifacts_snapshot(ctx)
 
@@ -245,14 +246,14 @@ async def run_pipeline(
 
     # Skip Q&A callback if plan already exists (implies Q&A was handled).
     if "plan" not in checkpoint:
-        validation = _read_validation(run_dir)
+        validation = _read_validation(storage)
         if (
             validation
             and validation.questions
             and not validation.is_pass
             and on_questions
         ):
-            await on_questions(validation.questions, run_dir)
+            await on_questions(validation.questions, storage)
 
     await execute(
         [PipelineStep("plan", _do_plan)],
@@ -262,7 +263,7 @@ async def run_pipeline(
         total_steps=preliminary_total,
     )
 
-    target_words = get_target_words(run_dir)
+    target_words = get_target_words(storage)
     threshold = config.writing.long_essay_threshold
     logger.info(
         "Target: %d words, threshold: %d -> %s path",
@@ -272,7 +273,9 @@ async def run_pipeline(
     )
 
     # Compute source counts once, read the brief once, write once.
-    brief = AssignmentBrief.model_validate_json(brief_path.read_text(encoding="utf-8"))
+    brief = AssignmentBrief.model_validate_json(
+        storage.read_text("brief/assignment.json")
+    )
     user_min_sources = min_sources
     if user_min_sources is None:
         user_min_sources = brief.min_sources
@@ -288,9 +291,9 @@ async def run_pipeline(
     )
 
     brief.min_sources = citation_min_sources
-    brief_path.write_text(
+    storage.write_text(
+        "brief/assignment.json",
         brief.model_dump_json(indent=2, ensure_ascii=False),
-        encoding="utf-8",
     )
     sync_artifacts_snapshot(ctx)
     ctx.brief = brief

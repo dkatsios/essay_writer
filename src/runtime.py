@@ -6,7 +6,6 @@ import json
 import logging
 import re
 from collections.abc import Callable
-from pathlib import Path
 from typing import Any
 
 from src.schemas import (
@@ -18,11 +17,11 @@ from src.schemas import (
 logger = logging.getLogger(__name__)
 
 
-def _read_json(path: Path) -> dict | list | None:
-    if not path.exists():
+def _read_json(storage, subpath: str) -> dict | list | None:
+    if not storage.exists(subpath):
         return None
     try:
-        return json.loads(path.read_text(encoding="utf-8"))
+        return json.loads(storage.read_text(subpath))
     except (json.JSONDecodeError, ValueError):
         return None
 
@@ -233,7 +232,7 @@ class TokenTracker:
 
     def build_runtime_summary(
         self,
-        run_dir: Path,
+        storage,
         *,
         status: str,
         provider: str = "",
@@ -247,15 +246,15 @@ class TokenTracker:
         total_think = sum(int(row["thinking_tokens"]) for row in step_rows)
         total_dur = sum(float(row["duration_seconds"]) for row in step_rows)
 
-        draft_words = _count_words(run_dir / "essay" / "draft.md")
-        reviewed_words = _count_words(run_dir / "essay" / "reviewed.md")
-        target_words = _parse_target_words(run_dir / "plan" / "plan.json")
-        source_metrics = _summarize_source_report_metrics(run_dir)
-        selected_count = _count_sources(run_dir / "sources" / "selected.json")
-        essay_path = run_dir / "essay" / "reviewed.md"
-        if not essay_path.exists():
-            essay_path = run_dir / "essay" / "draft.md"
-        cited_count = _count_cited_sources(essay_path)
+        draft_words = _count_words(storage, "essay/draft.md")
+        reviewed_words = _count_words(storage, "essay/reviewed.md")
+        target_words = _parse_target_words(storage, "plan/plan.json")
+        source_metrics = _summarize_source_report_metrics(storage)
+        selected_count = _count_sources(storage, "sources/selected.json")
+        essay_subpath = "essay/reviewed.md"
+        if not storage.exists(essay_subpath):
+            essay_subpath = "essay/draft.md"
+        cited_count = _count_cited_sources(storage, essay_subpath)
 
         return {
             "status": status,
@@ -278,9 +277,9 @@ class TokenTracker:
             "final_words": reviewed_words or draft_words,
         }
 
-    def write_report(self, run_dir: Path) -> Path | None:
+    def write_report(self, storage) -> bool:
         if not self._steps:
-            return None
+            return False
 
         rows = [
             (step_name, self.snapshot_step_metric(step_name))
@@ -295,15 +294,15 @@ class TokenTracker:
 
         m, s = divmod(int(total_dur), 60)
 
-        draft_words = _count_words(run_dir / "essay" / "draft.md")
-        reviewed_words = _count_words(run_dir / "essay" / "reviewed.md")
-        target_words = _parse_target_words(run_dir / "plan" / "plan.json")
-        source_metrics = _summarize_source_report_metrics(run_dir)
-        selected_count = _count_sources(run_dir / "sources" / "selected.json")
-        essay_path = run_dir / "essay" / "reviewed.md"
-        if not essay_path.exists():
-            essay_path = run_dir / "essay" / "draft.md"
-        cited_count = _count_cited_sources(essay_path)
+        draft_words = _count_words(storage, "essay/draft.md")
+        reviewed_words = _count_words(storage, "essay/reviewed.md")
+        target_words = _parse_target_words(storage, "plan/plan.json")
+        source_metrics = _summarize_source_report_metrics(storage)
+        selected_count = _count_sources(storage, "sources/selected.json")
+        essay_subpath = "essay/reviewed.md"
+        if not storage.exists(essay_subpath):
+            essay_subpath = "essay/draft.md"
+        cited_count = _count_cited_sources(storage, essay_subpath)
 
         lines = [
             "# Run Report",
@@ -398,27 +397,26 @@ class TokenTracker:
         )
         lines.append("")
 
-        report_path = run_dir / "report.md"
-        report_path.write_text("\n".join(lines), encoding="utf-8")
-        logger.info("Report: %s", report_path)
-        return report_path
+        storage.write_text("report.md", "\n".join(lines))
+        logger.info("Report written to storage")
+        return True
 
 
-def _count_words(path: Path) -> int:
-    if not path.exists():
+def _count_words(storage, subpath: str) -> int:
+    if not storage.exists(subpath):
         return 0
-    return len(path.read_text(encoding="utf-8").split())
+    return len(storage.read_text(subpath).split())
 
 
-def _count_sources(path: Path) -> int:
-    data = _read_json(path)
+def _count_sources(storage, subpath: str) -> int:
+    data = _read_json(storage, subpath)
     if isinstance(data, dict) or isinstance(data, list):
         return len(data)
     return 0
 
 
-def _summarize_score_metrics(path: Path) -> dict[str, int]:
-    data = _read_json(path)
+def _summarize_score_metrics(storage, subpath: str) -> dict[str, int]:
+    data = _read_json(storage, subpath)
     if not isinstance(data, dict):
         return {
             "scored": 0,
@@ -453,19 +451,18 @@ def _summarize_score_metrics(path: Path) -> dict[str, int]:
     }
 
 
-def _summarize_selected_note_metrics(run_dir: Path) -> dict[str, int]:
-    selected = _read_json(run_dir / "sources" / "selected.json")
+def _summarize_selected_note_metrics(storage) -> dict[str, int]:
+    selected = _read_json(storage, "sources/selected.json")
     if not isinstance(selected, dict) or not selected:
         return {
             "selected_with_fulltext": 0,
             "selected_abstract_only": 0,
         }
-    notes_dir = run_dir / "sources" / "notes"
     selected_with_fulltext = 0
     selected_abstract_only = 0
 
     for source_id in selected:
-        note = _read_json(notes_dir / f"{source_id}.json")
+        note = _read_json(storage, f"sources/notes/{source_id}.json")
         if not isinstance(note, dict):
             continue
         if note.get("fetched_fulltext"):
@@ -479,28 +476,28 @@ def _summarize_selected_note_metrics(run_dir: Path) -> dict[str, int]:
     }
 
 
-def _summarize_source_report_metrics(run_dir: Path) -> dict[str, int]:
-    score_metrics = _summarize_score_metrics(run_dir / "sources" / "scores.json")
-    selected_metrics = _summarize_selected_note_metrics(run_dir)
+def _summarize_source_report_metrics(storage) -> dict[str, int]:
+    score_metrics = _summarize_score_metrics(storage, "sources/scores.json")
+    selected_metrics = _summarize_selected_note_metrics(storage)
     return {
-        "registered": _count_sources(run_dir / "sources" / "registry.json"),
+        "registered": _count_sources(storage, "sources/registry.json"),
         **score_metrics,
         **selected_metrics,
     }
 
 
-def _count_cited_sources(path: Path) -> int:
-    if not path.exists():
+def _count_cited_sources(storage, subpath: str) -> int:
+    if not storage.exists(subpath):
         return 0
-    text = path.read_text(encoding="utf-8")
+    text = storage.read_text(subpath)
     return len(set(re.findall(r"\[\[([^|\]]+?)(?:\|[^\]]*?)?\]\]", text)))
 
 
-def _parse_target_words(path: Path) -> int:
-    if not path.exists():
+def _parse_target_words(storage, subpath: str) -> int:
+    if not storage.exists(subpath):
         return 0
     try:
-        plan = json.loads(path.read_text(encoding="utf-8"))
+        plan = json.loads(storage.read_text(subpath))
         return plan.get("total_word_target", 0)
     except (json.JSONDecodeError, ValueError):
         return 0

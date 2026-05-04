@@ -6,7 +6,6 @@ import asyncio
 import json
 import logging
 from collections.abc import Callable
-from pathlib import Path
 from time import monotonic
 
 from src.rendering import render_prompt
@@ -18,6 +17,7 @@ from src.schemas import (
 )
 from src.tools.essay_sanitize import strip_leading_submission_metadata
 from src.pipeline_support import (
+    AnyStorage,
     PipelineContext,
     Section,
     async_structured_call,
@@ -46,14 +46,13 @@ def _effective_min_sources(citation_min_sources: int, source_notes: list) -> int
 
 
 def _load_source_assignments(
-    run_dir: Path, sections: list[Section]
+    storage: AnyStorage, sections: list[Section]
 ) -> dict[int, list[str]]:
-    path = run_dir / "plan" / "source_assignments.json"
-    if not path.exists():
+    if not storage.exists("plan/source_assignments.json"):
         return {}
     try:
         plan = SourceAssignmentPlan.model_validate_json(
-            path.read_text(encoding="utf-8")
+            storage.read_text("plan/source_assignments.json")
         )
         position_set = {section.position for section in sections}
         aligned: dict[int, list[str]] = {}
@@ -72,8 +71,8 @@ def make_write_full(
 ) -> Callable:
     async def _do_write_full(ctx: PipelineContext) -> None:
         brief_json = ctx.brief.model_dump_json(indent=2, ensure_ascii=False)
-        plan_json = read_text(ctx.run_dir / "plan" / "plan.json")
-        source_notes = load_selected_source_notes(ctx.run_dir)
+        plan_json = read_text(ctx.storage, "plan/plan.json")
+        source_notes = load_selected_source_notes(ctx.storage)
         language = ctx.brief.language
         min_sources = _effective_min_sources(citation_min_sources, source_notes)
         detail_notes, catalog_md, total_notes = split_writer_source_context(
@@ -104,7 +103,8 @@ def make_write_full(
             ctx.tracker,
         )
         write_text(
-            ctx.run_dir / "essay" / "draft.md",
+            ctx.storage,
+            "essay/draft.md",
             strip_leading_submission_metadata(essay),
         )
 
@@ -117,11 +117,11 @@ def make_review_full(
 ) -> Callable:
     async def _do_review_full(ctx: PipelineContext) -> None:
         brief_json = ctx.brief.model_dump_json(indent=2, ensure_ascii=False)
-        plan_json = read_text(ctx.run_dir / "plan" / "plan.json")
-        draft = read_text(ctx.run_dir / "essay" / "draft.md")
+        plan_json = read_text(ctx.storage, "plan/plan.json")
+        draft = read_text(ctx.storage, "essay/draft.md")
         draft_words = len(draft.split())
         language = ctx.brief.language
-        source_notes = load_selected_source_notes(ctx.run_dir)
+        source_notes = load_selected_source_notes(ctx.storage)
         min_sources = _effective_min_sources(citation_min_sources, source_notes)
 
         prompt = render_prompt(
@@ -147,7 +147,8 @@ def make_review_full(
             ctx.tracker,
         )
         write_text(
-            ctx.run_dir / "essay" / "reviewed.md",
+            ctx.storage,
+            "essay/reviewed.md",
             strip_leading_submission_metadata(reviewed),
         )
 
@@ -193,12 +194,14 @@ def partition_sections_for_writing(
     return parallel_sections, sorted(deferred_sections, key=_deferred_sort_key)
 
 
-def _load_section_drafts(sections_dir: Path, sections: list[Section]) -> dict[int, str]:
+def _load_section_drafts(
+    storage: AnyStorage, sections: list[Section]
+) -> dict[int, str]:
     drafts: dict[int, str] = {}
     for section in sections:
-        section_path = sections_dir / _section_filename(section)
-        if section_path.exists():
-            drafts[section.position] = section_path.read_text(encoding="utf-8")
+        subpath = f"essay/sections/{_section_filename(section)}"
+        if storage.exists(subpath):
+            drafts[section.position] = storage.read_text(subpath)
     return drafts
 
 
@@ -224,15 +227,14 @@ def _build_full_draft_context(
 
 
 def _load_reconciliation_notes(
-    run_dir: Path,
+    storage: AnyStorage,
 ) -> dict[int, SectionReconciliationNotes]:
-    path = run_dir / "essay" / "reconciliation.json"
-    if not path.exists():
+    if not storage.exists("essay/reconciliation.json"):
         return {}
 
     try:
         plan = EssayReconciliationPlan.model_validate_json(
-            path.read_text(encoding="utf-8")
+            storage.read_text("essay/reconciliation.json")
         )
     except Exception:
         logger.warning("Failed to load reconciliation notes")
@@ -271,7 +273,6 @@ async def _write_section_draft(
     ctx: PipelineContext,
     section: Section,
     *,
-    sections_dir: Path,
     plan_json: str,
     source_notes: list,
     notes_by_id: dict[str, object],
@@ -341,7 +342,7 @@ async def _write_section_draft(
     )
     duration = monotonic() - start
 
-    write_text(sections_dir / _section_filename(section), text)
+    write_text(ctx.storage, f"essay/sections/{_section_filename(section)}", text)
     if ctx.tracker is not None:
         ctx.tracker.record_duration(tracker_step, duration)
     return section, text, duration
@@ -353,16 +354,13 @@ def make_write_sections(
     citation_min_sources: int,
 ) -> Callable:
     async def _do_write_sections(ctx: PipelineContext) -> None:
-        sections_dir = ctx.run_dir / "essay" / "sections"
-        sections_dir.mkdir(parents=True, exist_ok=True)
-
-        plan_json = read_text(ctx.run_dir / "plan" / "plan.json")
-        source_notes = load_selected_source_notes(ctx.run_dir)
+        plan_json = read_text(ctx.storage, "plan/plan.json")
+        source_notes = load_selected_source_notes(ctx.storage)
         language = ctx.brief.language
         budget = ctx.config.search.section_source_full_detail_max
         min_sources = _effective_min_sources(citation_min_sources, source_notes)
         written_sections: list[tuple[Section, str]] = []
-        section_assignments = _load_source_assignments(ctx.run_dir, sections)
+        section_assignments = _load_source_assignments(ctx.storage, sections)
         notes_by_id = {note.source_id: note for note in source_notes}
 
         parallel_sections, deferred_sections = partition_sections_for_writing(sections)
@@ -378,7 +376,6 @@ def make_write_sections(
                     result = await _write_section_draft(
                         ctx,
                         sec,
-                        sections_dir=sections_dir,
                         plan_json=plan_json,
                         source_notes=source_notes,
                         notes_by_id=notes_by_id,
@@ -410,7 +407,6 @@ def make_write_sections(
             section, text, duration = await _write_section_draft(
                 ctx,
                 section,
-                sections_dir=sections_dir,
                 plan_json=plan_json,
                 source_notes=source_notes,
                 notes_by_id=notes_by_id,
@@ -432,19 +428,20 @@ def make_write_sections(
 
         draft_parts = []
         for section in sections:
-            section_path = sections_dir / _section_filename(section)
-            if section_path.exists():
-                draft_parts.append(section_path.read_text(encoding="utf-8"))
+            subpath = f"essay/sections/{_section_filename(section)}"
+            if ctx.storage.exists(subpath):
+                draft_parts.append(ctx.storage.read_text(subpath))
             else:
                 logger.warning(
                     "Section %d at position %d file missing: %s",
                     section.number,
                     section.position,
-                    section_path,
+                    subpath,
                 )
 
         write_text(
-            ctx.run_dir / "essay" / "draft.md",
+            ctx.storage,
+            "essay/draft.md",
             strip_leading_submission_metadata("\n\n".join(draft_parts)),
         )
         logger.info("Combined %d sections into draft.md", len(draft_parts))
@@ -457,10 +454,9 @@ def make_reconcile_sections(
     target_words: int,
 ) -> Callable:
     async def _do_reconcile_sections(ctx: PipelineContext) -> None:
-        sections_dir = ctx.run_dir / "essay" / "sections"
-        plan_json = read_text(ctx.run_dir / "plan" / "plan.json")
+        plan_json = read_text(ctx.storage, "plan/plan.json")
         language = ctx.brief.language
-        draft_texts = _load_section_drafts(sections_dir, sections)
+        draft_texts = _load_section_drafts(ctx.storage, sections)
 
         drafted_sections = [
             {
@@ -477,7 +473,8 @@ def make_reconcile_sections(
         ]
         if not drafted_sections:
             write_json(
-                ctx.run_dir / "essay" / "reconciliation.json",
+                ctx.storage,
+                "essay/reconciliation.json",
                 EssayReconciliationPlan(global_notes=[], sections=[]),
             )
             return
@@ -495,7 +492,7 @@ def make_reconcile_sections(
             ctx.tracker,
         )
         normalized = _normalize_reconciliation_plan(sections, plan)
-        write_json(ctx.run_dir / "essay" / "reconciliation.json", normalized)
+        write_json(ctx.storage, "essay/reconciliation.json", normalized)
 
     return _do_reconcile_sections
 
@@ -506,14 +503,11 @@ def make_review_sections(
 ) -> Callable:
     async def _do_review_sections(ctx: PipelineContext) -> None:
         _ = target_words
-        sections_dir = ctx.run_dir / "essay" / "sections"
-        reviewed_dir = ctx.run_dir / "essay" / "reviewed"
-        reviewed_dir.mkdir(parents=True, exist_ok=True)
         plan_order = list(sections)
         language = ctx.brief.language
-        reconciliation_notes = _load_reconciliation_notes(ctx.run_dir)
+        reconciliation_notes = _load_reconciliation_notes(ctx.storage)
 
-        draft_texts = _load_section_drafts(sections_dir, plan_order)
+        draft_texts = _load_section_drafts(ctx.storage, plan_order)
 
         if ctx.tracker is not None:
             ctx.tracker.set_sub_total(len(plan_order))
@@ -565,7 +559,9 @@ def make_review_sections(
             duration = monotonic() - start
 
             reviewed = _truncate_at_next_section(reviewed, section, plan_order)
-            write_text(reviewed_dir / _section_filename(section), reviewed)
+            write_text(
+                ctx.storage, f"essay/reviewed/{_section_filename(section)}", reviewed
+            )
             if ctx.tracker is not None:
                 ctx.tracker.record_duration(tracker_step, duration)
             return section, reviewed, duration
@@ -593,14 +589,15 @@ def make_review_sections(
 
         reviewed_parts = []
         for section in plan_order:
-            reviewed_path = reviewed_dir / _section_filename(section)
-            if reviewed_path.exists():
-                reviewed_parts.append(reviewed_path.read_text(encoding="utf-8"))
+            reviewed_subpath = f"essay/reviewed/{_section_filename(section)}"
+            if ctx.storage.exists(reviewed_subpath):
+                reviewed_parts.append(ctx.storage.read_text(reviewed_subpath))
             elif section.position in draft_texts:
                 reviewed_parts.append(draft_texts[section.position])
 
         write_text(
-            ctx.run_dir / "essay" / "reviewed.md",
+            ctx.storage,
+            "essay/reviewed.md",
             strip_leading_submission_metadata("\n\n".join(reviewed_parts)),
         )
         logger.info(
@@ -615,9 +612,9 @@ def do_export(ctx: PipelineContext) -> None:
 
     essay_text = None
     for name in ("reviewed.md", "draft.md"):
-        essay_path = ctx.run_dir / "essay" / name
-        if essay_path.exists():
-            essay_text = essay_path.read_text(encoding="utf-8")
+        subpath = f"essay/{name}"
+        if ctx.storage.exists(subpath):
+            essay_text = ctx.storage.read_text(subpath)
             break
     if not essay_text:
         logger.error("No essay found -- cannot export.")
@@ -627,16 +624,15 @@ def do_export(ctx: PipelineContext) -> None:
 
     sources: dict = {}
     for source_name in ("selected.json", "registry.json"):
-        source_path = ctx.run_dir / "sources" / source_name
-        if source_path.exists():
-            sources = json.loads(source_path.read_text(encoding="utf-8"))
+        subpath = f"sources/{source_name}"
+        if ctx.storage.exists(subpath):
+            sources = json.loads(ctx.storage.read_text(subpath))
             break
 
     doc_config = ctx.config.formatting.model_dump()
-    plan_path = ctx.run_dir / "plan" / "plan.json"
 
-    if plan_path.exists():
-        plan = EssayPlan.model_validate_json(plan_path.read_text(encoding="utf-8"))
+    if ctx.storage.exists("plan/plan.json"):
+        plan = EssayPlan.model_validate_json(ctx.storage.read_text("plan/plan.json"))
         if plan.title:
             doc_config.setdefault("title", plan.title)
 
@@ -692,9 +688,10 @@ def do_export(ctx: PipelineContext) -> None:
 
     document = build_document(essay_text, doc_config, sources)
 
-    # Write to run_dir first (per-job, safe under concurrency).
-    run_docx = ctx.run_dir / "essay.docx"
-    run_docx.parent.mkdir(parents=True, exist_ok=True)
-    document.save(str(run_docx))
-    logger.info("essay.docx saved to %s", run_docx)
-    logger.info("essay.docx -> %s", run_docx)
+    # Save docx to storage via in-memory buffer.
+    from io import BytesIO
+
+    buf = BytesIO()
+    document.save(buf)
+    ctx.storage.write_bytes("essay.docx", buf.getvalue())
+    logger.info("essay.docx saved to storage")

@@ -31,7 +31,7 @@ async def _heartbeat(job_id: str, *, worker_id: str) -> None:
 
 
 async def run_claimed_job(job: web_jobs.Job, *, worker_id: str) -> None:
-    upload_dir, user_sources_dir = web_jobs.infer_job_upload_dirs(job)
+    has_uploads, has_user_sources = web_jobs.infer_job_has_uploads(job)
     if job.status == "pending":
         job.status = "running"
         web_jobs.save_job(job)
@@ -41,10 +41,10 @@ async def run_claimed_job(job: web_jobs.Job, *, worker_id: str) -> None:
     try:
         await web_jobs.run_pipeline_task(
             job,
-            upload_dir,
+            has_uploads,
             web_jobs.build_job_extra_prompt(job),
             job.min_sources,
-            user_sources_dir,
+            has_user_sources,
             load_config_fn=load_config,
             models_config_cls=ModelsConfig,
             create_async_client_fn=create_async_client,

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import threading
-from pathlib import Path
 from unittest.mock import MagicMock
 
 import src.runtime as runtime_module
@@ -99,16 +98,17 @@ class TestTokenTrackerProgress:
 
 
 class TestExecuteStepProgress:
-    async def test_step_progress_set_on_tracker(self, tmp_path):
-        run_dir = tmp_path / "run"
-        run_dir.mkdir()
+    async def test_step_progress_set_on_tracker(self):
+        from src.storage import MemoryRunStorage
+
+        storage = MemoryRunStorage("test/")
         tracker = TokenTracker()
         ctx = PipelineContext(
             worker=MagicMock(),
             async_worker=None,
             writer=MagicMock(),
             reviewer=MagicMock(),
-            run_dir=run_dir,
+            storage=storage,
             config=MagicMock(),
             tracker=tracker,
         )
@@ -124,16 +124,17 @@ class TestExecuteStepProgress:
         await execute(steps, ctx, step_offset=2, total_steps=5)
         assert captured == [(2, 5), (3, 5)]
 
-    async def test_sub_total_reset_between_steps(self, tmp_path):
-        run_dir = tmp_path / "run"
-        run_dir.mkdir()
+    async def test_sub_total_reset_between_steps(self):
+        from src.storage import MemoryRunStorage
+
+        storage = MemoryRunStorage("test/")
         tracker = TokenTracker()
         ctx = PipelineContext(
             worker=MagicMock(),
             async_worker=None,
             writer=MagicMock(),
             reviewer=MagicMock(),
-            run_dir=run_dir,
+            storage=storage,
             config=MagicMock(),
             tracker=tracker,
         )
@@ -154,16 +155,17 @@ class TestExecuteStepProgress:
         await execute(steps, ctx, step_offset=0, total_steps=2)
         assert sub_totals_at_start == [(0, 0)]
 
-    async def test_no_total_steps_skips_progress(self, tmp_path):
-        run_dir = tmp_path / "run"
-        run_dir.mkdir()
+    async def test_no_total_steps_skips_progress(self):
+        from src.storage import MemoryRunStorage
+
+        storage = MemoryRunStorage("test/")
         tracker = TokenTracker()
         ctx = PipelineContext(
             worker=MagicMock(),
             async_worker=None,
             writer=MagicMock(),
             reviewer=MagicMock(),
-            run_dir=run_dir,
+            storage=storage,
             config=MagicMock(),
             tracker=tracker,
         )
@@ -181,7 +183,7 @@ class TestBuildStatusPayloadProgress:
         tracker = TokenTracker()
         tracker.set_current_step("research")
         tracker.set_step_progress(3, 8)
-        job = Job(job_id="progressjob01", run_dir=Path("/tmp"), status="running")
+        job = Job(job_id="progressjob01", run_dir="runs/test", status="running")
         job.tracker = tracker
         payload = build_status_payload(job)
         assert payload["step_index"] == 3
@@ -196,7 +198,7 @@ class TestBuildStatusPayloadProgress:
         tracker.set_sub_total(45)
         for _ in range(12):
             tracker.increment_sub_done()
-        job = Job(job_id="subprogjob01", run_dir=Path("/tmp"), status="running")
+        job = Job(job_id="subprogjob01", run_dir="runs/test", status="running")
         job.tracker = tracker
         payload = build_status_payload(job)
         assert payload["sub_done"] == 12
@@ -206,7 +208,7 @@ class TestBuildStatusPayloadProgress:
         tracker = TokenTracker()
         tracker.set_step_progress(5, 8)
         tracker.set_sub_total(10)
-        job = Job(job_id="doneprogjo01", run_dir=Path("/tmp"), status="done")
+        job = Job(job_id="doneprogjo01", run_dir="runs/test", status="done")
         job.tracker = tracker
         payload = build_status_payload(job)
         assert "step_index" not in payload

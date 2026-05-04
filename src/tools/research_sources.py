@@ -11,7 +11,6 @@ import json
 import logging
 import re
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from pathlib import Path
 
 from src.run_logging import submit_with_current_context
 from src.schemas import RegistryEntry
@@ -305,7 +304,7 @@ def build_registry(
 def run_research(
     queries: list[str],
     max_sources: int,
-    sources_dir: str | None = None,
+    storage=None,
     *,
     fetch_per_api: int = 20,
     prefer_fulltext: bool = False,
@@ -314,10 +313,9 @@ def run_research(
 
     Fans out *queries* across Semantic Scholar, OpenAlex, and Crossref
     in parallel. Deduplicates by DOI and title, writes the full candidate
-    registry to *sources_dir*/registry.json, and returns it. Final trimming
+    registry to storage under ``sources/``, and returns it. Final trimming
     happens later after LLM triage and scoring.
     """
-    sources_path = Path(sources_dir) if sources_dir else None
 
     logger.info(
         "Research start: queries=%d fetch_per_api=%d registry_cap=%d",
@@ -336,13 +334,11 @@ def run_research(
 
     # Load existing registry so recovery passes preserve previously-scored IDs.
     existing_registry: dict[str, dict] | None = None
-    if sources_path:
-        reg_path = sources_path / "registry.json"
-        if reg_path.exists():
-            try:
-                existing_registry = json.loads(reg_path.read_text(encoding="utf-8"))
-            except Exception:
-                existing_registry = None
+    if storage is not None and storage.exists("sources/registry.json"):
+        try:
+            existing_registry = json.loads(storage.read_text("sources/registry.json"))
+        except Exception:
+            existing_registry = None
 
     registry = build_registry(
         all_results,
@@ -355,21 +351,18 @@ def run_research(
         len(all_results),
     )
 
-    if sources_path:
-        sources_path.mkdir(parents=True, exist_ok=True)
-        reg_path = sources_path / "registry.json"
-        reg_path.write_text(
-            json.dumps(registry, ensure_ascii=False, indent=2), encoding="utf-8"
+    if storage is not None:
+        storage.write_text(
+            "sources/registry.json",
+            json.dumps(registry, ensure_ascii=False, indent=2),
         )
-        logger.info("Registry written to %s", reg_path)
+        logger.info("Registry written to storage")
 
-        raw_dir = sources_path / "raw"
-        raw_dir.mkdir(parents=True, exist_ok=True)
         for i, entry in enumerate(all_raw):
-            filename = f"{i:02d}_{entry['api']}.json"
-            (raw_dir / filename).write_text(
+            filename = f"sources/raw/{i:02d}_{entry['api']}.json"
+            storage.write_text(
+                filename,
                 json.dumps(entry, ensure_ascii=False, indent=2),
-                encoding="utf-8",
             )
 
     return registry

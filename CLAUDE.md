@@ -27,8 +27,11 @@ uv run python -m src.worker
 # Run multiple workers only (default 6 if omitted)
 uv run python -m src.start_workers 6
 # Web: optional ESSAY_WEB_JOB_TTL_SECONDS (default 86400, 0=disable stale-job sweeps), ESSAY_WEB_JOB_SWEEP_INTERVAL_SECONDS, ESSAY_WEB_INTERACTION_TIMEOUT_SECONDS (default 1800)
-# Web DB: ESSAY_WRITER_DATABASE__URL (production Postgres; local dev falls back to repo SQLite). Stores job state plus runtime summaries, step metrics, and artifact metadata; file bytes remain local.
-# Worker/web split: both processes must use the same DB and share the local run-artifact filesystem.
+# Web DB: ESSAY_WRITER_DATABASE__URL (production Postgres; local dev falls back to repo SQLite). Stores job state plus runtime summaries, step metrics, and artifact metadata.
+# Artifact storage backend: ESSAY_WRITER_STORAGE__BACKEND ("r2" or "local", default "r2")
+# Local backend: ESSAY_WRITER_STORAGE__LOCAL_DIR (default "runs")
+# R2 backend: ESSAY_WRITER_STORAGE__R2_ENDPOINT_URL, ESSAY_WRITER_STORAGE__R2_BUCKET, ESSAY_WRITER_STORAGE__R2_ACCESS_KEY_ID, ESSAY_WRITER_STORAGE__R2_SECRET_ACCESS_KEY
+# Worker/web split: both processes must use the same DB and storage credentials/paths.
 # Optional PDF prompt: ESSAY_WRITER_SEARCH__OPTIONAL_PDF_PROMPT_TOP_N (default 5, 0=off), ESSAY_WRITER_SEARCH__OPTIONAL_PDF_MIN_BODY_WORDS
 # Source filtering: ESSAY_WRITER_SEARCH__TRIAGE_BATCH_SIZE (default 50), ESSAY_WRITER_SEARCH__MIN_RELEVANCE_SCORE (default 3)
 # Institutional proxy: ESSAY_WRITER_SEARCH__PROXY_PREFIX (e.g. 'https://login.proxy.eap.gr/login?url=')
@@ -54,4 +57,4 @@ See `.github/instructions/documentation-sync.instructions.md`. On important chan
 
 ## Deployment Note
 
-The repo no longer includes a combined web+worker startup script. Start the web app with `uv run uvicorn src.web:app --reload` and workers with `uv run python -m src.start_workers 6` (or another count). Both sides still need the same DB and shared local artifact filesystem.
+The repo no longer includes a combined web+worker startup script. Start the web app with `uv run uvicorn src.web:app --reload` and workers with `uv run python -m src.start_workers 6` (or another count). Both sides need the same DB credentials. With R2 backend, both need R2 credentials; with local backend (`ESSAY_WRITER_STORAGE__BACKEND=local`), both need access to the same `local_dir` path.

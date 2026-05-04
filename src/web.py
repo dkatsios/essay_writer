@@ -3,10 +3,8 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime
 import json
 import logging
-import tempfile
 import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -23,6 +21,7 @@ from src.pipeline import run_pipeline  # noqa: E402
 from src.run_history_store import run_history  # noqa: E402
 from src.run_logging import configure_web_logging, run_id_context  # noqa: E402
 from src.runtime import parse_validation_answers  # noqa: E402
+from src.storage import create_run_storage  # noqa: E402
 from src.tools._http import close_http_clients  # noqa: E402
 
 logger = logging.getLogger(__name__)
@@ -44,17 +43,17 @@ job_ttl_sweep_once = web_jobs.job_ttl_sweep_once
 
 async def _run_pipeline_task(
     job: Job,
-    upload_dir: Path | None,
+    has_uploads: bool,
     prompt: str | None,
     min_sources: int | None = None,
-    user_sources_dir: Path | None = None,
+    has_user_sources: bool = False,
 ) -> None:
     await web_jobs.run_pipeline_task(
         job,
-        upload_dir,
+        has_uploads,
         prompt,
         min_sources,
-        user_sources_dir,
+        has_user_sources,
         load_config_fn=load_config,
         models_config_cls=ModelsConfig,
         create_async_client_fn=create_async_client,
@@ -79,13 +78,8 @@ async def _lifespan(app: FastAPI):
 app = FastAPI(title="Essay Writer", lifespan=_lifespan)
 
 
-def _run_dir_prefix(now: datetime | None = None) -> str:
-    timestamp = (now or datetime.now()).strftime("%Y%m%d_%H%M%S_%f")
-    return f"essay_{timestamp}_"
-
-
 def _download_basename(job: Job) -> str:
-    name = job.run_dir.name.strip()
+    name = job.run_dir.rstrip("/").rsplit("/", 1)[-1].strip()
     return name or f"essay_{job.job_id}"
 
 
@@ -162,7 +156,7 @@ async def submit(
     """Accept form data, persist a queued job, and return immediately."""
     job_id = uuid.uuid4().hex[:12]
 
-    run_dir = Path(tempfile.mkdtemp(prefix=_run_dir_prefix()))
+    storage = create_run_storage(job_id)
     target_words_value = (
         target_words if target_words is not None and target_words > 0 else None
     )
@@ -181,7 +175,7 @@ async def submit(
     job = Job(
         job_id=job_id,
         status="pending",
-        run_dir=run_dir,
+        run_dir=storage.prefix,
         academic_level=academic_level.strip(),
         submit_prompt=prompt.strip(),
         target_words=target_words_value,
@@ -205,28 +199,27 @@ async def submit(
             len([file for file in sources if file.filename]),
         )
 
-    upload_dir: Path | None = None
+    has_uploads = False
     if files and files[0].filename:
-        upload_dir = run_dir / "uploads"
-        upload_dir.mkdir(parents=True, exist_ok=True)
         for file in files:
             if file.filename:
-                destination = upload_dir / Path(file.filename).name
-                destination.write_bytes(await file.read())
+                storage.write_bytes(
+                    f"uploads/{Path(file.filename).name}", await file.read()
+                )
+                has_uploads = True
 
-    user_sources_dir: Path | None = None
+    has_user_sources = False
     if sources and sources[0].filename:
-        user_sources_dir = run_dir / "user_sources"
-        user_sources_dir.mkdir(parents=True, exist_ok=True)
         for index, file in enumerate(sources):
             if file.filename:
-                destination = (
-                    user_sources_dir / f"{index:03d}_{Path(file.filename).name}"
+                storage.write_bytes(
+                    f"user_sources/{index:03d}_{Path(file.filename).name}",
+                    await file.read(),
                 )
-                destination.write_bytes(await file.read())
+                has_user_sources = True
 
-    if upload_dir is not None or user_sources_dir is not None:
-        run_history.sync_artifacts(job_id, run_dir)
+    if has_uploads or has_user_sources:
+        run_history.sync_artifacts(job_id, storage)
 
     with run_id_context(job_id):
         logger.info("Job %s queued for worker execution", job_id)
@@ -460,14 +453,17 @@ async def download(job_id: str, format: str | None = Query(None)):
         logger.info("Job %s download requested (format=%s)", job_id, format or "zip")
 
     if format == "docx":
-        docx_path = job.run_dir / "essay.docx"
-        if not docx_path.is_file():
+        storage = job.get_storage()
+        if not storage.exists("essay.docx"):
             return JSONResponse({"error": "Docx file not found"}, status_code=404)
+        docx_bytes = storage.read_bytes("essay.docx")
 
         def _iter_docx():
-            with open(docx_path, "rb") as fh:
-                while chunk := fh.read(64 * 1024):
-                    yield chunk
+            from io import BytesIO
+
+            buf = BytesIO(docx_bytes)
+            while chunk := buf.read(64 * 1024):
+                yield chunk
 
         return StreamingResponse(
             _iter_docx(),
@@ -477,7 +473,7 @@ async def download(job_id: str, format: str | None = Query(None)):
             },
         )
 
-    buffer = web_jobs.build_zip(job.run_dir)
+    buffer = web_jobs.build_zip(job.get_storage())
 
     def _iter_zip():
         try:

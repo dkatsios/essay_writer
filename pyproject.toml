@@ -25,6 +25,7 @@ dependencies = [
     "python-multipart>=0.0.18",
     "genai-prices>=0.0.56",
     "jsonref>=1.1.0",
+    "boto3>=1.35",
 ]
 
 [dependency-groups]
@@ -36,3 +37,6 @@ dev = [
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
+testpaths = ["tests"]
+# Run integration tests explicitly: uv run python -m pytest tests/integration/ -v
+norecursedirs = ["tests/integration"]

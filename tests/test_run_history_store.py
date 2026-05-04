@@ -105,25 +105,19 @@ def test_step_metrics_upsert_by_job_and_step_name():
     assert rows[1]["status"] == "failed"
 
 
-def test_sync_artifacts_upserts_and_marks_missing_files_unavailable(tmp_path):
+def test_sync_artifacts_upserts_and_marks_missing_files_unavailable():
     from src.run_history_store import RunHistoryStore
+    from src.storage import MemoryRunStorage
 
     store = RunHistoryStore()
-    run_dir = tmp_path / "run"
-    (run_dir / "brief").mkdir(parents=True)
-    (run_dir / "essay").mkdir(parents=True)
-    (run_dir / "sources" / "notes").mkdir(parents=True)
+    storage = MemoryRunStorage("test/")
 
-    (run_dir / "brief" / "assignment.json").write_text(
-        json.dumps({"topic": "x"}), encoding="utf-8"
-    )
-    (run_dir / "essay" / "draft.md").write_text("draft", encoding="utf-8")
-    (run_dir / "essay.docx").write_bytes(b"PK\x03\x04docx")
-    (run_dir / "sources" / "notes" / "s1.json").write_text(
-        json.dumps({"title": "note"}), encoding="utf-8"
-    )
+    storage.write_text("brief/assignment.json", json.dumps({"topic": "x"}))
+    storage.write_text("essay/draft.md", "draft")
+    storage.write_bytes("essay.docx", b"PK\x03\x04docx")
+    storage.write_text("sources/notes/s1.json", json.dumps({"title": "note"}))
 
-    artifacts = store.sync_artifacts("job123", run_dir, current_time=10.0)
+    artifacts = store.sync_artifacts("job123", storage, current_time=10.0)
 
     by_path = {row["relative_path"]: row for row in artifacts}
     assert by_path["brief/assignment.json"]["artifact_type"] == "assignment_brief"
@@ -132,23 +126,23 @@ def test_sync_artifacts_upserts_and_marks_missing_files_unavailable(tmp_path):
     assert by_path["sources/notes/s1.json"]["artifact_type"] == "source_note"
     assert all(row["is_available"] for row in artifacts)
 
-    (run_dir / "essay" / "draft.md").unlink()
+    storage.delete("essay/draft.md")
 
-    artifacts = store.sync_artifacts("job123", run_dir, current_time=20.0)
+    artifacts = store.sync_artifacts("job123", storage, current_time=20.0)
     by_path = {row["relative_path"]: row for row in artifacts}
     assert by_path["essay/draft.md"]["is_available"] is False
     assert by_path["essay/draft.md"]["deleted_at"] == 20.0
     assert by_path["brief/assignment.json"]["is_available"] is True
 
 
-def test_mark_artifacts_deleted_marks_all_available_rows(tmp_path):
+def test_mark_artifacts_deleted_marks_all_available_rows():
     from src.run_history_store import RunHistoryStore
+    from src.storage import MemoryRunStorage
 
     store = RunHistoryStore()
-    run_dir = tmp_path / "run"
-    run_dir.mkdir()
-    (run_dir / "run.log").write_text("hello", encoding="utf-8")
-    store.sync_artifacts("job123", run_dir, current_time=10.0)
+    storage = MemoryRunStorage("test/")
+    storage.write_text("run.log", "hello")
+    store.sync_artifacts("job123", storage, current_time=10.0)
 
     store.mark_artifacts_deleted("job123", current_time=30.0)
 

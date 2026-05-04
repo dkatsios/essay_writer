@@ -121,8 +121,17 @@ def submit_with_current_context(executor, fn, /, *args, **kwargs):
     return executor.submit(ctx.run, fn, *args, **kwargs)
 
 
-def setup_run_logging(run_dir: Path, run_id: str) -> logging.FileHandler:
-    """Create a per-run log file at *run_dir/run.log* filtered to *run_id*."""
+def setup_run_logging(run_dir: Path | None, run_id: str) -> logging.Handler | None:
+    """Create a per-run log handler filtered to *run_id*.
+
+    When *run_dir* is ``None`` (R2 storage mode), no file handler is created
+    and the function returns ``None``.  Logs still reach the root logger's
+    existing handlers (stdout).
+    """
+    if run_dir is None:
+        _ensure_src_logger_debug()
+        return None
+
     log_path = run_dir / "run.log"
     handler = logging.FileHandler(log_path, encoding="utf-8")
     handler.setLevel(logging.DEBUG)
@@ -136,6 +145,9 @@ def setup_run_logging(run_dir: Path, run_id: str) -> logging.FileHandler:
     return handler
 
 
-def teardown_run_logging(handler: logging.FileHandler) -> None:
+def teardown_run_logging(handler: logging.Handler | None) -> None:
+    if handler is None:
+        return
     logging.getLogger().removeHandler(handler)
-    handler.close()
+    if hasattr(handler, "close"):
+        handler.close()

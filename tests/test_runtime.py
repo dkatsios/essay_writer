@@ -151,32 +151,29 @@ class TestTokenTrackerSnapshots:
         assert snapshot["duration_seconds"] == 4.5
         assert snapshot["cost_usd"] > 0
 
-    def test_build_runtime_summary_reads_run_outputs(self, tmp_path):
+    def test_build_runtime_summary_reads_run_outputs(self):
         from src.runtime import TokenTracker
+        from src.storage import MemoryRunStorage
 
+        storage = MemoryRunStorage("test/")
         tracker = TokenTracker()
         tracker.set_current_step("write")
         tracker.record("google_genai:gemini-2.5-flash", 2000, 400, 0)
         tracker.record_duration("write", 8.0)
 
-        (tmp_path / "plan").mkdir(parents=True)
-        (tmp_path / "essay").mkdir(parents=True)
-        (tmp_path / "sources").mkdir(parents=True)
-        (tmp_path / "plan" / "plan.json").write_text(
-            json.dumps({"total_word_target": 1200}), encoding="utf-8"
+        storage.write_text(
+            "plan/plan.json",
+            json.dumps({"total_word_target": 1200}),
         )
-        (tmp_path / "essay" / "draft.md").write_text(
-            "one two three four", encoding="utf-8"
-        )
-        (tmp_path / "essay" / "reviewed.md").write_text(
-            "one two three four five", encoding="utf-8"
-        )
-        (tmp_path / "sources" / "selected.json").write_text(
-            json.dumps({"source-1": {"title": "A"}}), encoding="utf-8"
+        storage.write_text("essay/draft.md", "one two three four")
+        storage.write_text("essay/reviewed.md", "one two three four five")
+        storage.write_text(
+            "sources/selected.json",
+            json.dumps({"source-1": {"title": "A"}}),
         )
 
         summary = tracker.build_runtime_summary(
-            tmp_path, status="done", provider="google"
+            storage, status="done", provider="google"
         )
 
         assert summary["status"] == "done"

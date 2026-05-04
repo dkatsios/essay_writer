@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import mimetypes
 import time
-from pathlib import Path
 from typing import Any
 
 from sqlalchemy import Boolean, Column, Float, Integer, String, Table, Text
@@ -260,29 +259,25 @@ class RunHistoryStore:
     def sync_artifacts(
         self,
         job_id: str,
-        run_dir: Path,
+        storage,
         *,
         current_time: float | None = None,
     ) -> list[dict[str, Any]]:
         synced_at = time.time() if current_time is None else current_time
         discovered = []
-        if run_dir.exists():
-            for path in sorted(run_dir.rglob("*")):
-                if not path.is_file():
-                    continue
-                relative_path = path.relative_to(run_dir).as_posix()
-                discovered.append(
-                    {
-                        "relative_path": relative_path,
-                        "artifact_type": _artifact_type_for_path(relative_path),
-                        "mime_type": _mime_type_for_path(relative_path),
-                        "size_bytes": path.stat().st_size,
-                        "is_available": True,
-                        "created_at": synced_at,
-                        "updated_at": synced_at,
-                        "deleted_at": None,
-                    }
-                )
+        for relative_path in sorted(storage.iter_all_files()):
+            discovered.append(
+                {
+                    "relative_path": relative_path,
+                    "artifact_type": _artifact_type_for_path(relative_path),
+                    "mime_type": _mime_type_for_path(relative_path),
+                    "size_bytes": storage.file_size(relative_path),
+                    "is_available": True,
+                    "created_at": synced_at,
+                    "updated_at": synced_at,
+                    "deleted_at": None,
+                }
+            )
 
         discovered_by_path = {item["relative_path"]: item for item in discovered}
 

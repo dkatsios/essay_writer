@@ -1,16 +1,14 @@
 from __future__ import annotations
 
-from pathlib import Path
 
-
-def test_claim_next_job_claims_oldest_pending_job(tmp_path):
+def test_claim_next_job_claims_oldest_pending_job():
     from src.web_jobs import Job, jobs
 
     jobs.save(
         Job(
             job_id="jobold000001",
             status="pending",
-            run_dir=tmp_path / "one",
+            run_dir="runs/one",
             created_at=1.0,
         )
     )
@@ -18,7 +16,7 @@ def test_claim_next_job_claims_oldest_pending_job(tmp_path):
         Job(
             job_id="jobnew000001",
             status="pending",
-            run_dir=tmp_path / "two",
+            run_dir="runs/two",
             created_at=2.0,
         )
     )
@@ -39,11 +37,11 @@ def test_claim_next_job_claims_oldest_pending_job(tmp_path):
     assert refreshed.lease_expires_at == 70.0
 
 
-async def test_run_worker_once_claims_and_releases_job(tmp_path, monkeypatch):
+async def test_run_worker_once_claims_and_releases_job(monkeypatch):
     from src.web_jobs import Job, jobs, save_job
     from src.worker import run_worker_once
 
-    job = Job(job_id="workerjob001", status="pending", run_dir=Path(tmp_path))
+    job = Job(job_id="workerjob001", status="pending", run_dir="runs/test")
     save_job(job)
 
     async def fake_run_pipeline_task(job, *args, **kwargs):
@@ -53,6 +51,9 @@ async def test_run_worker_once_claims_and_releases_job(tmp_path, monkeypatch):
         save_job(job)
 
     monkeypatch.setattr("src.worker.web_jobs.run_pipeline_task", fake_run_pipeline_task)
+    monkeypatch.setattr(
+        "src.worker.web_jobs.infer_job_has_uploads", lambda j: (False, False)
+    )
 
     claimed = await run_worker_once(worker_id="worker-a")
 
