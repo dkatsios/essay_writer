@@ -18,6 +18,13 @@ def _terminate(processes: list[subprocess.Popen[bytes]]) -> None:
             process.terminate()
 
 
+def _run_migrations() -> int:
+    return subprocess.run(
+        [sys.executable, "-m", "alembic", "upgrade", "head"],
+        check=False,
+    ).returncode
+
+
 def _wait_for_port(port: int, *, timeout_seconds: float = 30.0) -> bool:
     deadline = time.monotonic() + timeout_seconds
     while time.monotonic() < deadline:
@@ -30,6 +37,10 @@ def _wait_for_port(port: int, *, timeout_seconds: float = 30.0) -> bool:
 
 
 def main() -> int:
+    migration_exit_code = _run_migrations()
+    if migration_exit_code != 0:
+        return migration_exit_code
+
     config = load_config()
     port = os.environ.get("PORT", "8000")
     web_process = subprocess.Popen(

@@ -108,7 +108,7 @@ The web process and worker processes need the same database and storage credenti
 
 The checked-in Render blueprint pins `ESSAY_WORKER_COUNT=1` on the free plan because the combined web-plus-workers container can exceed 512 MiB if you let it boot the default `6` workers. If you deploy the Docker image manually in Render instead of using the blueprint, set that env var yourself.
 
-The Docker image runs from the baked project virtualenv at runtime; it does not call `uv run` during container startup. The checked-in Render blueprint also runs `python -m alembic upgrade head` as a pre-deploy command so the SQL schema exists before the combined web-plus-worker container starts.
+The Docker image runs from the baked project virtualenv at runtime; it does not call `uv run` during container startup. The combined runtime entrypoint also runs `python -m alembic upgrade head` before it starts the web process and workers, so the SQL schema exists in the same environment the app actually runs in. The checked-in Render blueprint keeps the same command as a pre-deploy step as well.
 
 
 The service exposes the web UI on the port assigned by Render. Set `ESSAY_WEB_JOB_TTL_SECONDS` / `ESSAY_WEB_JOB_SWEEP_INTERVAL_SECONDS` if you need different retention for undownloaded jobs.
