@@ -18,9 +18,14 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 _PROJECT_ROOT = Path(__file__).resolve().parents[1]
 _ENV_FILE = _PROJECT_ROOT / ".env"
 _DEFAULT_MAILTO = "essay-writer@example.com"
+_DEFAULT_DATABASE_URL = f"sqlite+pysqlite:///{_PROJECT_ROOT / '.essay_writer_jobs.db'}"
 _DEFAULT_JOB_TTL_SECONDS = 86_400
 _DEFAULT_JOB_SWEEP_INTERVAL_SECONDS = 300
 _DEFAULT_INTERACTION_TIMEOUT_SECONDS = 1_800
+_DEFAULT_WORKER_COUNT = 4
+_DEFAULT_WORKER_POLL_INTERVAL_SECONDS = 2
+_DEFAULT_WORKER_LEASE_SECONDS = 60
+_DEFAULT_WORKER_HEARTBEAT_INTERVAL_SECONDS = 15
 
 
 def _alias_choices(*names: str) -> AliasChoices:
@@ -142,6 +147,39 @@ class SearchConfig(BaseModel):
     """Password for institutional proxy authentication."""
 
 
+class DatabaseConfig(BaseModel):
+    """Persistent job-state database settings."""
+
+    url: str = _DEFAULT_DATABASE_URL
+    echo: bool = False
+    mark_stale_jobs_on_startup: bool = True
+
+    @field_validator("url", mode="before")
+    @classmethod
+    def _normalize_url(cls, value: object) -> str:
+        text = str(value).strip() if value is not None else ""
+        return text or _DEFAULT_DATABASE_URL
+
+
+class StorageConfig(BaseModel):
+    """Artifact storage settings — supports ``r2`` and ``local`` backends."""
+
+    backend: str = "r2"
+    """Storage backend: ``"r2"`` for Cloudflare R2 (production), ``"local"`` for filesystem (development)."""
+    local_dir: str = "runs"
+    """Base directory for local-backend artifacts (relative to project root)."""
+    r2_endpoint_url: str = ""
+    """S3-compatible endpoint URL (e.g. https://<account>.r2.cloudflarestorage.com)."""
+    r2_bucket: str = ""
+    """R2 bucket name."""
+    r2_access_key_id: str = ""
+    """R2 API access key ID."""
+    r2_secret_access_key: str = ""
+    """R2 API secret access key."""
+    run_prefix: str = "runs/"
+    """Key prefix for all run artifacts within the bucket (R2) or under local_dir (local)."""
+
+
 class EssayWriterConfig(BaseSettings):
     """Root configuration for the essay writer.
 
@@ -162,6 +200,8 @@ class EssayWriterConfig(BaseSettings):
     writing: WritingConfig = WritingConfig()
     formatting: FormattingConfig = FormattingConfig()
     search: SearchConfig = SearchConfig()
+    database: DatabaseConfig = DatabaseConfig()
+    storage: StorageConfig = StorageConfig()
     google_api_key: str | None = Field(
         default=None,
         validation_alias=_alias_choices(
@@ -283,6 +323,38 @@ class EssayWriterConfig(BaseSettings):
             "ESSAY_WEB_LOG_FORMAT",
             "ESSAY_WRITER_WEB_LOG_FORMAT",
         ),
+    )
+    worker_count: int = Field(
+        default=_DEFAULT_WORKER_COUNT,
+        validation_alias=_alias_choices(
+            "ESSAY_WORKER_COUNT",
+            "ESSAY_WRITER_WORKER_COUNT",
+        ),
+        ge=1,
+    )
+    worker_poll_interval_seconds: int = Field(
+        default=_DEFAULT_WORKER_POLL_INTERVAL_SECONDS,
+        validation_alias=_alias_choices(
+            "ESSAY_WORKER_POLL_INTERVAL_SECONDS",
+            "ESSAY_WRITER_WORKER_POLL_INTERVAL_SECONDS",
+        ),
+        ge=1,
+    )
+    worker_lease_seconds: int = Field(
+        default=_DEFAULT_WORKER_LEASE_SECONDS,
+        validation_alias=_alias_choices(
+            "ESSAY_WORKER_LEASE_SECONDS",
+            "ESSAY_WRITER_WORKER_LEASE_SECONDS",
+        ),
+        ge=5,
+    )
+    worker_heartbeat_interval_seconds: int = Field(
+        default=_DEFAULT_WORKER_HEARTBEAT_INTERVAL_SECONDS,
+        validation_alias=_alias_choices(
+            "ESSAY_WORKER_HEARTBEAT_INTERVAL_SECONDS",
+            "ESSAY_WRITER_WORKER_HEARTBEAT_INTERVAL_SECONDS",
+        ),
+        ge=1,
     )
 
     @field_validator(

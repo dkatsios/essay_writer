@@ -8,15 +8,30 @@ This is the canonical AI guidance file for the essay writer project. See `.githu
 # Install dependencies
 uv sync
 
+# Apply database migrations
+# Existing local DB from before Alembic: back up or remove the old web_jobs table first
+uv run alembic upgrade head
+
+# One-time local upgrade helper for pre-Alembic Postgres DBs
+uv run python scripts/db_upgrade_local.py
+
 # Enable the repo-managed pre-push hook once per clone
 git config core.hooksPath .githooks
 
 # Run the web UI
 uv run uvicorn src.web:app --reload
 
+# Run the background worker
+uv run python -m src.worker
+
+# Run multiple workers only (default 6 if omitted)
+uv run python -m src.start_workers 6
+
 # Docker
 docker build -t essay-writer .
 docker run -p 8000:8000 --env-file .env essay-writer
+# Combined container entrypoint starts web + workers together
+# Override worker count with ESSAY_WORKER_COUNT or ESSAY_WRITER_WORKER_COUNT (default 6)
 
 # Run tests
 uv run python -m pytest tests/ -v
@@ -28,6 +43,8 @@ uv run python -c "from src.agent import create_client, _retry_with_backoff"
 ## Architecture
 
 Deterministic Python pipeline for academic essay writing using the OpenAI SDK + Instructor rather than a deepagents/LangGraph orchestration layer. Produces academic essays as formatted `.docx` files in the language specified by the assignment brief (defaults to Greek). The orchestration entrypoint in `src/pipeline.py` delegates to focused helper modules: shared execution helpers in `src/pipeline_support.py`, source-processing steps in `src/pipeline_sources.py`, and writing/export steps in `src/pipeline_writing.py`. Three LLM model roles — **worker**, **writer**, and **reviewer** — perform the language tasks.
+
+The web process (`src/web.py`) no longer runs the pipeline inline. It persists submitted jobs as queued rows in `web_jobs`. The background worker process (`src/worker.py`) claims jobs with a DB lease, renews that lease while running, and executes the existing pipeline callbacks. SSE and history endpoints must therefore rely on persisted DB state rather than process-local task ownership.
 
 ### Flow
 
@@ -78,7 +95,7 @@ All tool calls (research, URL fetching, PDF reading) are plain Python functions 
 
 ### File Layout (run directory)
 
-Each run uses a directory with these subdirectories:
+Each run uses an R2 prefix (e.g. `runs/{job_id}/`) with these subpaths:
 
 - `brief/assignment.json` — assignment brief (Pydantic `AssignmentBrief`)
 - `brief/validation.json` — validation result (Pydantic `ValidationResult`); each `ValidationQuestion` includes `suggested_option_index` (0-based default for the web UI)
@@ -118,6 +135,14 @@ Uses `pydantic-settings` (`BaseSettings`) with two layers (highest wins):
 No `default.yaml` exists; field defaults in `settings.py` are canonical.
 
 **Provider presets** — `PROVIDER_PRESETS` in `config/settings.py` maps `google`, `openai`, `anthropic` to default (worker, writer, reviewer) model specs. When `models.provider` is set, roles not explicitly overridden get the preset values. Explicit role settings always win.
+
+**Database-backed web state** — `database.url` in `config/settings.py` controls the SQL store used for web job state. Phase 1 defaults to a repo-local SQLite file for development/tests, but production should set `ESSAY_WRITER_DATABASE__URL` to Postgres. This persistence layer stores web job status, interaction payloads, UI history, runtime summaries, per-step metrics, and artifact metadata. Schema changes are managed via Alembic migrations; do not recreate tables from application startup code. For older local databases created before Alembic support, `uv run python scripts/db_upgrade_local.py` is the safe one-time upgrade path: it backs up existing `web_jobs` rows, recreates the table through Alembic, and restores those rows. Do not use `alembic stamp head` unless the pre-existing schema has been verified to match the migration exactly.
+
+**Artifact storage** — run artifacts (`.docx`, markdown, uploads, extracted text, source notes) are stored via a pluggable backend controlled by `ESSAY_WRITER_STORAGE__BACKEND` (`"r2"` for Cloudflare R2 production, `"local"` for local filesystem development). All three implementations — `RunStorage` (R2/S3), `LocalRunStorage` (filesystem under `storage.local_dir`, default `runs/`), `MemoryRunStorage` (in-memory, tests) — share the `BaseRunStorage` ABC in `src/storage.py`. `create_run_storage(job_id)` is the factory that picks the backend from config. `Job.run_dir` is a string prefix (e.g. `runs/{job_id}/`), not a filesystem path. Configure R2 via `ESSAY_WRITER_STORAGE__R2_ENDPOINT_URL`, `ESSAY_WRITER_STORAGE__R2_BUCKET`, `ESSAY_WRITER_STORAGE__R2_ACCESS_KEY_ID`, `ESSAY_WRITER_STORAGE__R2_SECRET_ACCESS_KEY`.
+
+**Current start commands** — start the web process with `uv run uvicorn src.web:app --reload`. Start workers separately with `uv run python -m src.start_workers [count]` (default `6` if omitted) or `uv run python -m src.worker` for a single worker. The Docker image entrypoint starts both the web process and `src.start_workers` together, using the settings-backed `worker_count` value. Override it with `ESSAY_WORKER_COUNT` or `ESSAY_WRITER_WORKER_COUNT`. Both sides need the same DB credentials. When using R2 backend, both sides also need the same R2 credentials; with local backend, both sides need access to the same `local_dir` filesystem path.
+
+**Render free plan** — the checked-in `render.yaml` sets `ESSAY_WORKER_COUNT=1` because the combined container can exceed the 512 MiB memory limit if it starts the default 6 workers. `src.start_web_and_workers` also waits for the web port to bind before spawning workers so Render can detect the listening port promptly.
 
 **Google credentials** — for the direct Google provider path, `GOOGLE_API_KEY` may be either a classic Gemini Developer API key or a Vertex AI `AQ.` API key. The web UI's explicit credential field also accepts pasted Vertex service-account JSON. `AQ.` keys must have `GOOGLE_CLOUD_PROJECT` and `GOOGLE_CLOUD_LOCATION` set so `src/agent.py` can route the request through the Vertex provider alias. For pasted service-account JSON, `src/agent.py` may use the JSON `project_id` when `GOOGLE_CLOUD_PROJECT` is unset, but `GOOGLE_CLOUD_LOCATION` is still required. When `AI_BASE_URL` is set, model calls use the gateway credentials instead of direct Google credential autodetection.
 
@@ -166,7 +191,10 @@ Place test assignment directories under `examples/`. Each subdirectory is a self
 
 ### Web UI
 
-`src/web.py` is a thin FastAPI route layer that wraps the pipeline. Shared web job state, TTL cleanup, optional-PDF handling, and background execution live in `src/web_jobs.py`. A single HTML page (`src/templates/web/index.html`) provides a form (prompt, file upload, target word count). Jobs run in background threads; validation questions pause the pipeline thread via `threading.Event` and are pushed to the browser via Server-Sent Events (SSE). The web path respects `writing.interactive_validation` through the validation callback flow. Results are returned as a ZIP containing the docx, markdown, and sources metadata.
+`src/web.py` is a thin FastAPI route layer that wraps the pipeline. Shared web job state, TTL cleanup, optional-PDF handling, and background execution live in `src/web_jobs.py`. Durable job metadata is stored through `src/job_store.py`; process-local `asyncio.Event` objects remain only as wakeup signals for the active worker and SSE connection. A single HTML page (`src/templates/web/index.html`) provides a form (prompt, file upload, target word count). Jobs run in background threads; validation questions pause the pipeline thread via the callback flow and are pushed to the browser via Server-Sent Events (SSE). The web path respects `writing.interactive_validation` through the validation callback flow. Results are returned as a ZIP containing the docx, markdown, and sources metadata.
 
-- **SSE (`/stream/{job_id}`)** — the primary status channel. The server holds a long-lived `text/event-stream` connection and pushes `data: {JSON}\n\n` events whenever `job.status` or the pipeline stage changes. The client uses the native `EventSource` API which handles automatic reconnection. `_notify_job(job)` sets a `threading.Event` on each state transition; the SSE generator wakes on that signal or after a 2-second timeout (to catch stage changes within `running`). Terminal states (`done`, `error`, `gone`) close the generator so `EventSource` does not reconnect.
-- **Download lifecycle** — `GET /download/{job_id}` returns the ZIP without deleting it so interrupted transfers can retry safely. The browser UI follows that with `POST /download/{job_id}/cleanup` after it has received the blob, which deletes the temp directory and removes the job from memory. Jobs that finish (`done` or `error`) but are never cleaned up are removed automatically after a TTL (default 24h). Optional environment variables: `ESSAY_WEB_JOB_TTL_SECONDS` (default `86400`, use `0` to disable TTL cleanup only), `ESSAY_WEB_JOB_SWEEP_INTERVAL_SECONDS` (default `300`, minimum `60` between sweeps), and `ESSAY_WEB_INTERACTION_TIMEOUT_SECONDS` (default `1800`) for paused `questions` / `optional_pdfs` waits before the job fails.
+- **History inspection surface** — `GET /history` serves the browser history page. `GET /history/jobs` lists persisted runtime summaries, including active jobs immediately after submission (with optional `limit` and `status` query params). `GET /history/jobs/{job_id}` returns the persisted runtime summary, step metrics, artifact manifest, and the current live status payload when that job is still active.
+
+- **SSE (`/stream/{job_id}`)** — the primary status channel. The server holds a long-lived `text/event-stream` connection and pushes `data: {JSON}\n\n` events whenever persisted job state or local pipeline progress changes. The client uses the native `EventSource` API which handles automatic reconnection. `_notify_job(job)` sets a process-local `asyncio.Event` on each state transition; the SSE generator wakes on that signal or after a 2-second timeout (to catch stage changes within `running`). Terminal states (`done`, `error`, `gone`) close the generator so `EventSource` does not reconnect.
+- **Download lifecycle** — `GET /download/{job_id}` returns the ZIP without deleting it so interrupted transfers can retry safely. The browser UI follows that with `POST /download/{job_id}/cleanup` after it has received the blob, which deletes the temp directory and removes the persisted job row. Jobs that finish (`done` or `error`) but are never cleaned up are removed automatically after a TTL (default 24h). Optional environment variables: `ESSAY_WEB_JOB_TTL_SECONDS` (default `86400`, use `0` to disable TTL cleanup only), `ESSAY_WEB_JOB_SWEEP_INTERVAL_SECONDS` (default `300`, minimum `60` between sweeps), and `ESSAY_WEB_INTERACTION_TIMEOUT_SECONDS` (default `1800`) for paused `questions` / `optional_pdfs` waits before the job fails.
+- **Worker lease recovery** — queued and active jobs are owned by workers via `worker_id`, `leased_at`, and `lease_expires_at` in `web_jobs`. If a worker dies, another worker may reclaim jobs whose lease expired. The web process should not mark active jobs failed on startup just because it restarted.

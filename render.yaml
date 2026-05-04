@@ -1,6 +1,8 @@
 # Render Blueprint: https://render.com/docs/infrastructure-as-code
 # After connecting this repo, use "Apply" from the Blueprint or create a Web Service
-# that uses this file.
+# that uses this file. The Docker entrypoint starts the web app and workers in the
+# same container, so keep the free-plan worker count low to avoid OOM before or
+# shortly after port binding.
 
 services:
   - type: web
@@ -14,6 +16,10 @@ services:
         sync: false
       - key: SEMANTIC_SCHOLAR_API_KEY
         sync: false
+      - key: ESSAY_WRITER_DATABASE__URL
+        sync: false
+      - key: ESSAY_WORKER_COUNT
+        value: "1"
       # Optional: undownloaded finished jobs are deleted after this many seconds (default 86400).
       # - key: ESSAY_WEB_JOB_TTL_SECONDS
       #   value: "86400"

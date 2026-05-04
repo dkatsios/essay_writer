@@ -5,16 +5,18 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import shutil
+import os
+import socket
 import time
 import unicodedata
 import zipfile
 from dataclasses import dataclass, field
 from io import BytesIO
-from pathlib import Path
 from urllib.parse import urlparse
 
 from config.settings import load_config
+from src.job_store import JobStore
+from src.run_history_store import run_history
 from src.runtime import TokenTracker
 from src.schemas import AssignmentBrief, Clarification, ValidationQuestion
 from src.pipeline_sources import SourceShortfallAbort
@@ -23,6 +25,7 @@ from src.run_logging import (
     setup_run_logging,
     teardown_run_logging,
 )
+from src.storage import AnyStorage, create_run_storage
 from src.tools._http import pdf_get
 from src.tools.web_fetcher import extract_pdf_bytes_to_text
 
@@ -56,7 +59,10 @@ class Job:
 
     job_id: str
     status: str = "running"
-    run_dir: Path = field(default_factory=lambda: Path("."))
+    worker_id: str = ""
+    leased_at: float | None = None
+    lease_expires_at: float | None = None
+    run_dir: str = ""  # R2 prefix key for this run's storage
     questions: list[dict] | None = None
     answers_event: asyncio.Event = field(default_factory=asyncio.Event)
     answers: str = ""
@@ -80,11 +86,82 @@ class Job:
     optional_pdf_choices: dict[str, str] = field(default_factory=dict)
     fast_track: bool = False
     provider: str = ""
+    current_step: str = ""
+    step_index: int | None = None
+    step_count: int | None = None
     api_key: str = ""
     _sse_event: asyncio.Event = field(default_factory=asyncio.Event)
 
+    def get_storage(self) -> AnyStorage:
+        """Create storage for this job's run prefix."""
+        return create_run_storage(self.job_id)
 
-jobs: dict[str, Job] = {}
+
+jobs = JobStore()
+
+
+def _sync_job_artifacts(job: Job) -> None:
+    run_history.sync_artifacts(job.job_id, job.get_storage())
+
+
+def _persist_run_history_snapshot(job: Job) -> None:
+    tracker = job.tracker
+    if tracker is not None and hasattr(tracker, "build_runtime_summary"):
+        payload = tracker.build_runtime_summary(
+            job.get_storage(),
+            status=job.status,
+            provider=job.provider,
+        )
+    else:
+        payload = {
+            "status": job.status,
+            "provider": job.provider,
+            "total_cost_usd": 0.0,
+            "total_input_tokens": 0,
+            "total_output_tokens": 0,
+            "total_thinking_tokens": 0,
+            "total_duration_seconds": 0.0,
+            "step_count": 0,
+            "target_words": job.target_words,
+            "draft_words": 0,
+            "final_words": 0,
+        }
+    if job.target_words is not None and not payload.get("target_words"):
+        payload["target_words"] = job.target_words
+    run_history.save_runtime_summary(job.job_id, **payload)
+
+
+def _persist_terminal_run_history(job: Job, *, status: str) -> None:
+    tracker = job.tracker
+    if tracker is not None and hasattr(tracker, "build_runtime_summary"):
+        payload = tracker.build_runtime_summary(
+            job.get_storage(),
+            status=status,
+            provider=job.provider,
+        )
+    else:
+        payload = {
+            "status": status,
+            "provider": job.provider,
+            "total_cost_usd": 0.0,
+            "total_input_tokens": 0,
+            "total_output_tokens": 0,
+            "total_thinking_tokens": 0,
+            "total_duration_seconds": 0.0,
+            "step_count": 0,
+            "target_words": job.target_words,
+            "draft_words": 0,
+            "final_words": 0,
+        }
+    run_history.save_runtime_summary(job.job_id, **payload)
+    _sync_job_artifacts(job)
+
+
+def save_job(job: Job) -> Job:
+    """Persist the current durable view of *job* and remember local transients."""
+    saved = jobs.save(job)
+    _persist_run_history_snapshot(saved)
+    return saved
 
 
 def notify_job(job: Job) -> None:
@@ -93,14 +170,30 @@ def notify_job(job: Job) -> None:
 
 def build_status_payload(job: Job) -> dict:
     payload: dict = {"status": job.status}
-    if job.status == "running" and job.tracker is not None:
-        payload["stage"] = job.tracker.get_current_step()
-        with job.tracker._lock:
-            payload["step_index"] = job.tracker.step_index
-            payload["step_count"] = job.tracker.step_count
-            if job.tracker.sub_total > 0:
-                payload["sub_done"] = job.tracker.sub_done
-                payload["sub_total"] = job.tracker.sub_total
+    if job.status == "running":
+        stage = job.current_step
+        if not stage and job.tracker is not None:
+            stage = job.tracker.get_current_step()
+        if stage:
+            payload["stage"] = stage
+
+        if job.step_index is not None:
+            payload["step_index"] = job.step_index
+        elif job.tracker is not None:
+            with job.tracker._lock:
+                payload["step_index"] = job.tracker.step_index
+
+        if job.step_count is not None:
+            payload["step_count"] = job.step_count
+        elif job.tracker is not None:
+            with job.tracker._lock:
+                payload["step_count"] = job.tracker.step_count
+
+        if job.tracker is not None:
+            with job.tracker._lock:
+                if job.tracker.sub_total > 0:
+                    payload["sub_done"] = job.tracker.sub_done
+                    payload["sub_total"] = job.tracker.sub_total
     if job.status == "questions" and job.questions:
         payload["questions"] = job.questions
     if job.status == "optional_pdfs" and job.optional_pdf_items:
@@ -187,11 +280,34 @@ def set_job_error(job: Job, message: str) -> None:
     job.status = "error"
     job.error = message
     job.finished_at = time.time()
+    save_job(job)
     notify_job(job)
 
 
 class JobInteractionTimeout(Exception):
     """Raised when a web job waits too long for user interaction."""
+
+
+def _copy_job_state(target: Job, latest: Job) -> None:
+    target.status = latest.status
+    target.worker_id = latest.worker_id
+    target.leased_at = latest.leased_at
+    target.lease_expires_at = latest.lease_expires_at
+    target.questions = latest.questions
+    target.answers = latest.answers
+    target.optional_pdf_items = latest.optional_pdf_items
+    target.optional_pdf_allowed_ids = latest.optional_pdf_allowed_ids
+    target.source_shortfall = latest.source_shortfall
+    target.source_shortfall_decision = latest.source_shortfall_decision
+    target.source_shortfall_added_ids = list(latest.source_shortfall_added_ids)
+    target.error = latest.error
+    target.finished_at = latest.finished_at
+    target.clarification_rounds = list(latest.clarification_rounds)
+    target.optional_pdf_rounds = list(latest.optional_pdf_rounds)
+    target.optional_pdf_choices = dict(latest.optional_pdf_choices)
+    target.current_step = latest.current_step
+    target.step_index = latest.step_index
+    target.step_count = latest.step_count
 
 
 async def async_wait_for_job_signal(
@@ -203,19 +319,39 @@ async def async_wait_for_job_signal(
     interaction_timeout_seconds_fn=interaction_timeout_seconds,
 ) -> bool:
     wait_seconds = interaction_timeout_seconds_fn() if timeout is None else timeout
-    try:
-        await asyncio.wait_for(event.wait(), timeout=wait_seconds)
-        return True
-    except TimeoutError:
-        set_job_error(job, error_message)
-        return False
+    expected_status = job.status
+    deadline = time.monotonic() + wait_seconds
+    while True:
+        if event.is_set():
+            return True
+
+        latest = jobs.refresh(job.job_id)
+        if latest is not None:
+            _copy_job_state(job, latest)
+            if latest.status != expected_status:
+                return True
+
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            set_job_error(job, error_message)
+            return False
+
+        try:
+            await asyncio.wait_for(event.wait(), timeout=min(1.0, remaining))
+        except TimeoutError:
+            pass
 
 
 def delete_job_artifacts(job_id: str) -> bool:
     job = jobs.pop(job_id, None)
     if job is None:
         return False
-    shutil.rmtree(job.run_dir, ignore_errors=True)
+    run_history.mark_artifacts_deleted(job_id)
+    try:
+        storage = job.get_storage()
+        storage.delete_all()
+    except Exception:
+        logger.warning("Failed to delete R2 artifacts for job %s", job_id)
     return True
 
 
@@ -225,17 +361,20 @@ def job_ttl_sweep_once(now: float | None = None) -> int:
         return 0
     current_time = time.time() if now is None else now
     removed = 0
-    for job_id, job in list(jobs.items()):
-        if job.status not in ("done", "error") or job.finished_at is None:
-            continue
-        if current_time - job.finished_at <= ttl:
-            continue
-        jobs.pop(job_id, None)
-        shutil.rmtree(job.run_dir, ignore_errors=True)
+    for job in jobs.expired_finished_jobs(current_time=current_time, ttl_seconds=ttl):
+        jobs.pop(job.job_id, None)
+        run_history.mark_artifacts_deleted(job.job_id, current_time=current_time)
+        try:
+            storage = job.get_storage()
+            storage.delete_all()
+        except Exception:
+            logger.warning(
+                "Failed to delete R2 artifacts for job %s during TTL sweep", job.job_id
+            )
         removed += 1
         logger.info(
             "TTL cleanup removed job %s (status=%s, age=%.0fs)",
-            job_id,
+            job.job_id,
             job.status,
             current_time - job.finished_at,
         )
@@ -259,12 +398,51 @@ def start_job_ttl_sweeper() -> None:
     asyncio.create_task(_job_ttl_sweeper_loop())
 
 
+def mark_stale_jobs_on_startup() -> int:
+    """Fail previously active jobs so the UI sees a deterministic terminal state."""
+    config = load_config()
+    if not config.database.mark_stale_jobs_on_startup:
+        return 0
+    count = jobs.mark_stale_active_jobs(
+        "Server restarted while this job was active. Please submit it again."
+    )
+    if count:
+        logger.warning("Marked %d stale active job(s) as failed on startup", count)
+    return count
+
+
+def build_job_extra_prompt(job: Job) -> str | None:
+    extra_prompt = job.submit_prompt.strip() or None
+    if job.target_words is not None and job.target_words > 0:
+        words_line = f"Target word count: {job.target_words} words."
+        extra_prompt = f"{words_line}\n{extra_prompt}" if extra_prompt else words_line
+    if job.academic_level:
+        level_line = f"Academic level: {job.academic_level}."
+        extra_prompt = f"{level_line}\n{extra_prompt}" if extra_prompt else level_line
+    return extra_prompt
+
+
+def infer_job_has_uploads(job: Job) -> tuple[bool, bool]:
+    """Check if uploads and user_sources exist in storage.
+
+    Returns (has_uploads, has_user_sources).
+    """
+    storage = job.get_storage()
+    has_uploads = bool(storage.list_files("uploads/"))
+    has_user_sources = bool(storage.list_files("user_sources/"))
+    return has_uploads, has_user_sources
+
+
+def worker_identity() -> str:
+    return f"{socket.gethostname()}:{os.getpid()}"
+
+
 async def run_pipeline_task(
     job: Job,
-    upload_dir: Path | None,
+    has_uploads: bool,
     prompt: str | None,
     min_sources: int | None = None,
-    user_sources_dir: Path | None = None,
+    has_user_sources: bool = False,
     *,
     load_config_fn,
     models_config_cls,
@@ -278,9 +456,10 @@ async def run_pipeline_task(
 ) -> None:
     """Execute the essay pipeline as an asyncio task on uvicorn's event loop."""
     log_handler = None
+    storage = job.get_storage()
     with run_id_context(job.job_id):
         try:
-            log_handler = setup_run_logging(job.run_dir, job.job_id)
+            log_handler = setup_run_logging(None, job.job_id)
             logger.info(
                 "Job %s started (provider=%s, target_words=%s, min_sources=%s)",
                 job.job_id,
@@ -294,26 +473,35 @@ async def run_pipeline_task(
             if job.provider:
                 config.models = models_config_cls(provider=job.provider)
 
-            run_dir = job.run_dir
-            input_dir = run_dir / "input"
-            input_dir.mkdir(parents=True, exist_ok=True)
+            if has_uploads:
+                # Download uploaded files to temp, scan, extract text, write to storage
+                import tempfile
 
-            if upload_dir and any(upload_dir.iterdir()):
-                input_files = scan_fn(str(upload_dir))
-                extracted_text = build_extracted_text_fn(
-                    input_files, extra_prompt=prompt
-                )
-                del input_files
+                with tempfile.TemporaryDirectory() as tmpdir:
+                    from pathlib import Path
+
+                    tmp_path = Path(tmpdir)
+                    for subpath in storage.list_files("uploads/"):
+                        filename = subpath.rsplit("/", 1)[-1]
+                        (tmp_path / filename).write_bytes(storage.read_bytes(subpath))
+                    input_files = scan_fn(str(tmp_path))
+                    extracted_text = build_extracted_text_fn(
+                        input_files, extra_prompt=prompt
+                    )
+                    del input_files
             elif prompt:
                 extracted_text = f"# Assignment\n\n{prompt}\n"
             else:
                 job.status = "error"
                 job.error = "Provide at least a prompt or upload files."
                 job.finished_at = time.time()
+                save_job(job)
+                _persist_terminal_run_history(job, status="error")
                 notify_job(job)
                 return
 
-            (input_dir / "extracted.md").write_text(extracted_text, encoding="utf-8")
+            storage.write_text("input/extracted.md", extracted_text)
+            _sync_job_artifacts(job)
 
             api_key = job.api_key or None
             job.api_key = ""
@@ -325,10 +513,20 @@ async def run_pipeline_task(
 
             tracker = TokenTracker()
             job.tracker = tracker
-            tracker.set_on_progress(lambda: notify_job(job))
+
+            def _on_progress() -> None:
+                job.current_step = tracker.get_current_step() or ""
+                with tracker._lock:
+                    job.step_index = tracker.step_index
+                    job.step_count = tracker.step_count
+                save_job(job)
+                notify_job(job)
+
+            tracker.set_on_progress(_on_progress)
+            save_job(job)
 
             async def _on_questions(
-                questions: list[ValidationQuestion], run_path: Path
+                questions: list[ValidationQuestion], run_storage: AnyStorage
             ) -> None:
                 remaining = questions
                 auto_clarifications: list[Clarification] = []
@@ -346,18 +544,17 @@ async def run_pipeline_task(
                             remaining.append(question)
 
                 if auto_clarifications:
-                    brief_path = run_path / "brief" / "assignment.json"
                     brief = AssignmentBrief.model_validate_json(
-                        brief_path.read_text(encoding="utf-8")
+                        run_storage.read_text("brief/assignment.json")
                     )
                     if brief.clarifications is None:
                         brief.clarifications = []
                     brief.clarifications.extend(auto_clarifications)
                     if not brief.academic_level:
                         brief.academic_level = job.academic_level
-                    brief_path.write_text(
+                    run_storage.write_text(
+                        "brief/assignment.json",
                         brief.model_dump_json(indent=2, ensure_ascii=False),
-                        encoding="utf-8",
                     )
 
                 if not remaining:
@@ -387,6 +584,7 @@ async def run_pipeline_task(
                     ]
                     job.answers_event.clear()
                     job.status = "questions"
+                    save_job(job)
                     logger.info(
                         "Job %s waiting for %d clarification question(s)",
                         job.job_id,
@@ -405,25 +603,28 @@ async def run_pipeline_task(
                     if not chosen_answers:
                         logger.info("Job %s clarification step skipped", job.job_id)
                         job.questions = None
+                        save_job(job)
                         return
 
-                brief_path = run_path / "brief" / "assignment.json"
                 brief = AssignmentBrief.model_validate_json(
-                    brief_path.read_text(encoding="utf-8")
+                    run_storage.read_text("brief/assignment.json")
                 )
                 if brief.clarifications is None:
                     brief.clarifications = []
                 brief.clarifications.extend(
                     parse_validation_answers_fn(remaining, chosen_answers)
                 )
-                brief_path.write_text(
+                run_storage.write_text(
+                    "brief/assignment.json",
                     brief.model_dump_json(indent=2, ensure_ascii=False),
-                    encoding="utf-8",
                 )
                 logger.info("Job %s clarification answers saved", job.job_id)
                 job.questions = None
+                save_job(job)
 
-            async def _on_optional_pdfs(run_path: Path, items: list[dict]) -> None:
+            async def _on_optional_pdfs(
+                run_storage: AnyStorage, items: list[dict]
+            ) -> None:
                 if not items:
                     return
                 if job.fast_track:
@@ -439,6 +640,8 @@ async def run_pipeline_task(
                 )
                 job.optional_pdf_event.clear()
                 job.status = "optional_pdfs"
+                _sync_job_artifacts(job)
+                save_job(job)
                 logger.info(
                     "Job %s waiting for optional PDFs for %d source(s)",
                     job.job_id,
@@ -454,16 +657,19 @@ async def run_pipeline_task(
                     raise JobInteractionTimeout()
                 job.optional_pdf_items = None
                 job.optional_pdf_allowed_ids = None
+                save_job(job)
                 logger.info("Job %s optional PDF step resumed", job.job_id)
 
             async def _on_source_shortfall(
-                run_path: Path, summary: dict
+                run_storage: AnyStorage, summary: dict
             ) -> tuple[bool, list[str]]:
                 job.source_shortfall = summary
                 job.source_shortfall_decision = ""
                 job.source_shortfall_added_ids = []
                 job.source_shortfall_event.clear()
                 job.status = "source_shortfall"
+                _sync_job_artifacts(job)
+                save_job(job)
                 logger.warning(
                     "Job %s waiting for source shortfall decision (%s/%s usable sources)",
                     job.job_id,
@@ -482,13 +688,14 @@ async def run_pipeline_task(
                 added_ids = list(job.source_shortfall_added_ids)
                 job.source_shortfall = None
                 job.source_shortfall_added_ids = []
+                save_job(job)
                 return decision == "proceed", added_ids
 
             await run_pipeline_fn(
                 None,
                 None,
                 None,
-                run_dir,
+                storage,
                 config,
                 extra_prompt=prompt,
                 token_tracker=tracker,
@@ -496,38 +703,46 @@ async def run_pipeline_task(
                 on_optional_source_pdfs=_on_optional_pdfs,
                 on_source_shortfall=_on_source_shortfall,
                 min_sources=min_sources,
-                user_sources_dir=user_sources_dir,
+                user_sources_dir="user_sources" if has_user_sources else None,
                 async_worker=async_worker,
                 async_writer=async_writer,
                 async_reviewer=async_reviewer,
+                job_id=job.job_id,
+                run_history_store=run_history,
             )
 
-            tracker.write_report(run_dir)
+            tracker.write_report(storage)
+            _persist_terminal_run_history(job, status="done")
             job.status = "done"
+            job.current_step = ""
+            job.step_index = None
+            job.step_count = None
             job.finished_at = time.time()
+            save_job(job)
             logger.info("Job %s completed successfully", job.job_id)
             notify_job(job)
 
         except JobInteractionTimeout:
+            _persist_terminal_run_history(job, status="error")
             return
         except SourceShortfallAbort as exc:
             logger.warning("Job %s aborted after source shortfall: %s", job.job_id, exc)
             set_job_error(job, str(exc))
+            _persist_terminal_run_history(job, status="error")
         except Exception:
             logger.exception("Pipeline failed for job %s", job.job_id)
             set_job_error(job, "Pipeline failed. Check server logs for details.")
+            _persist_terminal_run_history(job, status="error")
         finally:
             if log_handler is not None:
                 teardown_run_logging(log_handler)
 
 
-def build_zip(run_dir: Path) -> BytesIO:
+def build_zip(storage: AnyStorage) -> BytesIO:
     buffer = BytesIO()
-    root = run_dir.resolve()
     with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as zip_file:
-        for path in sorted(root.rglob("*")):
-            if path.is_file():
-                zip_file.write(path, path.relative_to(root).as_posix())
+        for subpath in sorted(storage.iter_all_files()):
+            zip_file.writestr(subpath, storage.read_bytes(subpath))
     buffer.seek(0)
     return buffer
 
@@ -564,19 +779,18 @@ def apply_optional_pdf_bytes(
     if len(text) > 50_000:
         text = text[:50_000] + "\n\n[... truncated ...]"
 
-    supplement_dir = job.run_dir / "sources" / "supplement"
-    supplement_dir.mkdir(parents=True, exist_ok=True)
+    storage = job.get_storage()
     safe_name = "".join(c if c.isalnum() or c in "-_" else "_" for c in source_id)[:120]
-    text_path = supplement_dir / f"{safe_name}.txt"
-    text_path.write_text(text, encoding="utf-8")
+    content_subpath = f"sources/supplement/{safe_name}.txt"
+    storage.write_text(content_subpath, text)
 
-    registry_path = job.run_dir / "sources" / "registry.json"
-    registry = json.loads(registry_path.read_text(encoding="utf-8"))
+    registry = json.loads(storage.read_text("sources/registry.json"))
     if source_id not in registry:
         return "Source not in registry"
-    registry[source_id]["content_path"] = str(text_path.resolve())
-    registry_path.write_text(
+    registry[source_id]["content_path"] = content_subpath
+    storage.write_text(
+        "sources/registry.json",
         json.dumps(registry, ensure_ascii=False, indent=2),
-        encoding="utf-8",
     )
+    run_history.sync_artifacts(job.job_id, storage)
     return None

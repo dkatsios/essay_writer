@@ -344,24 +344,24 @@ class TestAsyncBatchTriageSources:
 
 
 class TestWriteSourceDecisionArtifacts:
-    def test_writes_score_artifacts(self, tmp_path):
-        run_dir = tmp_path / "run"
-        sources_dir = run_dir / "sources"
-        sources_dir.mkdir(parents=True)
+    def test_writes_score_artifacts(self):
+        from src.storage import MemoryRunStorage
+
+        storage = MemoryRunStorage("test/")
         registry = {
             "keep": {"title": "Relevant paper", "doi": "10.1/keep"},
             "drop": {"title": "Irrelevant paper", "doi": "10.1/drop"},
         }
 
         _write_source_decision_artifacts(
-            run_dir,
+            storage,
             registry,
             {"keep": 5, "drop": 1},
             ["keep"],
             min_relevance_score=3,
         )
 
-        scores = json.loads((sources_dir / "scores.json").read_text(encoding="utf-8"))
+        scores = json.loads(storage.read_text("sources/scores.json"))
 
         assert scores["min_relevance_score"] == 3
         assert scores["scores"]["keep"]["relevance_score"] == 5
@@ -374,21 +374,26 @@ class TestWriteSourceDecisionArtifacts:
 
 
 class TestAsyncFetchPdfContent:
-    def test_user_provided_loads_content_path(self, tmp_path):
-        content_file = tmp_path / "source.txt"
-        content_file.write_text("This is user content.", encoding="utf-8")
-        meta = {"user_provided": True, "content_path": str(content_file)}
+    def test_user_provided_loads_content_path(self):
+        from src.storage import MemoryRunStorage
+
+        storage = MemoryRunStorage("test/")
+        storage.write_text("sources/user/source.txt", "This is user content.")
+        meta = {"user_provided": True, "content_path": "sources/user/source.txt"}
         sid, content, did_fail = asyncio.run(
-            _async_fetch_pdf_content("user_001", meta, str(tmp_path))
+            _async_fetch_pdf_content("user_001", meta, storage)
         )
         assert sid == "user_001"
         assert "user content" in content
         assert did_fail is False
 
     def test_no_pdf_url_returns_empty(self):
+        from src.storage import MemoryRunStorage
+
+        storage = MemoryRunStorage("test/")
         meta = {"url": "https://example.com/page", "pdf_url": ""}
         sid, content, did_fail = asyncio.run(
-            _async_fetch_pdf_content("s1", meta, "/tmp/sources")
+            _async_fetch_pdf_content("s1", meta, storage)
         )
         assert sid == "s1"
         assert content == ""
@@ -396,13 +401,16 @@ class TestAsyncFetchPdfContent:
 
     def test_domain_throttled_returns_empty(self):
         from src.pipeline_sources import DomainFailureTracker
+        from src.storage import MemoryRunStorage
 
         tracker = DomainFailureTracker(max_failures=1)
         tracker.record_failure("https://example.com/paper.pdf")
         tracker.record_failure("https://example.com/paper.pdf")
         meta = {"pdf_url": "https://example.com/paper.pdf"}
         sid, content, did_fail = asyncio.run(
-            _async_fetch_pdf_content("s1", meta, "/tmp/sources", domain_tracker=tracker)
+            _async_fetch_pdf_content(
+                "s1", meta, MemoryRunStorage("test/"), domain_tracker=tracker
+            )
         )
         assert sid == "s1"
         assert content == ""

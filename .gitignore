@@ -18,3 +18,8 @@ wheels/
 # Runtime output
 output/
 .output/
+runs/
+.essay_writer_jobs.db
+
+# Alembic / local migration artifacts
+alembic/__pycache__/

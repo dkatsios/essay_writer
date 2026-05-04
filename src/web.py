@@ -3,10 +3,8 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime
 import json
 import logging
-import tempfile
 import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -20,8 +18,10 @@ from src import web_jobs  # noqa: E402
 from src.agent import create_async_client  # noqa: E402
 from src.intake import build_extracted_text, scan  # noqa: E402
 from src.pipeline import run_pipeline  # noqa: E402
+from src.run_history_store import run_history  # noqa: E402
 from src.run_logging import configure_web_logging, run_id_context  # noqa: E402
 from src.runtime import parse_validation_answers  # noqa: E402
+from src.storage import create_run_storage  # noqa: E402
 from src.tools._http import close_http_clients  # noqa: E402
 
 logger = logging.getLogger(__name__)
@@ -34,24 +34,26 @@ _jinja_env = Environment(
 Job = web_jobs.Job
 _JobInteractionTimeout = web_jobs.JobInteractionTimeout
 _jobs = web_jobs.jobs
+_save_job = web_jobs.save_job
 _notify_job = web_jobs.notify_job
 _build_status_payload = web_jobs.build_status_payload
+_refresh_job = web_jobs.jobs.refresh
 job_ttl_sweep_once = web_jobs.job_ttl_sweep_once
 
 
 async def _run_pipeline_task(
     job: Job,
-    upload_dir: Path | None,
+    has_uploads: bool,
     prompt: str | None,
     min_sources: int | None = None,
-    user_sources_dir: Path | None = None,
+    has_user_sources: bool = False,
 ) -> None:
     await web_jobs.run_pipeline_task(
         job,
-        upload_dir,
+        has_uploads,
         prompt,
         min_sources,
-        user_sources_dir,
+        has_user_sources,
         load_config_fn=load_config,
         models_config_cls=ModelsConfig,
         create_async_client_fn=create_async_client,
@@ -76,13 +78,8 @@ async def _lifespan(app: FastAPI):
 app = FastAPI(title="Essay Writer", lifespan=_lifespan)
 
 
-def _run_dir_prefix(now: datetime | None = None) -> str:
-    timestamp = (now or datetime.now()).strftime("%Y%m%d_%H%M%S_%f")
-    return f"essay_{timestamp}_"
-
-
 def _download_basename(job: Job) -> str:
-    name = job.run_dir.name.strip()
+    name = job.run_dir.rstrip("/").rsplit("/", 1)[-1].strip()
     return name or f"essay_{job.job_id}"
 
 
@@ -90,6 +87,51 @@ def _download_basename(job: Job) -> str:
 async def health():
     """Liveness probe for platforms (e.g. Render) — no API keys required."""
     return JSONResponse({"status": "ok"})
+
+
+@app.get("/history", response_class=HTMLResponse)
+async def history_page():
+    """Serve the run history inspection page."""
+    template = _jinja_env.get_template("history.html")
+    return template.render()
+
+
+@app.get("/history/jobs")
+async def history_jobs(
+    limit: int = Query(50, ge=1, le=200),
+    status: str | None = Query(None),
+):
+    """List persisted run summaries for inspection/debugging."""
+    summaries = run_history.list_runtime_summaries(limit=limit, status=status)
+    return JSONResponse({"jobs": summaries, "count": len(summaries)})
+
+
+@app.get("/history/jobs/{job_id}")
+async def history_job_detail(
+    job_id: str,
+    available_artifacts_only: bool = Query(False),
+):
+    """Return persisted run history for one job, plus live status when available."""
+    summary = run_history.get_runtime_summary(job_id)
+    steps = run_history.list_step_metrics(job_id)
+    artifacts = run_history.list_artifacts(job_id)
+    if available_artifacts_only:
+        artifacts = [item for item in artifacts if item["is_available"]]
+
+    live_job = _refresh_job(job_id)
+    if summary is None and not steps and not artifacts and live_job is None:
+        return JSONResponse({"error": "Job not found"}, status_code=404)
+
+    payload: dict[str, object] = {
+        "job_id": job_id,
+        "summary": summary,
+        "steps": steps,
+        "artifacts": artifacts,
+    }
+    if live_job is not None:
+        payload["live_status"] = _build_status_payload(live_job)
+
+    return JSONResponse(payload)
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -111,10 +153,10 @@ async def submit(
     files: list[UploadFile] = [],  # noqa: B006
     sources: list[UploadFile] = [],  # noqa: B006
 ):
-    """Accept form data, start the pipeline as a background task."""
+    """Accept form data, persist a queued job, and return immediately."""
     job_id = uuid.uuid4().hex[:12]
 
-    run_dir = Path(tempfile.mkdtemp(prefix=_run_dir_prefix()))
+    storage = create_run_storage(job_id)
     target_words_value = (
         target_words if target_words is not None and target_words > 0 else None
     )
@@ -132,7 +174,8 @@ async def submit(
 
     job = Job(
         job_id=job_id,
-        run_dir=run_dir,
+        status="pending",
+        run_dir=storage.prefix,
         academic_level=academic_level.strip(),
         submit_prompt=prompt.strip(),
         target_words=target_words_value,
@@ -143,7 +186,7 @@ async def submit(
         provider=provider_value,
         api_key=api_key.strip(),
     )
-    _jobs[job_id] = job
+    _save_job(job)
 
     with run_id_context(job_id):
         logger.info(
@@ -156,42 +199,30 @@ async def submit(
             len([file for file in sources if file.filename]),
         )
 
-    upload_dir: Path | None = None
+    has_uploads = False
     if files and files[0].filename:
-        upload_dir = run_dir / "uploads"
-        upload_dir.mkdir(parents=True, exist_ok=True)
         for file in files:
             if file.filename:
-                destination = upload_dir / Path(file.filename).name
-                destination.write_bytes(await file.read())
+                storage.write_bytes(
+                    f"uploads/{Path(file.filename).name}", await file.read()
+                )
+                has_uploads = True
 
-    user_sources_dir: Path | None = None
+    has_user_sources = False
     if sources and sources[0].filename:
-        user_sources_dir = run_dir / "user_sources"
-        user_sources_dir.mkdir(parents=True, exist_ok=True)
         for index, file in enumerate(sources):
             if file.filename:
-                destination = (
-                    user_sources_dir / f"{index:03d}_{Path(file.filename).name}"
+                storage.write_bytes(
+                    f"user_sources/{index:03d}_{Path(file.filename).name}",
+                    await file.read(),
                 )
-                destination.write_bytes(await file.read())
+                has_user_sources = True
 
-    extra_prompt = prompt.strip() or None
-    if target_words and target_words > 0:
-        words_line = f"Target word count: {target_words} words."
-        extra_prompt = f"{words_line}\n{extra_prompt}" if extra_prompt else words_line
-    if academic_level:
-        level_line = f"Academic level: {academic_level}."
-        extra_prompt = f"{level_line}\n{extra_prompt}" if extra_prompt else level_line
-
-    asyncio.create_task(
-        _run_pipeline_task(
-            job, upload_dir, extra_prompt, min_sources_value, user_sources_dir
-        )
-    )
+    if has_uploads or has_user_sources:
+        run_history.sync_artifacts(job_id, storage)
 
     with run_id_context(job_id):
-        logger.info("Job %s background task started", job_id)
+        logger.info("Job %s queued for worker execution", job_id)
 
     return JSONResponse({"job_id": job_id})
 
@@ -202,9 +233,9 @@ _SSE_POLL_INTERVAL = 2.0
 @app.get("/stream/{job_id}")
 async def stream(job_id: str):
     """Server-Sent Events stream for real-time job status updates."""
-    job = _jobs.get(job_id)
 
     async def generate():
+        job = _refresh_job(job_id)
         if job is None:
             yield f"data: {json.dumps({'status': 'gone'})}\n\n"
             return
@@ -218,6 +249,10 @@ async def stream(job_id: str):
             return
 
         while True:
+            job = _refresh_job(job_id)
+            if job is None:
+                yield f"data: {json.dumps({'status': 'gone'})}\n\n"
+                return
             try:
                 await asyncio.wait_for(
                     job._sse_event.wait(), timeout=_SSE_POLL_INTERVAL
@@ -226,7 +261,8 @@ async def stream(job_id: str):
                 pass
             job._sse_event.clear()
 
-            if job_id not in _jobs:
+            job = _refresh_job(job_id)
+            if job is None:
                 yield f"data: {json.dumps({'status': 'gone'})}\n\n"
                 return
 
@@ -253,7 +289,7 @@ async def stream(job_id: str):
 @app.post("/answer/{job_id}")
 async def answer(job_id: str, answers: str = Form("")):
     """Submit answers to validation questions, unblock the pipeline thread."""
-    job = _jobs.get(job_id)
+    job = _refresh_job(job_id)
     if not job:
         return JSONResponse({"error": "Job not found"}, status_code=404)
     if job.status != "questions":
@@ -270,6 +306,7 @@ async def answer(job_id: str, answers: str = Form("")):
             job, answers, parse_validation_answers_fn=parse_validation_answers
         )
         job.status = "running"
+        _save_job(job)
         _notify_job(job)
         job.answers_event.set()
     return JSONResponse({"status": "ok"})
@@ -283,7 +320,7 @@ async def optional_pdf_upload(
     file: UploadFile | None = None,
 ):
     """Attach a user PDF (file upload or http(s) URL) to a registry source."""
-    job = _jobs.get(job_id)
+    job = _refresh_job(job_id)
     if not job:
         return JSONResponse({"error": "Job not found"}, status_code=404)
     if job.status != "optional_pdfs":
@@ -321,6 +358,7 @@ async def optional_pdf_upload(
         if error:
             return JSONResponse({"error": error}, status_code=400)
         job.optional_pdf_choices[source_id_value] = "url" if pdf_url_value else "file"
+        _save_job(job)
         logger.info(
             "Job %s attached optional PDF for source %s via %s",
             job_id,
@@ -333,7 +371,7 @@ async def optional_pdf_upload(
 @app.post("/optional-pdf/{job_id}/done")
 async def optional_pdf_done(job_id: str):
     """Continue the pipeline after optional PDF uploads (or skip)."""
-    job = _jobs.get(job_id)
+    job = _refresh_job(job_id)
     if not job:
         return JSONResponse({"error": "Job not found"}, status_code=404)
     if job.status != "optional_pdfs":
@@ -343,6 +381,7 @@ async def optional_pdf_done(job_id: str):
         logger.info("Job %s completed optional PDF input step", job_id)
         web_jobs.append_optional_pdf_round_for_ui(job)
         job.status = "running"
+        _save_job(job)
         _notify_job(job)
         job.optional_pdf_event.set()
     return JSONResponse({"status": "ok"})
@@ -359,7 +398,7 @@ async def source_shortfall_decision(
     *added_ids* is an optional JSON array of source IDs the user picked from
     the borderline candidates list.
     """
-    job = _jobs.get(job_id)
+    job = _refresh_job(job_id)
     if not job:
         return JSONResponse({"error": "Job not found"}, status_code=404)
     if job.status != "source_shortfall":
@@ -393,6 +432,7 @@ async def source_shortfall_decision(
         job.source_shortfall_decision = choice
         job.source_shortfall_added_ids = parsed_ids
         job.status = "running"
+        _save_job(job)
         _notify_job(job)
         job.source_shortfall_event.set()
     return JSONResponse(
@@ -403,7 +443,7 @@ async def source_shortfall_decision(
 @app.get("/download/{job_id}")
 async def download(job_id: str, format: str | None = Query(None)):
     """Return the result zip or just the docx."""
-    job = _jobs.get(job_id)
+    job = _refresh_job(job_id)
     if not job:
         return JSONResponse({"error": "Job not found"}, status_code=404)
     if job.status != "done":
@@ -413,14 +453,17 @@ async def download(job_id: str, format: str | None = Query(None)):
         logger.info("Job %s download requested (format=%s)", job_id, format or "zip")
 
     if format == "docx":
-        docx_path = job.run_dir / "essay.docx"
-        if not docx_path.is_file():
+        storage = job.get_storage()
+        if not storage.exists("essay.docx"):
             return JSONResponse({"error": "Docx file not found"}, status_code=404)
+        docx_bytes = storage.read_bytes("essay.docx")
 
         def _iter_docx():
-            with open(docx_path, "rb") as fh:
-                while chunk := fh.read(64 * 1024):
-                    yield chunk
+            from io import BytesIO
+
+            buf = BytesIO(docx_bytes)
+            while chunk := buf.read(64 * 1024):
+                yield chunk
 
         return StreamingResponse(
             _iter_docx(),
@@ -430,7 +473,7 @@ async def download(job_id: str, format: str | None = Query(None)):
             },
         )
 
-    buffer = web_jobs.build_zip(job.run_dir)
+    buffer = web_jobs.build_zip(job.get_storage())
 
     def _iter_zip():
         try:
@@ -451,7 +494,7 @@ async def download(job_id: str, format: str | None = Query(None)):
 @app.post("/download/{job_id}/cleanup")
 async def cleanup_download(job_id: str):
     """Delete a completed job after the client has received the ZIP."""
-    job = _jobs.get(job_id)
+    job = _refresh_job(job_id)
     if not job:
         return JSONResponse({"error": "Job not found"}, status_code=404)
     if job.status != "done":

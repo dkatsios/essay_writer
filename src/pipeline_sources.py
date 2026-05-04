@@ -11,7 +11,7 @@ import re
 import threading
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from pathlib import Path
+from io import BytesIO
 from urllib.parse import urlparse
 
 import httpx
@@ -28,6 +28,7 @@ from src.tools.author_names import surname_from_author_string
 from src.tools.research_sources import run_research
 from src.tools.web_fetcher import fetch_url_content
 from src.pipeline_support import (
+    AnyStorage,
     PipelineContext,
     async_structured_call,
     corpus_tokens,
@@ -63,11 +64,8 @@ class SourceReadState:
     """Accumulated state passed through the read-sources sub-phases."""
 
     # Config (immutable after init)
-    registry_path: Path
     target_sources: int
     fetch_sources: int
-    sources_dir: str
-    notes_dir: Path
     essay_topic: str
     thesis: str
     plan_sections: list[dict]
@@ -113,22 +111,20 @@ def _tokenize_for_overlap(text: str) -> set[str]:
     }
 
 
-def _optional_pdf_corpus_tokens(run_dir: Path) -> set[str]:
+def _optional_pdf_corpus_tokens(storage: AnyStorage) -> set[str]:
     tokens: set[str] = set()
-    brief_path = run_dir / "brief" / "assignment.json"
-    if brief_path.exists():
+    if storage.exists("brief/assignment.json"):
         try:
-            brief = json.loads(brief_path.read_text(encoding="utf-8"))
+            brief = json.loads(storage.read_text("brief/assignment.json"))
             for key in ("topic", "title", "research_question", "course"):
                 value = brief.get(key)
                 if isinstance(value, str) and value:
                     tokens |= _tokenize_for_overlap(value)
         except Exception:
             pass
-    plan_path = run_dir / "plan" / "plan.json"
-    if plan_path.exists():
+    if storage.exists("plan/plan.json"):
         try:
-            plan = json.loads(plan_path.read_text(encoding="utf-8"))
+            plan = json.loads(storage.read_text("plan/plan.json"))
             for key in ("title", "thesis"):
                 value = plan.get(key)
                 if isinstance(value, str) and value:
@@ -292,33 +288,44 @@ class DomainFailureTracker:
             return self._counts.get(domain, 0) >= self._max
 
 
-def _inject_user_sources(user_sources_dir: Path, run_dir: Path) -> None:
-    from src.intake import scan
-    import shutil
+def _inject_user_sources(storage: AnyStorage) -> None:
+    """Scan user_sources/ in storage, extract text, inject into registry."""
 
-    files = scan(str(user_sources_dir))
-    if not files:
+    user_source_files = storage.list_files("user_sources/")
+    if not user_source_files:
         return
 
-    registry_path = run_dir / "sources" / "registry.json"
     registry: dict[str, dict] = {}
-    if registry_path.exists():
-        registry = json.loads(registry_path.read_text(encoding="utf-8"))
-
-    user_dir = run_dir / "sources" / "user"
-    user_dir.mkdir(parents=True, exist_ok=True)
+    if storage.exists("sources/registry.json"):
+        registry = json.loads(storage.read_text("sources/registry.json"))
 
     added = 0
-    for input_file in files:
-        if input_file.warning:
-            logger.warning("Skipping unsupported user source: %s", input_file.path.name)
-            continue
+    for subpath in user_source_files:
+        filename = subpath.rsplit("/", 1)[-1]
+        # Strip the ordering prefix (e.g. "000_")
+        name = re.sub(r"^\d+_", "", filename)
+        ext = "." + name.rsplit(".", 1)[-1].lower() if "." in name else ""
+        file_bytes = storage.read_bytes(subpath)
 
-        content = (input_file.text or "").strip()
+        content = ""
+        if ext in {".md", ".txt", ".text", ".rst", ".csv", ".tsv", ".log"}:
+            content = file_bytes.decode("utf-8", errors="replace").strip()
+        elif ext == ".pdf":
+            import pymupdf
+
+            doc = pymupdf.open(stream=BytesIO(file_bytes))
+            parts = [page.get_text() for page in doc]
+            doc.close()
+            content = "\n\n".join(parts).strip()
+        elif ext == ".docx":
+            from docx import Document as DocxDocument
+            from src.tools.docx_reader import extract_docx_text
+
+            content = extract_docx_text(DocxDocument(BytesIO(file_bytes))).strip()
+
         if not content:
             logger.warning(
-                "Skipping user source with no extractable text (e.g. scanned PDF or image-only file): %s",
-                input_file.path.name,
+                "Skipping user source with no extractable text: %s", filename
             )
             continue
 
@@ -329,26 +336,25 @@ def _inject_user_sources(user_sources_dir: Path, run_dir: Path) -> None:
         if source_id in registry:
             logger.debug("User source already in registry: %s", source_id)
             continue
-        shutil.copy2(
-            str(input_file.path), str(user_dir / f"{source_id}_{input_file.path.name}")
-        )
 
-        content_path = user_dir / f"{source_id}.txt"
-        content_path.write_text(content, encoding="utf-8")
+        # Copy original file and write extracted text into storage
+        storage.write_bytes(f"sources/user/{source_id}_{filename}", file_bytes)
+        content_subpath = f"sources/user/{source_id}.txt"
+        storage.write_text(content_subpath, content)
 
+        stem = name.rsplit(".", 1)[0] if "." in name else name
         registry[source_id] = RegistryEntry(
-            title=input_file.path.stem,
+            title=stem,
             source_type="user_provided",
             user_provided=True,
-            content_path=str(content_path),
+            content_path=content_subpath,
         ).model_dump()
         added += 1
 
     if added:
-        registry_path.parent.mkdir(parents=True, exist_ok=True)
-        registry_path.write_text(
+        storage.write_text(
+            "sources/registry.json",
             json.dumps(registry, ensure_ascii=False, indent=2),
-            encoding="utf-8",
         )
         logger.info("Injected %d user-provided sources into registry", added)
 
@@ -360,17 +366,15 @@ def _run_research_pass(
     fetch_per_api: int,
     prefer_fulltext: bool,
 ) -> None:
-    plan_path = ctx.run_dir / "plan" / "plan.json"
-    plan = EssayPlan.model_validate_json(plan_path.read_text(encoding="utf-8"))
-    run_research(
+    plan = EssayPlan.model_validate_json(ctx.storage.read_text("plan/plan.json"))
+    registry = run_research(
         queries=plan.research_queries,
         max_sources=fetch_sources,
-        sources_dir=str(ctx.run_dir / "sources"),
+        storage=ctx.storage,
         fetch_per_api=fetch_per_api,
         prefer_fulltext=prefer_fulltext,
     )
-    if ctx.user_sources_dir and ctx.user_sources_dir.exists():
-        _inject_user_sources(ctx.user_sources_dir, ctx.run_dir)
+    _inject_user_sources(ctx.storage)
 
 
 async def do_research(ctx: PipelineContext, fetch_sources: int) -> None:
@@ -390,7 +394,6 @@ async def _async_read_one_source(
     source_id: str,
     meta: dict,
     worker,
-    sources_dir: str,
     tracker: object | None = None,
     essay_topic: str = "",
     *,
@@ -461,29 +464,27 @@ async def _async_read_one_source(
 async def _async_fetch_pdf_content(
     source_id: str,
     meta: dict,
-    sources_dir: str,
+    storage: AnyStorage,
     domain_tracker: DomainFailureTracker | None = None,
     min_body_words: int = 50,
 ) -> tuple[str, str, bool]:
     """Fetch PDF content for a single source (network I/O only, no LLM).
 
-    For user-provided sources, loads content from ``content_path``.
+    For user-provided sources, loads content from storage.
     For API sources, fetches only when ``pdf_url`` exists; non-PDF URLs are
     skipped entirely.
 
-    Returns ``(source_id, content_text)``.
+    Returns ``(source_id, content_text, did_fail)``.
     """
     import asyncio
 
     is_user_provided = meta.get("user_provided", False)
 
-    # User-provided: load from content_path
+    # User-provided: load from content_path (now a storage subpath)
     if is_user_provided:
         content_path = meta.get("content_path", "")
-        if content_path and Path(content_path).exists():
-            content = await asyncio.to_thread(
-                Path(content_path).read_text, encoding="utf-8"
-            )
+        if content_path and storage.exists(content_path):
+            content = await asyncio.to_thread(storage.read_text, content_path)
             if len(content) > 50_000:
                 content = content[:50_000] + "\n\n[... truncated ...]"
             return source_id, content, False
@@ -499,7 +500,8 @@ async def _async_fetch_pdf_content(
         return source_id, "", False
 
     try:
-        fetched = await asyncio.to_thread(fetch_url_content, pdf_url, sources_dir)
+        # Don't pass sources_dir — no need to save PDFs locally
+        fetched = await asyncio.to_thread(fetch_url_content, pdf_url, None)
         if len(fetched) > 50_000:
             fetched = fetched[:50_000] + "\n\n[... truncated ...]"
         return source_id, fetched, False
@@ -751,14 +753,12 @@ def _build_optional_pdf_prompt_payload(
     return items, [item[0] for item in chosen]
 
 
-def _log_optional_pdf_hint(run_dir: Path, items: list[dict]) -> None:
+def _log_optional_pdf_hint(items: list[dict]) -> None:
     logger.info(
         "%s\nSome ranked sources have no full text (abstract-only or fetch failed).\n"
         "Optional PDF uploads are available when the active entrypoint provides\n"
-        "an upload callback. No callback is configured for this run.\n"
-        "Run directory: %s",
+        "an upload callback. No callback is configured for this run.",
         "=" * 50,
-        run_dir,
     )
     for item in items:
         logger.info("  • %s", f"{item.get('title', item['source_id'])}"[:200])
@@ -773,16 +773,16 @@ def _log_optional_pdf_hint(run_dir: Path, items: list[dict]) -> None:
 
 def _selected_source_detail_counts(
     selected_ids: list[str],
-    notes_dir: Path,
+    storage: AnyStorage,
 ) -> tuple[int, int]:
     full_text = 0
     abstract_only = 0
     for source_id in selected_ids:
-        note_path = notes_dir / f"{source_id}.json"
-        if not note_path.exists():
+        subpath = f"sources/notes/{source_id}.json"
+        if not storage.exists(subpath):
             continue
         try:
-            note = SourceNote.model_validate_json(note_path.read_text(encoding="utf-8"))
+            note = SourceNote.model_validate_json(storage.read_text(subpath))
         except Exception:
             continue
         if note.fetched_fulltext:
@@ -799,7 +799,7 @@ def _selected_source_detail_counts(
 
 async def _fetch_all_pdfs(
     pairs: list[tuple[str, dict]],
-    sources_dir: str,
+    storage: AnyStorage,
     *,
     tracker: object | None = None,
     min_body_words: int = 50,
@@ -818,7 +818,7 @@ async def _fetch_all_pdfs(
                 return await _async_fetch_pdf_content(
                     source_id,
                     meta,
-                    sources_dir,
+                    storage,
                     domain_tracker=domain_tracker,
                     min_body_words=min_body_words,
                 )
@@ -840,8 +840,7 @@ async def _extract_all(
     pairs: list[tuple[str, dict]],
     fetch_results: dict[str, str],
     async_worker,
-    sources_dir: str,
-    notes_dir: Path,
+    storage: AnyStorage,
     *,
     essay_topic: str = "",
     tracker: object | None = None,
@@ -861,13 +860,12 @@ async def _extract_all(
                     source_id,
                     meta,
                     async_worker,
-                    sources_dir,
                     tracker=tracker,
                     essay_topic=essay_topic,
                     min_body_words=min_body_words,
                     prefetched_content=fetch_results.get(source_id, ""),
                 )
-                write_json(notes_dir / f"{source_id}.json", note)
+                write_json(storage, f"sources/notes/{source_id}.json", note)
                 return source_id, note
             except Exception:
                 logger.exception("Failed to read source %s", source_id)
@@ -882,7 +880,7 @@ async def _extract_all(
 def _backfill_registry(
     registry: dict[str, dict],
     results: list[tuple[str, SourceNote | None]],
-    registry_path: Path,
+    storage: AnyStorage,
 ) -> dict[str, dict]:
     """Update registry metadata for user-provided sources from LLM extraction."""
     registry_updated = False
@@ -914,9 +912,9 @@ def _backfill_registry(
         registry_updated = True
 
     if registry_updated:
-        registry_path.write_text(
+        storage.write_text(
+            "sources/registry.json",
             json.dumps(registry, ensure_ascii=False, indent=2),
-            encoding="utf-8",
         )
         logger.info("Backfilled registry metadata for user-provided sources")
     return registry
@@ -986,12 +984,9 @@ async def _process_borderline_additions(
     scores: dict[str, int],
     selected_ids: list[str],
     ctx,
-    sources_dir: str,
-    notes_dir: Path,
     essay_topic: str,
     min_body: int,
     min_relevance_score: int,
-    registry_path: Path,
 ) -> list[str]:
     """Fetch, extract, and add user-selected borderline sources to the selected set."""
     # Validate: only accept IDs that are in the registry and below threshold.
@@ -1012,7 +1007,7 @@ async def _process_borderline_additions(
     # Fetch PDFs for the new sources.
     new_fetch = await _fetch_all_pdfs(
         add_pairs,
-        sources_dir,
+        ctx.storage,
         tracker=ctx.tracker,
         min_body_words=min_body,
     )
@@ -1023,13 +1018,12 @@ async def _process_borderline_additions(
         add_pairs,
         fetch_results,
         ctx.async_worker,
-        sources_dir,
-        notes_dir,
+        ctx.storage,
         essay_topic=essay_topic,
         tracker=ctx.tracker,
         min_body_words=min_body,
     )
-    _backfill_registry(registry, results, registry_path)
+    _backfill_registry(registry, results, ctx.storage)
 
     # Add accessible sources to selected set.
     added = []
@@ -1044,12 +1038,12 @@ async def _process_borderline_additions(
         selected_registry = {
             sid: registry[sid] for sid in selected_ids if sid in registry
         }
-        (ctx.run_dir / "sources" / "selected.json").write_text(
+        ctx.storage.write_text(
+            "sources/selected.json",
             json.dumps(selected_registry, ensure_ascii=False, indent=2),
-            encoding="utf-8",
         )
         _write_source_decision_artifacts(
-            ctx.run_dir,
+            ctx.storage,
             registry,
             scores,
             selected_ids,
@@ -1063,13 +1057,13 @@ async def _process_borderline_additions(
     return added
 
 
-def _read_registry(registry_path: Path) -> dict[str, dict]:
-    """Load the source registry from disk."""
-    return json.loads(registry_path.read_text(encoding="utf-8"))
+def _read_registry(storage: AnyStorage) -> dict[str, dict]:
+    """Load the source registry from storage."""
+    return json.loads(storage.read_text("sources/registry.json"))
 
 
 def _write_source_decision_artifacts(
-    run_dir: Path,
+    storage: AnyStorage,
     registry: dict[str, dict],
     scores: dict[str, int],
     selected_ids: list[str],
@@ -1077,7 +1071,6 @@ def _write_source_decision_artifacts(
     min_relevance_score: int,
 ) -> None:
     """Persist scoring outputs as run artifacts under sources/."""
-    sources_dir = run_dir / "sources"
     selected_id_set = set(selected_ids)
 
     score_payload = {
@@ -1092,9 +1085,9 @@ def _write_source_decision_artifacts(
             for source_id, score in sorted(scores.items())
         },
     }
-    (sources_dir / "scores.json").write_text(
+    storage.write_text(
+        "sources/scores.json",
         json.dumps(score_payload, ensure_ascii=False, indent=2),
-        encoding="utf-8",
     )
 
 
@@ -1137,37 +1130,29 @@ def make_read_sources(
     fetch_sources: int,
 ) -> Callable:
     async def _do_read_sources(ctx: PipelineContext) -> None:
-        registry_path = ctx.run_dir / "sources" / "registry.json"
-        if not registry_path.exists():
+        if not ctx.storage.exists("sources/registry.json"):
             logger.warning("No registry.json found -- skipping source reading.")
             return
 
-        await _async_read_sources_orchestration(
-            ctx, registry_path, target_sources, fetch_sources
-        )
+        await _async_read_sources_orchestration(ctx, target_sources, fetch_sources)
 
     return _do_read_sources
 
 
 def _init_source_read_state(
     ctx: PipelineContext,
-    registry_path: Path,
     target_sources: int,
     fetch_sources: int,
 ) -> SourceReadState:
-    """Build initial ``SourceReadState`` from config and on-disk artifacts."""
-    notes_dir = ctx.run_dir / "sources" / "notes"
-    notes_dir.mkdir(parents=True, exist_ok=True)
-
+    """Build initial ``SourceReadState`` from config and storage artifacts."""
     essay_topic = ""
     thesis = ""
     if ctx.brief is not None:
         essay_topic = ctx.brief.topic or ""
     plan_sections: list[dict] = []
-    plan_path = ctx.run_dir / "plan" / "plan.json"
-    if plan_path.exists():
+    if ctx.storage.exists("plan/plan.json"):
         try:
-            plan_data = json.loads(plan_path.read_text(encoding="utf-8"))
+            plan_data = json.loads(ctx.storage.read_text("plan/plan.json"))
             thesis = plan_data.get("thesis", "")
             plan_sections = [
                 {"title": s.get("title", ""), "key_points": s.get("key_points", "")}
@@ -1176,8 +1161,8 @@ def _init_source_read_state(
         except Exception:
             pass
 
-    pretrim_corpus = _optional_pdf_corpus_tokens(ctx.run_dir)
-    registry = _read_registry(registry_path)
+    pretrim_corpus = _optional_pdf_corpus_tokens(ctx.storage)
+    registry = _read_registry(ctx.storage)
 
     user_pairs = [
         (sid, meta) for sid, meta in registry.items() if meta.get("user_provided")
@@ -1203,11 +1188,8 @@ def _init_source_read_state(
         )
 
     return SourceReadState(
-        registry_path=registry_path,
         target_sources=target_sources,
         fetch_sources=fetch_sources,
-        sources_dir=str(ctx.run_dir / "sources"),
-        notes_dir=notes_dir,
         essay_topic=essay_topic,
         thesis=thesis,
         plan_sections=plan_sections,
@@ -1291,7 +1273,7 @@ async def _phase_triage_recovery(ctx: PipelineContext, state: SourceReadState) -
         prefer_fulltext=ctx.config.search.recovery_prefer_fulltext,
     )
     state.recovery_done = True
-    state.registry = _read_registry(state.registry_path)
+    state.registry = _read_registry(ctx.storage)
 
     known_ids = {sid for sid, _ in state.api_pairs} | set(state.scores.keys())
     known_dois, known_titles = _build_dedup_sets(known_ids, state.registry)
@@ -1338,8 +1320,7 @@ async def _phase_triage_recovery(ctx: PipelineContext, state: SourceReadState) -
             new_triaged = [
                 source
                 for source in new_scorable
-                if state.scores.get(source["source_id"], 0)
-                >= state.min_relevance_score
+                if state.scores.get(source["source_id"], 0) >= state.min_relevance_score
             ]
             state.triaged.extend(new_triaged)
             logger.info(
@@ -1376,7 +1357,7 @@ async def _phase_fetch(ctx: PipelineContext, state: SourceReadState) -> bool:
     )
     state.fetch_results = await _fetch_all_pdfs(
         fetch_pairs,
-        state.sources_dir,
+        ctx.storage,
         tracker=ctx.tracker,
         min_body_words=state.min_body,
     )
@@ -1437,7 +1418,7 @@ async def _phase_post_select_recovery(
         prefer_fulltext=ctx.config.search.recovery_prefer_fulltext,
     )
     state.recovery_done = True
-    state.registry = _read_registry(state.registry_path)
+    state.registry = _read_registry(ctx.storage)
 
     known_ids = {sid for sid, _ in state.api_pairs} | set(state.scores.keys())
     known_dois, known_titles = _build_dedup_sets(known_ids, state.registry)
@@ -1484,8 +1465,7 @@ async def _phase_post_select_recovery(
             new_above = [
                 source
                 for source in new_scorable
-                if state.scores.get(source["source_id"], 0)
-                >= state.min_relevance_score
+                if state.scores.get(source["source_id"], 0) >= state.min_relevance_score
             ]
             if new_above:
                 new_above_ids = {s["source_id"] for s in new_above}
@@ -1503,7 +1483,7 @@ async def _phase_post_select_recovery(
                     )
                     new_fetches = await _fetch_all_pdfs(
                         new_fetch_pairs,
-                        state.sources_dir,
+                        ctx.storage,
                         tracker=ctx.tracker,
                         min_body_words=state.min_body,
                     )
@@ -1545,15 +1525,12 @@ async def _phase_extract(ctx: PipelineContext, state: SourceReadState) -> None:
             all_extract_pairs,
             state.fetch_results,
             ctx.async_worker,
-            state.sources_dir,
-            state.notes_dir,
+            ctx.storage,
             essay_topic=state.essay_topic,
             tracker=ctx.tracker,
             min_body_words=state.min_body,
         )
-        state.registry = _backfill_registry(
-            state.registry, results, state.registry_path
-        )
+        state.registry = _backfill_registry(state.registry, results, ctx.storage)
 
         user_accessible_ids = [
             sid
@@ -1577,9 +1554,7 @@ async def _phase_extract(ctx: PipelineContext, state: SourceReadState) -> None:
     for sid, _note in results:
         extracted_set.add(sid)
     above_threshold_ids = {
-        sid
-        for sid, sc in state.scores.items()
-        if sc >= state.min_relevance_score
+        sid for sid, sc in state.scores.items() if sc >= state.min_relevance_score
     }
     backfill_round = 0
     while (
@@ -1611,21 +1586,18 @@ async def _phase_extract(ctx: PipelineContext, state: SourceReadState) -> None:
         )
         if ctx.tracker is not None:
             ctx.tracker.set_current_step("read_sources:extract_backfill")
-        backfill_pairs = [
-            (sid, state.registry[sid]) for sid in backfill_batch
-        ]
+        backfill_pairs = [(sid, state.registry[sid]) for sid in backfill_batch]
         backfill_results = await _extract_all(
             backfill_pairs,
             state.fetch_results,
             ctx.async_worker,
-            state.sources_dir,
-            state.notes_dir,
+            ctx.storage,
             essay_topic=state.essay_topic,
             tracker=ctx.tracker,
             min_body_words=state.min_body,
         )
         state.registry = _backfill_registry(
-            state.registry, backfill_results, state.registry_path
+            state.registry, backfill_results, ctx.storage
         )
         for sid, note in backfill_results:
             extracted_set.add(sid)
@@ -1648,16 +1620,16 @@ async def _phase_extract(ctx: PipelineContext, state: SourceReadState) -> None:
 async def _phase_optional_pdf(ctx: PipelineContext, state: SourceReadState) -> None:
     """Prompt for optional PDF uploads for sources without fulltext."""
     task_ids = set(state.selected_ids)
-    corpus = _optional_pdf_corpus_tokens(ctx.run_dir)
+    corpus = _optional_pdf_corpus_tokens(ctx.storage)
     results_for_optional = [
         (
             sid,
             SourceNote.model_validate_json(
-                (state.notes_dir / f"{sid}.json").read_text(encoding="utf-8")
+                ctx.storage.read_text(f"sources/notes/{sid}.json")
             ),
         )
         for sid in state.selected_ids
-        if (state.notes_dir / f"{sid}.json").exists()
+        if ctx.storage.exists(f"sources/notes/{sid}.json")
     ]
     items, prompt_ids = _build_optional_pdf_prompt_payload(
         results_for_optional, state.registry, task_ids, corpus, state.top_n
@@ -1671,11 +1643,11 @@ async def _phase_optional_pdf(ctx: PipelineContext, state: SourceReadState) -> N
         for source_id in prompt_ids
     }
     if ctx.on_optional_source_pdfs:
-        await ctx.on_optional_source_pdfs(ctx.run_dir, items)
+        await ctx.on_optional_source_pdfs(ctx.storage, items)
     else:
-        _log_optional_pdf_hint(ctx.run_dir, items)
+        _log_optional_pdf_hint(items)
 
-    state.registry = _read_registry(state.registry_path)
+    state.registry = _read_registry(ctx.storage)
     reread_ids = [
         source_id
         for source_id in prompt_ids
@@ -1692,7 +1664,7 @@ async def _phase_optional_pdf(ctx: PipelineContext, state: SourceReadState) -> N
         ]
         reread_fetch = await _fetch_all_pdfs(
             reread_pairs,
-            state.sources_dir,
+            ctx.storage,
             tracker=ctx.tracker,
             min_body_words=state.min_body,
         )
@@ -1701,15 +1673,12 @@ async def _phase_optional_pdf(ctx: PipelineContext, state: SourceReadState) -> N
             reread_pairs,
             state.fetch_results,
             ctx.async_worker,
-            state.sources_dir,
-            state.notes_dir,
+            ctx.storage,
             essay_topic=state.essay_topic,
             tracker=ctx.tracker,
             min_body_words=state.min_body,
         )
-        state.registry = _backfill_registry(
-            state.registry, reread_results, state.registry_path
-        )
+        state.registry = _backfill_registry(state.registry, reread_results, ctx.storage)
 
         for sid, note in reread_results:
             if (
@@ -1723,7 +1692,7 @@ async def _phase_optional_pdf(ctx: PipelineContext, state: SourceReadState) -> N
 async def _phase_finalize(ctx: PipelineContext, state: SourceReadState) -> None:
     """Write decision artifacts, save selected.json, and handle shortfall."""
     _write_source_decision_artifacts(
-        ctx.run_dir,
+        ctx.storage,
         state.registry,
         state.scores,
         state.selected_ids,
@@ -1731,13 +1700,11 @@ async def _phase_finalize(ctx: PipelineContext, state: SourceReadState) -> None:
     )
 
     selected_registry = {
-        sid: state.registry[sid]
-        for sid in state.selected_ids
-        if sid in state.registry
+        sid: state.registry[sid] for sid in state.selected_ids if sid in state.registry
     }
-    (ctx.run_dir / "sources" / "selected.json").write_text(
+    ctx.storage.write_text(
+        "sources/selected.json",
         json.dumps(selected_registry, ensure_ascii=False, indent=2),
-        encoding="utf-8",
     )
     logger.info(
         "Sources available for writing: %d",
@@ -1745,7 +1712,7 @@ async def _phase_finalize(ctx: PipelineContext, state: SourceReadState) -> None:
     )
     selected_full_text, selected_abstract_only = _selected_source_detail_counts(
         state.selected_ids,
-        state.notes_dir,
+        ctx.storage,
     )
     if selected_full_text or selected_abstract_only:
         logger.info(
@@ -1768,7 +1735,7 @@ async def _phase_finalize(ctx: PipelineContext, state: SourceReadState) -> None:
                 state.min_relevance_score,
             )
             proceed, added_ids = await ctx.on_source_shortfall(
-                ctx.run_dir,
+                ctx.storage,
                 {
                     "usable_sources": len(selected_registry),
                     "target_sources": state.target_sources,
@@ -1776,8 +1743,7 @@ async def _phase_finalize(ctx: PipelineContext, state: SourceReadState) -> None:
                     "scoring_candidates": len(state.scorable),
                     "triaged_candidates": len(state.triaged),
                     "above_threshold": state.above_threshold,
-                    "total_candidates": len(state.api_pairs)
-                    + len(state.user_pairs),
+                    "total_candidates": len(state.api_pairs) + len(state.user_pairs),
                     "recovery_attempted": state.recovery_done,
                     "borderline_sources": borderline,
                 },
@@ -1794,12 +1760,9 @@ async def _phase_finalize(ctx: PipelineContext, state: SourceReadState) -> None:
                     state.scores,
                     state.selected_ids,
                     ctx,
-                    state.sources_dir,
-                    state.notes_dir,
                     state.essay_topic,
                     state.min_body,
                     state.min_relevance_score,
-                    state.registry_path,
                 )
 
 
@@ -1807,10 +1770,9 @@ async def _phase_finalize(ctx: PipelineContext, state: SourceReadState) -> None:
 
 
 def _save_source_sub_checkpoint(
-    run_dir: Path, phase: str, state: SourceReadState
+    storage: AnyStorage, phase: str, state: SourceReadState
 ) -> None:
     """Persist sub-step progress within read_sources."""
-    path = run_dir / "sources" / "read_checkpoint.json"
     data: dict = {
         "completed_phase": phase,
         "scores": state.scores,
@@ -1819,40 +1781,40 @@ def _save_source_sub_checkpoint(
     if phase == "fetch":
         data["fetch_results_keys"] = list(state.fetch_results.keys())
         data["selected_ids"] = state.selected_ids
-    path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    storage.write_text(
+        "sources/read_checkpoint.json",
+        json.dumps(data, ensure_ascii=False, indent=2),
+    )
 
 
-def _load_source_sub_checkpoint(run_dir: Path) -> dict | None:
+def _load_source_sub_checkpoint(storage: AnyStorage) -> dict | None:
     """Load sub-step checkpoint, return ``None`` if not present."""
-    path = run_dir / "sources" / "read_checkpoint.json"
-    if not path.exists():
+    if not storage.exists("sources/read_checkpoint.json"):
         return None
     try:
-        return json.loads(path.read_text(encoding="utf-8"))
+        return json.loads(storage.read_text("sources/read_checkpoint.json"))
     except (json.JSONDecodeError, OSError):
         return None
 
 
-def _reload_fetch_results_from_disk(state: SourceReadState) -> dict[str, str]:
-    """Rebuild ``fetch_results`` from source files already saved on disk."""
-    sources_path = Path(state.sources_dir)
+def _reload_fetch_results_from_storage(
+    state: SourceReadState, storage: AnyStorage
+) -> dict[str, str]:
+    """Rebuild ``fetch_results`` from content files already saved in storage."""
     results: dict[str, str] = {}
     for sid in state.registry:
         meta = state.registry[sid]
         content_path = meta.get("content_path")
-        if content_path:
-            full = sources_path / content_path
-            if full.exists():
-                try:
-                    results[sid] = full.read_text(encoding="utf-8")
-                except Exception:
-                    pass
+        if content_path and storage.exists(content_path):
+            try:
+                results[sid] = storage.read_text(content_path)
+            except Exception:
+                pass
     return results
 
 
 async def _async_read_sources_orchestration(
     ctx: PipelineContext,
-    registry_path: Path,
     target_sources: int,
     fetch_sources: int,
 ) -> None:
@@ -1861,26 +1823,22 @@ async def _async_read_sources_orchestration(
     All async phases use ``await`` directly; the sync recovery research
     pass is offloaded via ``asyncio.to_thread``.
     """
-    state = _init_source_read_state(ctx, registry_path, target_sources, fetch_sources)
+    state = _init_source_read_state(ctx, target_sources, fetch_sources)
 
     # Check for a sub-step checkpoint from a previous interrupted run.
-    sub_ckpt = _load_source_sub_checkpoint(ctx.run_dir)
+    sub_ckpt = _load_source_sub_checkpoint(ctx.storage)
     if sub_ckpt and sub_ckpt.get("completed_phase") == "fetch":
         logger.info("Resuming read_sources from sub-checkpoint: fetch")
-        state.scores = {
-            str(k): int(v) for k, v in sub_ckpt.get("scores", {}).items()
-        }
+        state.scores = {str(k): int(v) for k, v in sub_ckpt.get("scores", {}).items()}
         state.recovery_done = sub_ckpt.get("recovery_done", False)
         state.selected_ids = list(sub_ckpt.get("selected_ids", []))
         state.above_threshold = sum(
             1 for s in state.scores.values() if s >= state.min_relevance_score
         )
-        state.fetch_results = _reload_fetch_results_from_disk(state)
+        state.fetch_results = _reload_fetch_results_from_storage(state, ctx.storage)
     elif sub_ckpt and sub_ckpt.get("completed_phase") == "scores":
         logger.info("Resuming read_sources from sub-checkpoint: scores")
-        state.scores = {
-            str(k): int(v) for k, v in sub_ckpt.get("scores", {}).items()
-        }
+        state.scores = {str(k): int(v) for k, v in sub_ckpt.get("scores", {}).items()}
         state.recovery_done = sub_ckpt.get("recovery_done", False)
         state.triaged = [
             source
@@ -1892,19 +1850,19 @@ async def _async_read_sources_orchestration(
             return
         await _phase_select(ctx, state)
         await _phase_post_select_recovery(ctx, state)
-        _save_source_sub_checkpoint(ctx.run_dir, "fetch", state)
+        _save_source_sub_checkpoint(ctx.storage, "fetch", state)
     else:
         # Fresh run — execute all phases from the beginning.
         await _phase_score(ctx, state)
         await _phase_triage_recovery(ctx, state)
-        _save_source_sub_checkpoint(ctx.run_dir, "scores", state)
+        _save_source_sub_checkpoint(ctx.storage, "scores", state)
 
         has_content = await _phase_fetch(ctx, state)
         if not has_content:
             return
         await _phase_select(ctx, state)
         await _phase_post_select_recovery(ctx, state)
-        _save_source_sub_checkpoint(ctx.run_dir, "fetch", state)
+        _save_source_sub_checkpoint(ctx.storage, "fetch", state)
 
     await _phase_extract(ctx, state)
     await _phase_optional_pdf(ctx, state)
@@ -1912,12 +1870,12 @@ async def _async_read_sources_orchestration(
 
 
 async def do_assign_sources(ctx: PipelineContext) -> None:
-    source_notes = load_selected_source_notes(ctx.run_dir)
+    source_notes = load_selected_source_notes(ctx.storage)
     if not source_notes:
         logger.warning("No source notes available for assignment")
         return
 
-    sections = parse_sections(ctx.run_dir)
+    sections = parse_sections(ctx.storage)
     min_per_section = max(2, len(source_notes) // (len(sections) or 1))
     prompt = render_prompt(
         "source_assignment.j2",
@@ -1972,4 +1930,4 @@ async def do_assign_sources(ctx: PipelineContext) -> None:
                 "Patched %d unassigned sources into best-fit sections", len(missing_ids)
             )
 
-    write_json(ctx.run_dir / "plan" / "source_assignments.json", result)
+    write_json(ctx.storage, "plan/source_assignments.json", result)

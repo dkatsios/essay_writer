@@ -18,6 +18,7 @@ from src.web import (
     _jobs,
     _notify_job,
     _run_pipeline_task,
+    _save_job,
     app,
     job_ttl_sweep_once,
 )
@@ -26,10 +27,9 @@ from src.web_jobs import async_wait_for_job_signal as _async_wait_for_job_signal
 client = TestClient(app)
 
 
-def _write_assignment_brief(run_dir: Path) -> None:
-    brief_dir = run_dir / "brief"
-    brief_dir.mkdir(parents=True, exist_ok=True)
-    (brief_dir / "assignment.json").write_text(
+def _write_assignment_brief(storage) -> None:
+    storage.write_text(
+        "brief/assignment.json",
         json.dumps(
             {
                 "topic": "Test topic",
@@ -37,7 +37,6 @@ def _write_assignment_brief(run_dir: Path) -> None:
                 "description": "Test description",
             }
         ),
-        encoding="utf-8",
     )
 
 
@@ -55,37 +54,289 @@ def test_health():
     assert response.json() == {"status": "ok"}
 
 
-def test_submit_uses_timestamped_run_dir_prefix(tmp_path, monkeypatch):
-    captured: dict[str, object] = {}
-    created_dir = tmp_path / "essay_created"
+def test_index_links_to_history_page():
+    response = client.get("/")
+
+    assert response.status_code == 200
+    assert 'href="/history"' in response.text
+
+
+def test_history_page_renders():
+    response = client.get("/history")
+
+    assert response.status_code == 200
+    assert "Run History" in response.text
+    assert "Loading persisted run summaries" in response.text
+
+
+def test_history_jobs_lists_runtime_summaries_in_updated_order():
+    from src.run_history_store import run_history
+
+    run_history.save_runtime_summary(
+        "jobolder001",
+        status="done",
+        provider="google",
+        total_cost_usd=1.0,
+        total_input_tokens=100,
+        total_output_tokens=50,
+        total_thinking_tokens=0,
+        total_duration_seconds=10.0,
+        step_count=3,
+        updated_at=10.0,
+    )
+    run_history.save_runtime_summary(
+        "jobnewer001",
+        status="error",
+        provider="openai",
+        total_cost_usd=2.0,
+        total_input_tokens=200,
+        total_output_tokens=75,
+        total_thinking_tokens=10,
+        total_duration_seconds=20.0,
+        step_count=4,
+        updated_at=20.0,
+    )
+
+    response = client.get("/history/jobs", params={"limit": 10})
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["count"] == 2
+    assert [job["job_id"] for job in body["jobs"]] == [
+        "jobnewer001",
+        "jobolder001",
+    ]
+
+
+def test_history_jobs_can_filter_by_status():
+    from src.run_history_store import run_history
+
+    run_history.save_runtime_summary(
+        "jobdone001",
+        status="done",
+        provider="google",
+        total_cost_usd=1.0,
+        total_input_tokens=100,
+        total_output_tokens=50,
+        total_thinking_tokens=0,
+        total_duration_seconds=10.0,
+        step_count=3,
+        updated_at=10.0,
+    )
+    run_history.save_runtime_summary(
+        "joberror001",
+        status="error",
+        provider="openai",
+        total_cost_usd=2.0,
+        total_input_tokens=200,
+        total_output_tokens=75,
+        total_thinking_tokens=10,
+        total_duration_seconds=20.0,
+        step_count=4,
+        updated_at=20.0,
+    )
+
+    response = client.get("/history/jobs", params={"status": "done"})
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["count"] == 1
+    assert body["jobs"][0]["job_id"] == "jobdone001"
+
+
+def test_history_job_detail_returns_summary_steps_artifacts_and_live_status():
+    from src.run_history_store import run_history
+    from src.storage import MemoryRunStorage
+
+    storage = MemoryRunStorage("runs/jobdetail001/")
+    storage.write_text("report.md", "# Report")
+
+    run_history.save_runtime_summary(
+        "jobdetail001",
+        status="done",
+        provider="google",
+        total_cost_usd=1.5,
+        total_input_tokens=300,
+        total_output_tokens=120,
+        total_thinking_tokens=15,
+        total_duration_seconds=30.0,
+        step_count=5,
+        updated_at=10.0,
+    )
+    run_history.save_step_metric(
+        "jobdetail001",
+        "plan",
+        status="completed",
+        model="gpt-5.4",
+        cost_usd=0.25,
+        call_count=1,
+        input_tokens=120,
+        output_tokens=60,
+        thinking_tokens=5,
+        duration_seconds=3.5,
+        step_index=2,
+        step_count=7,
+        updated_at=11.0,
+    )
+    run_history.sync_artifacts("jobdetail001", storage, current_time=12.0)
+
+    live_job = Job(job_id="jobdetail001", run_dir="runs/jobdetail001", status="running")
+    _jobs["jobdetail001"] = live_job
+
+    try:
+        response = client.get("/history/jobs/jobdetail001")
+    finally:
+        _jobs.pop("jobdetail001", None)
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["job_id"] == "jobdetail001"
+    assert body["summary"]["provider"] == "google"
+    assert body["steps"][0]["step_name"] == "plan"
+    assert body["artifacts"][0]["relative_path"] == "report.md"
+    assert body["live_status"]["status"] == "running"
+
+
+def test_history_job_detail_can_filter_unavailable_artifacts():
+    from src.run_history_store import run_history
+    from src.storage import MemoryRunStorage
+
+    storage = MemoryRunStorage("runs/jobfilter001/")
+    storage.write_text("report.md", "# Report")
+
+    run_history.save_runtime_summary(
+        "jobfilter001",
+        status="done",
+        provider="google",
+        total_cost_usd=1.5,
+        total_input_tokens=300,
+        total_output_tokens=120,
+        total_thinking_tokens=15,
+        total_duration_seconds=30.0,
+        step_count=5,
+        updated_at=10.0,
+    )
+    run_history.sync_artifacts("jobfilter001", storage, current_time=12.0)
+    run_history.mark_artifacts_deleted("jobfilter001", current_time=13.0)
+
+    response = client.get(
+        "/history/jobs/jobfilter001",
+        params={"available_artifacts_only": "true"},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["artifacts"] == []
+
+
+def test_history_job_detail_404_when_job_is_unknown():
+    response = client.get("/history/jobs/missingjob001")
+
+    assert response.status_code == 404
+    assert response.json() == {"error": "Job not found"}
+
+
+def test_submit_creates_storage_and_queues_job(monkeypatch):
+    from src.storage import MemoryRunStorage
+
+    created_storages: list[MemoryRunStorage] = []
 
     class _Uuid:
         hex = "abcdef1234567890"
 
-    def fake_mkdtemp(*, prefix: str):
-        captured["prefix"] = prefix
-        created_dir.mkdir()
-        return str(created_dir)
-
-    def fake_create_task(coro):
-        captured["task_created"] = True
-        coro.close()
-        return MagicMock()
+    def fake_create(job_id, config=None):
+        s = MemoryRunStorage(f"runs/{job_id}/")
+        created_storages.append(s)
+        return s
 
     monkeypatch.setattr("src.web.uuid.uuid4", lambda: _Uuid())
-    monkeypatch.setattr("src.web.tempfile.mkdtemp", fake_mkdtemp)
-    monkeypatch.setattr("src.web.asyncio.create_task", fake_create_task)
+    monkeypatch.setattr("src.web.create_run_storage", fake_create)
 
     response = client.post("/submit", data={"prompt": "Test prompt"})
 
     assert response.status_code == 200
     assert response.json() == {"job_id": "abcdef123456"}
-    assert captured["task_created"] is True
-    assert re.fullmatch(r"essay_\d{8}_\d{6}_\d{6}_", str(captured["prefix"]))
-    assert "abcdef123456" not in str(captured["prefix"])
+    assert len(created_storages) == 1
 
     job = _jobs.pop("abcdef123456")
-    assert job.run_dir == created_dir
+    assert job.run_dir == "runs/abcdef123456/"
+    assert job.status == "pending"
+
+
+def test_submit_adds_pending_job_to_history_before_worker_claims_it(monkeypatch):
+    from src.run_history_store import run_history
+    from src.storage import MemoryRunStorage
+
+    class _Uuid:
+        hex = "feedfacecafe1234"
+
+    def fake_create(job_id, config=None):
+        return MemoryRunStorage(f"runs/{job_id}/")
+
+    monkeypatch.setattr("src.web.uuid.uuid4", lambda: _Uuid())
+    monkeypatch.setattr("src.web.create_run_storage", fake_create)
+
+    response = client.post(
+        "/submit",
+        data={"prompt": "Test prompt", "target_words": 1200, "provider": "openai"},
+    )
+
+    assert response.status_code == 200
+    job_id = response.json()["job_id"]
+
+    summary = run_history.get_runtime_summary(job_id)
+    history = client.get("/history/jobs").json()["jobs"]
+
+    assert summary is not None
+    assert summary["status"] == "pending"
+    assert summary["provider"] == "openai"
+    assert summary["target_words"] == 1200
+    assert any(
+        item["job_id"] == job_id and item["status"] == "pending" for item in history
+    )
+
+    _jobs.pop(job_id, None)
+
+
+def test_submit_tracks_uploaded_artifacts_before_background_finishes(monkeypatch):
+    from src.run_history_store import run_history
+    from src.storage import MemoryRunStorage
+
+    created_storages: list[MemoryRunStorage] = []
+
+    class _Uuid:
+        hex = "1234567890abcdef"
+
+    def fake_create(job_id, config=None):
+        s = MemoryRunStorage(f"runs/{job_id}/")
+        created_storages.append(s)
+        return s
+
+    monkeypatch.setattr("src.web.uuid.uuid4", lambda: _Uuid())
+    monkeypatch.setattr("src.web.create_run_storage", fake_create)
+
+    response = client.post(
+        "/submit",
+        data={"prompt": "Test prompt"},
+        files=[
+            ("files", ("assignment.txt", b"assignment body", "text/plain")),
+            ("sources", ("paper.txt", b"paper body", "text/plain")),
+        ],
+    )
+
+    assert response.status_code == 200
+    job_id = response.json()["job_id"]
+
+    artifacts = {
+        item["relative_path"]: item for item in run_history.list_artifacts(job_id)
+    }
+
+    assert "uploads/assignment.txt" in artifacts
+    assert "user_sources/000_paper.txt" in artifacts
+    assert artifacts["uploads/assignment.txt"]["is_available"] is True
+    assert artifacts["user_sources/000_paper.txt"]["is_available"] is True
+
+    _jobs.pop(job_id, None)
 
 
 def test_web_logging_bootstrap_is_idempotent():
@@ -116,57 +367,77 @@ def test_run_logging_captures_root_warnings_and_skips_access_log(tmp_path):
     assert "GET /submit 200" not in content
 
 
-def test_download_keeps_job_until_cleanup(tmp_path):
-    run_dir = Path(tmp_path) / "run"
-    run_dir.mkdir(parents=True)
-    (run_dir / "hello.txt").write_text("hello", encoding="utf-8")
+def test_download_keeps_job_until_cleanup(monkeypatch):
+    from src.run_history_store import run_history
+    from src.storage import MemoryRunStorage
+
+    storage = MemoryRunStorage("runs/abc123def456/")
+    storage.write_text("hello.txt", "hello")
     job_id = "abc123def456"
-    _jobs[job_id] = Job(job_id=job_id, run_dir=run_dir, status="done")
+
+    monkeypatch.setattr(
+        "src.web_jobs.create_run_storage", lambda jid, config=None: storage
+    )
+
+    _jobs[job_id] = Job(job_id=job_id, run_dir="runs/abc123def456", status="done")
+    run_history.sync_artifacts(job_id, storage, current_time=10.0)
 
     response = client.get(f"/download/{job_id}")
     assert response.status_code == 200
     assert response.content[:2] == b"PK"  # zip
 
     assert job_id in _jobs
-    assert run_dir.exists()
 
     cleanup = client.post(f"/download/{job_id}/cleanup")
     assert cleanup.status_code == 200
 
+    artifacts = run_history.list_artifacts(job_id)
     assert job_id not in _jobs
-    assert not run_dir.exists()
+    assert artifacts[0]["is_available"] is False
 
 
-def test_download_uses_run_dir_name_for_zip_filename(tmp_path):
-    run_dir = Path(tmp_path) / "essay_20260430_130501_123456_abcd1234"
-    run_dir.mkdir(parents=True)
-    (run_dir / "hello.txt").write_text("hello", encoding="utf-8")
+def test_download_uses_run_dir_name_for_zip_filename(monkeypatch):
+    from src.storage import MemoryRunStorage
+
+    storage = MemoryRunStorage("runs/essay_20260430_130501_123456_abcd1234/")
+    storage.write_text("hello.txt", "hello")
     job_id = "518c425779f4"
-    _jobs[job_id] = Job(job_id=job_id, run_dir=run_dir, status="done")
+
+    monkeypatch.setattr(
+        "src.web_jobs.create_run_storage", lambda jid, config=None: storage
+    )
+
+    _jobs[job_id] = Job(
+        job_id=job_id,
+        run_dir="runs/essay_20260430_130501_123456_abcd1234",
+        status="done",
+    )
 
     try:
         response = client.get(f"/download/{job_id}")
         assert response.status_code == 200
         assert response.headers["content-disposition"] == (
-            "attachment; "
-            "filename=essay_20260430_130501_123456_abcd1234.zip"
+            "attachment; filename=essay_20260430_130501_123456_abcd1234.zip"
         )
     finally:
         _jobs.pop(job_id, None)
 
 
-def test_download_includes_full_run_contents(tmp_path):
-    run_dir = Path(tmp_path) / "run"
-    (run_dir / "sources" / "notes").mkdir(parents=True)
-    (run_dir / "sources" / "registry.json").write_text("{}", encoding="utf-8")
-    (run_dir / "sources" / "scores.json").write_text("{}", encoding="utf-8")
-    (run_dir / "sources" / "notes" / "source_a.json").write_text(
-        '{"id": "source_a"}', encoding="utf-8"
+def test_download_includes_full_run_contents(monkeypatch):
+    from src.storage import MemoryRunStorage
+
+    storage = MemoryRunStorage("runs/zipcontents01/")
+    storage.write_text("sources/registry.json", "{}")
+    storage.write_text("sources/scores.json", "{}")
+    storage.write_text("sources/notes/source_a.json", '{"id": "source_a"}')
+    storage.write_bytes("essay.docx", b"docx")
+
+    monkeypatch.setattr(
+        "src.web_jobs.create_run_storage", lambda jid, config=None: storage
     )
-    (run_dir / "essay.docx").write_bytes(b"docx")
 
     job_id = "zipcontents01"
-    _jobs[job_id] = Job(job_id=job_id, run_dir=run_dir, status="done")
+    _jobs[job_id] = Job(job_id=job_id, run_dir="runs/zipcontents01", status="done")
 
     try:
         response = client.get(f"/download/{job_id}")
@@ -183,47 +454,51 @@ def test_download_includes_full_run_contents(tmp_path):
         _jobs.pop(job_id, None)
 
 
-def test_job_ttl_sweep_removes_stale_done(tmp_path, monkeypatch):
+def test_job_ttl_sweep_removes_stale_done(monkeypatch):
+    from src.run_history_store import run_history
+    from src.storage import MemoryRunStorage
+
     monkeypatch.setenv("ESSAY_WEB_JOB_TTL_SECONDS", "120")
-    run_dir = Path(tmp_path) / "ttl_run"
-    run_dir.mkdir()
-    (run_dir / "f.txt").write_text("x", encoding="utf-8")
+    storage = MemoryRunStorage("runs/ttltestjob01/")
+    storage.write_text("f.txt", "x")
+
+    monkeypatch.setattr(
+        "src.web_jobs.create_run_storage", lambda jid, config=None: storage
+    )
+
     jid = "ttltestjob01"
     _jobs[jid] = Job(
         job_id=jid,
-        run_dir=run_dir,
+        run_dir="runs/ttltestjob01",
         status="done",
         finished_at=time.time() - 200,
     )
+    run_history.sync_artifacts(jid, storage, current_time=time.time() - 150)
     assert job_ttl_sweep_once() == 1
+    artifacts = run_history.list_artifacts(jid)
     assert jid not in _jobs
-    assert not run_dir.exists()
+    assert artifacts[0]["is_available"] is False
 
 
-def test_job_ttl_sweep_keeps_recent_done(tmp_path, monkeypatch):
+def test_job_ttl_sweep_keeps_recent_done(monkeypatch):
     monkeypatch.setenv("ESSAY_WEB_JOB_TTL_SECONDS", "3600")
-    run_dir = Path(tmp_path) / "fresh"
-    run_dir.mkdir()
     jid = "ttltestjob02"
     _jobs[jid] = Job(
         job_id=jid,
-        run_dir=run_dir,
+        run_dir="runs/ttltestjob02",
         status="done",
         finished_at=time.time() - 10,
     )
     assert job_ttl_sweep_once() == 0
     assert jid in _jobs
-    assert run_dir.exists()
 
 
-def test_job_ttl_zero_disables_sweep(tmp_path, monkeypatch):
+def test_job_ttl_zero_disables_sweep(monkeypatch):
     monkeypatch.setenv("ESSAY_WEB_JOB_TTL_SECONDS", "0")
-    run_dir = Path(tmp_path) / "stale"
-    run_dir.mkdir()
     jid = "ttltestjob03"
     _jobs[jid] = Job(
         job_id=jid,
-        run_dir=run_dir,
+        run_dir="runs/ttltestjob03",
         status="done",
         finished_at=time.time() - 999_999,
     )
@@ -231,8 +506,26 @@ def test_job_ttl_zero_disables_sweep(tmp_path, monkeypatch):
     assert jid in _jobs
 
 
-async def test_wait_for_job_signal_times_out_and_marks_error(tmp_path):
-    job = Job(job_id="waittimeout01", run_dir=Path(tmp_path), status="questions")
+def test_mark_stale_jobs_on_startup_marks_active_jobs_failed():
+    from src.web_jobs import mark_stale_jobs_on_startup
+
+    jid = "staleactive01"
+    _jobs[jid] = Job(job_id=jid, run_dir="runs/test", status="running")
+
+    count = mark_stale_jobs_on_startup()
+
+    assert count == 1
+    reloaded = _jobs[jid]
+    assert reloaded.status == "error"
+    assert (
+        reloaded.error
+        == "Server restarted while this job was active. Please submit it again."
+    )
+    assert reloaded.finished_at is not None
+
+
+async def test_wait_for_job_signal_times_out_and_marks_error():
+    job = Job(job_id="waittimeout01", run_dir="runs/test", status="questions")
 
     ok = await _async_wait_for_job_signal(
         job,
@@ -247,10 +540,15 @@ async def test_wait_for_job_signal_times_out_and_marks_error(tmp_path):
     assert job.finished_at is not None
 
 
-async def test_pipeline_task_respects_interactive_validation_setting(
-    tmp_path, monkeypatch
-):
-    job = Job(job_id="cfgjob000001", run_dir=Path(tmp_path), status="running")
+async def test_pipeline_task_respects_interactive_validation_setting(monkeypatch):
+    from src.storage import MemoryRunStorage
+
+    storage = MemoryRunStorage("runs/cfgjob000001/")
+    monkeypatch.setattr(
+        "src.web_jobs.create_run_storage", lambda jid, config=None: storage
+    )
+
+    job = Job(job_id="cfgjob000001", run_dir="runs/cfgjob000001", status="running")
     captured = {}
 
     config = EssayWriterConfig()
@@ -266,14 +564,14 @@ async def test_pipeline_task_respects_interactive_validation_setting(
 
     async def fake_run_pipeline(*args, **kwargs):
         captured.update(kwargs)
-        _write_assignment_brief(Path(tmp_path))
-        await kwargs["on_questions"]([_Question()], Path(tmp_path))
+        _write_assignment_brief(storage)
+        await kwargs["on_questions"]([_Question()], storage)
 
     monkeypatch.setattr("src.web.run_pipeline", fake_run_pipeline)
 
-    await _run_pipeline_task(job, upload_dir=None, prompt="Test prompt")
+    await _run_pipeline_task(job, has_uploads=False, prompt="Test prompt")
 
-    saved = json.loads((Path(tmp_path) / "brief" / "assignment.json").read_text())
+    saved = json.loads(storage.read_text("brief/assignment.json"))
     assert callable(captured["on_questions"])
     assert job.questions is None
     assert job.status == "done"
@@ -282,8 +580,15 @@ async def test_pipeline_task_respects_interactive_validation_setting(
     ]
 
 
-async def test_pipeline_task_stops_after_question_timeout(tmp_path, monkeypatch):
-    job = Job(job_id="timeoutjob001", run_dir=Path(tmp_path), status="running")
+async def test_pipeline_task_stops_after_question_timeout(monkeypatch):
+    from src.storage import MemoryRunStorage
+
+    storage = MemoryRunStorage("runs/timeoutjob001/")
+    monkeypatch.setattr(
+        "src.web_jobs.create_run_storage", lambda jid, config=None: storage
+    )
+
+    job = Job(job_id="timeoutjob001", run_dir="runs/timeoutjob001", status="running")
     captured = {"continued": False}
 
     config = EssayWriterConfig()
@@ -299,12 +604,12 @@ async def test_pipeline_task_stops_after_question_timeout(tmp_path, monkeypatch)
         suggested_option_index = 0
 
     async def fake_run_pipeline(*args, **kwargs):
-        await kwargs["on_questions"]([_Question()], Path(tmp_path))
+        await kwargs["on_questions"]([_Question()], storage)
         captured["continued"] = True
 
     monkeypatch.setattr("src.web.run_pipeline", fake_run_pipeline)
 
-    await _run_pipeline_task(job, upload_dir=None, prompt="Test prompt")
+    await _run_pipeline_task(job, has_uploads=False, prompt="Test prompt")
 
     assert captured["continued"] is False
     assert job.status == "error"
@@ -312,8 +617,15 @@ async def test_pipeline_task_stops_after_question_timeout(tmp_path, monkeypatch)
     assert job.finished_at is not None
 
 
-async def test_pipeline_task_stops_after_source_shortfall_timeout(tmp_path, monkeypatch):
-    job = Job(job_id="shortfall001", run_dir=Path(tmp_path), status="running")
+async def test_pipeline_task_stops_after_source_shortfall_timeout(monkeypatch):
+    from src.storage import MemoryRunStorage
+
+    storage = MemoryRunStorage("runs/shortfall001/")
+    monkeypatch.setattr(
+        "src.web_jobs.create_run_storage", lambda jid, config=None: storage
+    )
+
+    job = Job(job_id="shortfall001", run_dir="runs/shortfall001", status="running")
     captured = {"continued": False}
 
     config = EssayWriterConfig()
@@ -324,7 +636,7 @@ async def test_pipeline_task_stops_after_source_shortfall_timeout(tmp_path, monk
 
     async def fake_run_pipeline(*args, **kwargs):
         await kwargs["on_source_shortfall"](
-            Path(tmp_path),
+            storage,
             {
                 "usable_sources": 8,
                 "target_sources": 12,
@@ -338,7 +650,7 @@ async def test_pipeline_task_stops_after_source_shortfall_timeout(tmp_path, monk
 
     monkeypatch.setattr("src.web.run_pipeline", fake_run_pipeline)
 
-    await _run_pipeline_task(job, upload_dir=None, prompt="Test prompt")
+    await _run_pipeline_task(job, has_uploads=False, prompt="Test prompt")
 
     assert captured["continued"] is False
     assert job.status == "error"
@@ -346,12 +658,113 @@ async def test_pipeline_task_stops_after_source_shortfall_timeout(tmp_path, monk
     assert job.finished_at is not None
 
 
-async def test_pipeline_task_passes_async_worker_without_storing_api_key(
-    tmp_path, monkeypatch
+async def test_pipeline_task_syncs_extracted_input_before_pipeline_runs(monkeypatch):
+    from src.run_history_store import run_history
+    from src.storage import MemoryRunStorage
+
+    storage = MemoryRunStorage("runs/extractedsync001/")
+    monkeypatch.setattr(
+        "src.web_jobs.create_run_storage", lambda jid, config=None: storage
+    )
+
+    job = Job(
+        job_id="extractedsync001",
+        run_dir="runs/extractedsync001",
+        status="running",
+        target_words=1200,
+    )
+    captured: dict[str, object] = {}
+
+    config = EssayWriterConfig()
+
+    monkeypatch.setattr("src.web.load_config", lambda: config)
+    monkeypatch.setattr("src.web.create_async_client", lambda *args, **kwargs: object())
+
+    async def fake_run_pipeline(*args, **kwargs):
+        captured["paths"] = {
+            item["relative_path"] for item in run_history.list_artifacts(job.job_id)
+        }
+        captured["summary"] = run_history.get_runtime_summary(job.job_id)
+
+    monkeypatch.setattr("src.web.run_pipeline", fake_run_pipeline)
+
+    await _run_pipeline_task(job, has_uploads=False, prompt="Test prompt")
+
+    assert "input/extracted.md" in captured["paths"]
+    assert captured["summary"] is not None
+    assert captured["summary"]["target_words"] == 1200
+
+
+async def test_pipeline_task_syncs_selected_sources_before_source_shortfall_wait(
+    monkeypatch,
 ):
+    from src.run_history_store import run_history
+    from src.storage import MemoryRunStorage
+
+    storage = MemoryRunStorage("runs/shortfallart001/")
+    monkeypatch.setattr(
+        "src.web_jobs.create_run_storage", lambda jid, config=None: storage
+    )
+
+    job = Job(
+        job_id="shortfallart001", run_dir="runs/shortfallart001", status="running"
+    )
+    captured: dict[str, object] = {}
+
+    config = EssayWriterConfig()
+
+    monkeypatch.setattr("src.web.load_config", lambda: config)
+    monkeypatch.setattr("src.web.create_async_client", lambda *args, **kwargs: object())
+
+    async def fake_wait(current_job, event, **kwargs):
+        captured["status"] = current_job.status
+        captured["paths"] = {
+            item["relative_path"]
+            for item in run_history.list_artifacts(current_job.job_id)
+        }
+        return False
+
+    monkeypatch.setattr("src.web_jobs.async_wait_for_job_signal", fake_wait)
+
+    async def fake_run_pipeline(*args, **kwargs):
+        storage.write_text(
+            "sources/selected.json",
+            json.dumps({"s1": {"title": "Paper A"}}, ensure_ascii=False, indent=2),
+        )
+        await kwargs["on_source_shortfall"](
+            storage,
+            {
+                "usable_sources": 1,
+                "target_sources": 2,
+                "scorable_candidates": 4,
+                "above_threshold": 2,
+                "total_candidates": 5,
+                "recovery_attempted": True,
+            },
+        )
+
+    monkeypatch.setattr("src.web.run_pipeline", fake_run_pipeline)
+
+    await _run_pipeline_task(job, has_uploads=False, prompt="Test prompt")
+
+    assert captured["status"] == "source_shortfall"
+    assert "sources/selected.json" in captured["paths"]
+    assert job.status == "source_shortfall"
+
+
+async def test_pipeline_task_passes_async_worker_without_storing_api_key(
+    monkeypatch,
+):
+    from src.storage import MemoryRunStorage
+
+    storage = MemoryRunStorage("runs/apikeyjob001/")
+    monkeypatch.setattr(
+        "src.web_jobs.create_run_storage", lambda jid, config=None: storage
+    )
+
     job = Job(
         job_id="apikeyjob001",
-        run_dir=Path(tmp_path),
+        run_dir="runs/apikeyjob001",
         status="running",
         api_key="secret-key",
     )
@@ -375,25 +788,29 @@ async def test_pipeline_task_passes_async_worker_without_storing_api_key(
 
     monkeypatch.setattr("src.web.run_pipeline", fake_run_pipeline)
 
-    await _run_pipeline_task(job, upload_dir=None, prompt="Test prompt")
+    await _run_pipeline_task(job, has_uploads=False, prompt="Test prompt")
 
     assert captured["async_api_key"] == "secret-key"
     assert captured["async_worker"] is async_client
     assert captured["job_api_key"] == ""
 
 
-def test_optional_pdf_upload_updates_registry(tmp_path):
-    run_dir = Path(tmp_path) / "run"
-    sources = run_dir / "sources"
-    sources.mkdir(parents=True)
+def test_optional_pdf_upload_updates_registry(monkeypatch):
+    from src.storage import MemoryRunStorage
+
+    storage = MemoryRunStorage("runs/optpdfjob001/")
     reg = {"src_a": {"title": "Paper A", "doi": "10.1000/182", "user_provided": False}}
-    (sources / "registry.json").write_text(
-        json.dumps(reg, ensure_ascii=False, indent=2), encoding="utf-8"
+    storage.write_text(
+        "sources/registry.json",
+        json.dumps(reg, ensure_ascii=False, indent=2),
+    )
+    monkeypatch.setattr(
+        "src.web_jobs.create_run_storage", lambda jid, config=None: storage
     )
     jid = "optpdfjob001"
     _jobs[jid] = Job(
         job_id=jid,
-        run_dir=run_dir,
+        run_dir="runs/optpdfjob001",
         status="optional_pdfs",
         optional_pdf_allowed_ids=frozenset({"src_a"}),
     )
@@ -403,30 +820,30 @@ def test_optional_pdf_upload_updates_registry(tmp_path):
     r = client.post(f"/optional-pdf/{jid}", data=data, files=files)
     assert r.status_code == 200
     assert r.json().get("status") == "ok"
-    updated = json.loads((sources / "registry.json").read_text(encoding="utf-8"))
+    updated = json.loads(storage.read_text("sources/registry.json"))
     assert "content_path" in updated["src_a"]
-    assert Path(updated["src_a"]["content_path"]).exists()
+    assert storage.exists(updated["src_a"]["content_path"])
 
 
 def test_optional_pdf_done_requires_active_step():
     jid = "optpdfjob002"
-    _jobs[jid] = Job(job_id=jid, run_dir=Path("."), status="running")
+    _jobs[jid] = Job(job_id=jid, run_dir="runs/test", status="running")
     r = client.post(f"/optional-pdf/{jid}/done")
     assert r.status_code == 400
 
 
 def test_source_shortfall_decision_requires_active_step():
     jid = "shortfall002"
-    _jobs[jid] = Job(job_id=jid, run_dir=Path("."), status="running")
+    _jobs[jid] = Job(job_id=jid, run_dir="runs/test", status="running")
     r = client.post(f"/source-shortfall/{jid}", data={"decision": "proceed"})
     assert r.status_code == 400
 
 
-def test_source_shortfall_decision_unblocks_job(tmp_path):
+def test_source_shortfall_decision_unblocks_job():
     jid = "shortfall003"
     _jobs[jid] = Job(
         job_id=jid,
-        run_dir=Path(tmp_path),
+        run_dir="runs/shortfall003",
         status="source_shortfall",
         source_shortfall={
             "usable_sources": 8,
@@ -443,11 +860,11 @@ def test_source_shortfall_decision_unblocks_job(tmp_path):
         _jobs.pop(jid, None)
 
 
-def test_source_shortfall_decision_with_added_ids(tmp_path):
+def test_source_shortfall_decision_with_added_ids():
     jid = "shortfall004"
     _jobs[jid] = Job(
         job_id=jid,
-        run_dir=Path(tmp_path),
+        run_dir="runs/shortfall004",
         status="source_shortfall",
         source_shortfall={
             "usable_sources": 8,
@@ -473,11 +890,11 @@ def test_source_shortfall_decision_with_added_ids(tmp_path):
         _jobs.pop(jid, None)
 
 
-def test_source_shortfall_cancel_ignores_added_ids(tmp_path):
+def test_source_shortfall_cancel_ignores_added_ids():
     jid = "shortfall005"
     _jobs[jid] = Job(
         job_id=jid,
-        run_dir=Path(tmp_path),
+        run_dir="runs/shortfall005",
         status="source_shortfall",
         source_shortfall={"usable_sources": 5, "target_sources": 10},
     )
@@ -495,18 +912,22 @@ def test_source_shortfall_cancel_ignores_added_ids(tmp_path):
         _jobs.pop(jid, None)
 
 
-def test_optional_pdf_url_updates_registry(tmp_path, monkeypatch):
-    run_dir = Path(tmp_path) / "run"
-    sources = run_dir / "sources"
-    sources.mkdir(parents=True)
+def test_optional_pdf_url_updates_registry(monkeypatch):
+    from src.storage import MemoryRunStorage
+
+    storage = MemoryRunStorage("runs/optpdfjob003/")
     reg = {"src_a": {"title": "Paper A", "doi": "10.1000/182", "user_provided": False}}
-    (sources / "registry.json").write_text(
-        json.dumps(reg, ensure_ascii=False, indent=2), encoding="utf-8"
+    storage.write_text(
+        "sources/registry.json",
+        json.dumps(reg, ensure_ascii=False, indent=2),
+    )
+    monkeypatch.setattr(
+        "src.web_jobs.create_run_storage", lambda jid, config=None: storage
     )
     jid = "optpdfjob003"
     _jobs[jid] = Job(
         job_id=jid,
-        run_dir=run_dir,
+        run_dir="runs/optpdfjob003",
         status="optional_pdfs",
         optional_pdf_allowed_ids=frozenset({"src_a"}),
     )
@@ -525,15 +946,15 @@ def test_optional_pdf_url_updates_registry(tmp_path, monkeypatch):
     r = client.post(f"/optional-pdf/{jid}", data=data)
     assert r.status_code == 200
     assert r.json().get("status") == "ok"
-    updated = json.loads((sources / "registry.json").read_text(encoding="utf-8"))
+    updated = json.loads(storage.read_text("sources/registry.json"))
     assert "content_path" in updated["src_a"]
 
 
-def test_stream_sse_returns_done_event(tmp_path):
+def test_stream_sse_returns_done_event():
     """SSE endpoint sends the current status as a JSON event and closes on terminal state."""
     jid = "ssejob000001"
     _jobs[jid] = Job(
-        job_id=jid, run_dir=Path(tmp_path), status="done", finished_at=time.time()
+        job_id=jid, run_dir="runs/ssejob000001", status="done", finished_at=time.time()
     )
 
     with client.stream("GET", f"/stream/{jid}") as resp:
@@ -564,12 +985,12 @@ def test_stream_sse_gone_for_missing_job():
     assert payload["status"] == "gone"
 
 
-def test_stream_sse_notify_sends_update(tmp_path):
+def test_stream_sse_notify_sends_update():
     """_notify_job causes SSE to send a new event when status changes."""
     import threading
 
     jid = "ssenotify001"
-    job = Job(job_id=jid, run_dir=Path(tmp_path), status="running")
+    job = Job(job_id=jid, run_dir="runs/ssenotify001", status="running")
     _jobs[jid] = job
 
     events = []
@@ -589,6 +1010,7 @@ def test_stream_sse_notify_sends_update(tmp_path):
     # Transition to done
     job.status = "done"
     job.finished_at = time.time()
+    _save_job(job)
     _notify_job(job)
 
     t.join(timeout=5)

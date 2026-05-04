@@ -6,7 +6,7 @@ import json
 import logging
 import re
 from collections.abc import Callable
-from pathlib import Path
+from typing import Any
 
 from src.schemas import (
     Clarification,
@@ -17,11 +17,11 @@ from src.schemas import (
 logger = logging.getLogger(__name__)
 
 
-def _read_json(path: Path) -> dict | list | None:
-    if not path.exists():
+def _read_json(storage, subpath: str) -> dict | list | None:
+    if not storage.exists(subpath):
         return None
     try:
-        return json.loads(path.read_text(encoding="utf-8"))
+        return json.loads(storage.read_text(subpath))
     except (json.JSONDecodeError, ValueError):
         return None
 
@@ -206,37 +206,103 @@ class TokenTracker:
         )
         return "\n".join(lines)
 
-    def write_report(self, run_dir: Path) -> Path | None:
+    def snapshot_step_metric(
+        self,
+        step: str,
+        *,
+        status: str = "completed",
+        step_index: int | None = None,
+        step_count: int | None = None,
+    ) -> dict[str, Any]:
+        with self._lock:
+            data = dict(self._ensure_step(step))
+        step_cost = _step_cost(data)
+        return {
+            "status": status,
+            "model": data["model"],
+            "cost_usd": step_cost,
+            "call_count": data["calls"],
+            "input_tokens": data["input_tokens"],
+            "output_tokens": data["output_tokens"],
+            "thinking_tokens": data["thinking_tokens"],
+            "duration_seconds": data["duration"],
+            "step_index": step_index,
+            "step_count": step_count,
+        }
+
+    def build_runtime_summary(
+        self,
+        storage,
+        *,
+        status: str,
+        provider: str = "",
+    ) -> dict[str, Any]:
+        step_rows = [
+            self.snapshot_step_metric(step_name) for step_name in list(self._steps)
+        ]
+        total_cost = sum(float(row["cost_usd"]) for row in step_rows)
+        total_in = sum(int(row["input_tokens"]) for row in step_rows)
+        total_out = sum(int(row["output_tokens"]) for row in step_rows)
+        total_think = sum(int(row["thinking_tokens"]) for row in step_rows)
+        total_dur = sum(float(row["duration_seconds"]) for row in step_rows)
+
+        draft_words = _count_words(storage, "essay/draft.md")
+        reviewed_words = _count_words(storage, "essay/reviewed.md")
+        target_words = _parse_target_words(storage, "plan/plan.json")
+        source_metrics = _summarize_source_report_metrics(storage)
+        selected_count = _count_sources(storage, "sources/selected.json")
+        essay_subpath = "essay/reviewed.md"
+        if not storage.exists(essay_subpath):
+            essay_subpath = "essay/draft.md"
+        cited_count = _count_cited_sources(storage, essay_subpath)
+
+        return {
+            "status": status,
+            "provider": provider,
+            "total_cost_usd": total_cost,
+            "total_input_tokens": total_in,
+            "total_output_tokens": total_out,
+            "total_thinking_tokens": total_think,
+            "total_duration_seconds": total_dur,
+            "step_count": len(step_rows),
+            "registered_source_count": source_metrics["registered"],
+            "scored_source_count": source_metrics["scored"],
+            "above_threshold_source_count": source_metrics["above_threshold"],
+            "selected_source_count": selected_count,
+            "selected_full_text_count": source_metrics["selected_with_fulltext"],
+            "selected_abstract_only_count": source_metrics["selected_abstract_only"],
+            "cited_source_count": cited_count,
+            "target_words": target_words,
+            "draft_words": draft_words,
+            "final_words": reviewed_words or draft_words,
+        }
+
+    def write_report(self, storage) -> bool:
         if not self._steps:
-            return None
+            return False
 
-        total_cost = 0.0
-        total_in = 0
-        total_out = 0
-        total_think = 0
-        total_dur = 0.0
-        rows: list[tuple[str, dict, float]] = []
+        rows = [
+            (step_name, self.snapshot_step_metric(step_name))
+            for step_name in list(self._steps)
+        ]
 
-        for step, data in self._steps.items():
-            step_cost = _step_cost(data)
-            rows.append((step, data, step_cost))
-            total_cost += step_cost
-            total_in += data["input_tokens"]
-            total_out += data["output_tokens"]
-            total_think += data["thinking_tokens"]
-            total_dur += data["duration"]
+        total_cost = sum(float(row[1]["cost_usd"]) for row in rows)
+        total_in = sum(int(row[1]["input_tokens"]) for row in rows)
+        total_out = sum(int(row[1]["output_tokens"]) for row in rows)
+        total_think = sum(int(row[1]["thinking_tokens"]) for row in rows)
+        total_dur = sum(float(row[1]["duration_seconds"]) for row in rows)
 
         m, s = divmod(int(total_dur), 60)
 
-        draft_words = _count_words(run_dir / "essay" / "draft.md")
-        reviewed_words = _count_words(run_dir / "essay" / "reviewed.md")
-        target_words = _parse_target_words(run_dir / "plan" / "plan.json")
-        source_metrics = _summarize_source_report_metrics(run_dir)
-        selected_count = _count_sources(run_dir / "sources" / "selected.json")
-        essay_path = run_dir / "essay" / "reviewed.md"
-        if not essay_path.exists():
-            essay_path = run_dir / "essay" / "draft.md"
-        cited_count = _count_cited_sources(essay_path)
+        draft_words = _count_words(storage, "essay/draft.md")
+        reviewed_words = _count_words(storage, "essay/reviewed.md")
+        target_words = _parse_target_words(storage, "plan/plan.json")
+        source_metrics = _summarize_source_report_metrics(storage)
+        selected_count = _count_sources(storage, "sources/selected.json")
+        essay_subpath = "essay/reviewed.md"
+        if not storage.exists(essay_subpath):
+            essay_subpath = "essay/draft.md"
+        cited_count = _count_cited_sources(storage, essay_subpath)
 
         lines = [
             "# Run Report",
@@ -283,9 +349,9 @@ class TokenTracker:
         # Build child-to-parent aggregation for summary rows (e.g. write
         # aggregates write:1, write:2, …).  A row is a parent if it has no
         # model and at least one child step exists with the "parent:" prefix.
-        step_names = {step for step, _, _ in rows}
+        step_names = {step for step, _ in rows}
         child_agg: dict[str, dict] = {}
-        for step, data, step_cost in rows:
+        for step, data in rows:
             if ":" not in step:
                 continue
             parent = step.split(":")[0]
@@ -297,7 +363,7 @@ class TokenTracker:
             agg["in"] += data["input_tokens"]
             agg["out"] += data["output_tokens"]
             agg["think"] += data["thinking_tokens"]
-            agg["cost"] += step_cost
+            agg["cost"] += data["cost_usd"]
 
         lines += [
             "",
@@ -306,9 +372,9 @@ class TokenTracker:
             "| Step | Model | Time | In | Out | Think | Cost |",
             "|------|-------|-----:|---:|----:|------:|-----:|",
         ]
-        for step, data, step_cost in rows:
+        for step, data in rows:
             model = data["model"] or "—"
-            dur = data["duration"]
+            dur = data["duration_seconds"]
             dur_str = f"{dur:.0f}s" if dur else "—"
             agg = child_agg.get(step)
             if agg and not data["model"]:
@@ -322,7 +388,7 @@ class TokenTracker:
                 lines.append(
                     f"| {step} | {model} | {dur_str} "
                     f"| {data['input_tokens']:,} | {data['output_tokens']:,} "
-                    f"| {data['thinking_tokens']:,} | ${step_cost:.4f} |"
+                    f"| {data['thinking_tokens']:,} | ${data['cost_usd']:.4f} |"
                 )
         lines.append(
             f"| **Total** | | **{m}m {s}s** "
@@ -331,27 +397,26 @@ class TokenTracker:
         )
         lines.append("")
 
-        report_path = run_dir / "report.md"
-        report_path.write_text("\n".join(lines), encoding="utf-8")
-        logger.info("Report: %s", report_path)
-        return report_path
+        storage.write_text("report.md", "\n".join(lines))
+        logger.info("Report written to storage")
+        return True
 
 
-def _count_words(path: Path) -> int:
-    if not path.exists():
+def _count_words(storage, subpath: str) -> int:
+    if not storage.exists(subpath):
         return 0
-    return len(path.read_text(encoding="utf-8").split())
+    return len(storage.read_text(subpath).split())
 
 
-def _count_sources(path: Path) -> int:
-    data = _read_json(path)
+def _count_sources(storage, subpath: str) -> int:
+    data = _read_json(storage, subpath)
     if isinstance(data, dict) or isinstance(data, list):
         return len(data)
     return 0
 
 
-def _summarize_score_metrics(path: Path) -> dict[str, int]:
-    data = _read_json(path)
+def _summarize_score_metrics(storage, subpath: str) -> dict[str, int]:
+    data = _read_json(storage, subpath)
     if not isinstance(data, dict):
         return {
             "scored": 0,
@@ -386,19 +451,18 @@ def _summarize_score_metrics(path: Path) -> dict[str, int]:
     }
 
 
-def _summarize_selected_note_metrics(run_dir: Path) -> dict[str, int]:
-    selected = _read_json(run_dir / "sources" / "selected.json")
+def _summarize_selected_note_metrics(storage) -> dict[str, int]:
+    selected = _read_json(storage, "sources/selected.json")
     if not isinstance(selected, dict) or not selected:
         return {
             "selected_with_fulltext": 0,
             "selected_abstract_only": 0,
         }
-    notes_dir = run_dir / "sources" / "notes"
     selected_with_fulltext = 0
     selected_abstract_only = 0
 
     for source_id in selected:
-        note = _read_json(notes_dir / f"{source_id}.json")
+        note = _read_json(storage, f"sources/notes/{source_id}.json")
         if not isinstance(note, dict):
             continue
         if note.get("fetched_fulltext"):
@@ -412,28 +476,28 @@ def _summarize_selected_note_metrics(run_dir: Path) -> dict[str, int]:
     }
 
 
-def _summarize_source_report_metrics(run_dir: Path) -> dict[str, int]:
-    score_metrics = _summarize_score_metrics(run_dir / "sources" / "scores.json")
-    selected_metrics = _summarize_selected_note_metrics(run_dir)
+def _summarize_source_report_metrics(storage) -> dict[str, int]:
+    score_metrics = _summarize_score_metrics(storage, "sources/scores.json")
+    selected_metrics = _summarize_selected_note_metrics(storage)
     return {
-        "registered": _count_sources(run_dir / "sources" / "registry.json"),
+        "registered": _count_sources(storage, "sources/registry.json"),
         **score_metrics,
         **selected_metrics,
     }
 
 
-def _count_cited_sources(path: Path) -> int:
-    if not path.exists():
+def _count_cited_sources(storage, subpath: str) -> int:
+    if not storage.exists(subpath):
         return 0
-    text = path.read_text(encoding="utf-8")
+    text = storage.read_text(subpath)
     return len(set(re.findall(r"\[\[([^|\]]+?)(?:\|[^\]]*?)?\]\]", text)))
 
 
-def _parse_target_words(path: Path) -> int:
-    if not path.exists():
+def _parse_target_words(storage, subpath: str) -> int:
+    if not storage.exists(subpath):
         return 0
     try:
-        plan = json.loads(path.read_text(encoding="utf-8"))
+        plan = json.loads(storage.read_text(subpath))
         return plan.get("total_word_target", 0)
     except (json.JSONDecodeError, ValueError):
         return 0

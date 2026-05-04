@@ -25,9 +25,11 @@ from src.agent import (
 )
 from src.rendering import PromptPair
 from src.schemas import AssignmentBrief, EssayPlan, SourceNote
+from src.storage import AnyStorage, MemoryRunStorage, RunStorage
 
 if TYPE_CHECKING:
     from config.settings import EssayWriterConfig
+    from src.run_history_store import RunHistoryStore
 
 logger = logging.getLogger(__name__)
 
@@ -44,18 +46,21 @@ class PipelineContext:
     async_worker: AsyncModelClient | None
     writer: ModelClient | None
     reviewer: ModelClient | None
-    run_dir: Path
+    storage: AnyStorage
     config: EssayWriterConfig
     async_writer: AsyncModelClient | None = None
     async_reviewer: AsyncModelClient | None = None
     extra_prompt: str | None = None
     tracker: object | None = None
-    user_sources_dir: Path | None = None
-    on_optional_source_pdfs: Callable[[Path, list[dict]], Awaitable[None]] | None = None
+    on_optional_source_pdfs: (
+        Callable[[AnyStorage, list[dict]], Awaitable[None]] | None
+    ) = None
     on_source_shortfall: (
-        Callable[[Path, dict], Awaitable[tuple[bool, list[str]]]] | None
+        Callable[[AnyStorage, dict], Awaitable[tuple[bool, list[str]]]] | None
     ) = None
     brief: AssignmentBrief | None = None
+    job_id: str | None = None
+    run_history_store: RunHistoryStore | None = None
 
 
 @dataclass
@@ -81,28 +86,55 @@ class PipelineStep:
     fn: Callable[[PipelineContext], Awaitable[None]]
 
 
-def load_checkpoint(run_dir: Path) -> set[str]:
+def load_checkpoint(storage: AnyStorage) -> set[str]:
     """Load completed step names from the checkpoint file."""
-    path = run_dir / "checkpoint.json"
-    if not path.exists():
+    if not storage.exists("checkpoint.json"):
         return set()
     try:
-        data = json.loads(path.read_text(encoding="utf-8"))
+        data = json.loads(storage.read_text("checkpoint.json"))
         return set(data.get("completed", []))
     except (json.JSONDecodeError, OSError):
         return set()
 
 
-def save_checkpoint(run_dir: Path, step_name: str) -> None:
+def save_checkpoint(storage: AnyStorage, step_name: str) -> None:
     """Append a completed step to the checkpoint file."""
-    path = run_dir / "checkpoint.json"
-    completed = list(load_checkpoint(run_dir))
+    completed = list(load_checkpoint(storage))
     if step_name not in completed:
         completed.append(step_name)
-    path.write_text(
+    storage.write_text(
+        "checkpoint.json",
         json.dumps({"completed": completed}, indent=2),
-        encoding="utf-8",
     )
+
+
+def _persist_step_history(
+    ctx: PipelineContext,
+    *,
+    step_name: str,
+    status: str,
+    step_index: int,
+    step_count: int | None,
+) -> None:
+    if ctx.job_id is None or ctx.run_history_store is None or ctx.tracker is None:
+        return
+    snapshot_step_metric = getattr(ctx.tracker, "snapshot_step_metric", None)
+    if callable(snapshot_step_metric):
+        payload = snapshot_step_metric(
+            step_name,
+            status=status,
+            step_index=step_index,
+            step_count=step_count,
+        )
+        ctx.run_history_store.save_step_metric(ctx.job_id, step_name, **payload)
+    if status == "completed":
+        sync_artifacts_snapshot(ctx)
+
+
+def sync_artifacts_snapshot(ctx: PipelineContext) -> None:
+    if ctx.job_id is None or ctx.run_history_store is None:
+        return
+    ctx.run_history_store.sync_artifacts(ctx.job_id, ctx.storage)
 
 
 async def execute(
@@ -141,10 +173,24 @@ async def execute(
             logger.error("FAIL %s (%.1fs)", step.name, duration)
             if ctx.tracker is not None:
                 ctx.tracker.record_duration(step.name, duration)
+            _persist_step_history(
+                ctx,
+                step_name=step.name,
+                status="failed",
+                step_index=step_offset + running_idx,
+                step_count=total_steps,
+            )
             raise
         if ctx.tracker is not None:
             ctx.tracker.record_duration(step.name, duration)
-        save_checkpoint(ctx.run_dir, step.name)
+        save_checkpoint(ctx.storage, step.name)
+        _persist_step_history(
+            ctx,
+            step_name=step.name,
+            status="completed",
+            step_index=step_offset + running_idx,
+            step_count=total_steps,
+        )
         running_idx += 1
 
 
@@ -259,37 +305,31 @@ async def async_text_call(
     return extract_text(response)
 
 
-def write_json(path: Path, data: BaseModel) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(
-        data.model_dump_json(indent=2, ensure_ascii=False), encoding="utf-8"
-    )
+def write_json(storage: AnyStorage, subpath: str, data: BaseModel) -> None:
+    storage.write_text(subpath, data.model_dump_json(indent=2, ensure_ascii=False))
 
 
-def write_text(path: Path, text: str) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(text, encoding="utf-8")
+def write_text(storage: AnyStorage, subpath: str, text: str) -> None:
+    storage.write_text(subpath, text)
 
 
-def read_text(path: Path) -> str:
-    return path.read_text(encoding="utf-8")
+def read_text(storage: AnyStorage, subpath: str) -> str:
+    return storage.read_text(subpath)
 
 
-def get_brief_language(run_dir: Path) -> str:
-    brief_path = run_dir / "brief" / "assignment.json"
-    if brief_path.exists():
+def get_brief_language(storage: AnyStorage) -> str:
+    if storage.exists("brief/assignment.json"):
         brief = AssignmentBrief.model_validate_json(
-            brief_path.read_text(encoding="utf-8")
+            storage.read_text("brief/assignment.json")
         )
         return brief.language
     return "Greek (Δημοτική)"
 
 
-def get_target_words(run_dir: Path) -> int:
-    plan_path = run_dir / "plan" / "plan.json"
-    if not plan_path.exists():
+def get_target_words(storage: AnyStorage) -> int:
+    if not storage.exists("plan/plan.json"):
         return 0
-    plan = EssayPlan.model_validate_json(plan_path.read_text(encoding="utf-8"))
+    plan = EssayPlan.model_validate_json(storage.read_text("plan/plan.json"))
     return plan.total_word_target
 
 
@@ -315,12 +355,11 @@ def normalize_section_word_targets(sections: list[Section], total_target: int) -
     )
 
 
-def parse_sections(run_dir: Path) -> list[Section]:
-    plan_path = run_dir / "plan" / "plan.json"
-    if not plan_path.exists():
+def parse_sections(storage: AnyStorage) -> list[Section]:
+    if not storage.exists("plan/plan.json"):
         return []
 
-    plan = EssayPlan.model_validate_json(plan_path.read_text(encoding="utf-8"))
+    plan = EssayPlan.model_validate_json(storage.read_text("plan/plan.json"))
     sections: list[Section] = []
     duplicate_numbers = [
         number
@@ -438,34 +477,33 @@ def split_writer_source_context(
     return ranked[:budget], source_catalog_markdown(all_notes), len(all_notes)
 
 
-def load_source_notes(run_dir: Path) -> list[SourceNote]:
-    notes_dir = run_dir / "sources" / "notes"
-    if not notes_dir.exists():
+def load_source_notes(storage: AnyStorage) -> list[SourceNote]:
+    note_files = storage.list_files("sources/notes/")
+    if not note_files:
         return []
     notes: list[SourceNote] = []
-    for note_file in sorted(notes_dir.iterdir()):
-        if note_file.suffix != ".json":
+    for subpath in sorted(note_files):
+        if not subpath.endswith(".json"):
             continue
         try:
-            note = SourceNote.model_validate_json(note_file.read_text(encoding="utf-8"))
+            note = SourceNote.model_validate_json(storage.read_text(subpath))
             if note.is_accessible:
                 notes.append(note)
         except Exception:
-            logger.warning("Failed to load source note: %s", note_file.name)
+            logger.warning("Failed to load source note: %s", subpath)
     return notes
 
 
-def load_selected_source_notes(run_dir: Path) -> list[SourceNote]:
-    all_notes = load_source_notes(run_dir)
+def load_selected_source_notes(storage: AnyStorage) -> list[SourceNote]:
+    all_notes = load_source_notes(storage)
     if not all_notes:
         return []
 
-    selected_path = run_dir / "sources" / "selected.json"
-    if not selected_path.exists():
+    if not storage.exists("sources/selected.json"):
         return all_notes
 
     try:
-        selected = json.loads(selected_path.read_text(encoding="utf-8"))
+        selected = json.loads(storage.read_text("sources/selected.json"))
     except Exception:
         logger.warning("Failed to load selected sources; using all accessible notes")
         return all_notes
