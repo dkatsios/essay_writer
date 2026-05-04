@@ -11,6 +11,7 @@ services:
     plan: free
     region: frankfurt
     healthCheckPath: /health
+    preDeployCommand: python -m alembic upgrade head
     envVars:
       - key: GOOGLE_API_KEY
         sync: false
