@@ -6,10 +6,6 @@ import base64
 import mimetypes
 from pathlib import Path
 
-import pymupdf
-from docx import Document as DocxDocument
-from pptx import Presentation
-
 from src.tools.docx_reader import extract_docx_text
 
 # ---------------------------------------------------------------------------
@@ -97,6 +93,8 @@ def _extract_pdf(path: Path) -> tuple[str | None, list[dict] | None]:
     image blocks — page rasterization was not consumed downstream and wasted
     memory; use OCR or export text before upload if the content must be read.
     """
+    import pymupdf
+
     doc = pymupdf.open(str(path))
     total = len(doc)
 
@@ -132,11 +130,15 @@ def make_image_block(image_bytes: bytes, mime: str = "image/png") -> dict:
 
 
 def _extract_docx(path: Path) -> str:
+    from docx import Document as DocxDocument
+
     return extract_docx_text(DocxDocument(str(path)))
 
 
 def _extract_pptx(path: Path) -> str:
     """Extract text from a .pptx file — slide titles, body text, and notes."""
+    from pptx import Presentation
+
     prs = Presentation(str(path))
     parts: list[str] = []
     for i, slide in enumerate(prs.slides, 1):
