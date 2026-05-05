@@ -26,6 +26,7 @@ _DEFAULT_WORKER_COUNT = 4
 _DEFAULT_WORKER_POLL_INTERVAL_SECONDS = 2
 _DEFAULT_WORKER_LEASE_SECONDS = 60
 _DEFAULT_WORKER_HEARTBEAT_INTERVAL_SECONDS = 15
+_DEFAULT_COMBINED_WEB_ONLY = False
 
 
 def _alias_choices(*names: str) -> AliasChoices:
@@ -322,6 +323,13 @@ class EssayWriterConfig(BaseSettings):
         validation_alias=_alias_choices(
             "ESSAY_WEB_LOG_FORMAT",
             "ESSAY_WRITER_WEB_LOG_FORMAT",
+        ),
+    )
+    combined_web_only: bool = Field(
+        default=_DEFAULT_COMBINED_WEB_ONLY,
+        validation_alias=_alias_choices(
+            "ESSAY_WEB_ONLY",
+            "ESSAY_WRITER_WEB_ONLY",
         ),
     )
     worker_count: int = Field(

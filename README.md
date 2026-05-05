@@ -110,6 +110,8 @@ The checked-in Render blueprint pins `ESSAY_WORKER_COUNT=1` on the free plan bec
 
 The Docker image runs from the baked project virtualenv at runtime; it does not call `uv run` during container startup. The combined runtime entrypoint also runs the repo's legacy-safe DB upgrade helper before it starts the web process and workers, so the SQL schema exists in the same environment the app actually runs in. The checked-in Render blueprint uses that same helper as a pre-deploy step.
 
+For deployment debugging, set `ESSAY_WEB_ONLY=true` (or `ESSAY_WRITER_WEB_ONLY=true`) to make the combined Docker entrypoint start only the web process and skip worker startup. The entrypoint also prints early `[combined-startup] ...` log lines covering migration start, web spawn, port-bind success, and worker spawn/skip decisions.
+
 
 The service exposes the web UI on the port assigned by Render. Set `ESSAY_WEB_JOB_TTL_SECONDS` / `ESSAY_WEB_JOB_SWEEP_INTERVAL_SECONDS` if you need different retention for undownloaded jobs.
 
@@ -120,6 +122,8 @@ Default settings are defined in `config/settings.py`. Override them with environ
 The web layer database URL lives at `ESSAY_WRITER_DATABASE__URL`. The database stores web job state, runtime summaries, per-step metrics, and artifact metadata in SQL. Run artifacts (`.md`, `.docx`, uploaded files, logs) are stored via the configured storage backend (`ESSAY_WRITER_STORAGE__BACKEND`): `local` for filesystem or `r2` for Cloudflare R2.
 
 Worker process count lives in `EssayWriterConfig.worker_count` with a default of `6`. Set `ESSAY_WORKER_COUNT` or `ESSAY_WRITER_WORKER_COUNT` in `.env` or your deployment environment to override it for `src.start_workers`, `scripts/start_workers.sh`, and the combined Docker entrypoint.
+
+Combined Docker startup diagnostics live in `EssayWriterConfig.combined_web_only` (default `False`). Set `ESSAY_WEB_ONLY=true` or `ESSAY_WRITER_WEB_ONLY=true` to skip workers and run the container in web-only mode for deployment debugging.
 
 For inspection/debugging, the web server exposes a browser history page at `GET /history` plus JSON history endpoints: `GET /history/jobs` lists persisted run summaries, including active jobs immediately after submission, and `GET /history/jobs/{job_id}` returns the summary, step metrics, artifact manifest, and live status (when the job is still active).
 

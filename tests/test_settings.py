@@ -94,3 +94,20 @@ def test_load_config_reads_worker_count_from_env_file(tmp_path, monkeypatch):
     cfg = EssayWriterConfig(_env_file=env_file)
 
     assert cfg.worker_count == 4
+
+
+def test_load_config_reads_combined_web_only_from_env_file(tmp_path, monkeypatch):
+    from config.settings import EssayWriterConfig
+
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        "ESSAY_WEB_ONLY=true\n",
+        encoding="utf-8",
+    )
+
+    monkeypatch.delenv("ESSAY_WEB_ONLY", raising=False)
+    monkeypatch.delenv("ESSAY_WRITER_WEB_ONLY", raising=False)
+
+    cfg = EssayWriterConfig(_env_file=env_file)
+
+    assert cfg.combined_web_only is True
