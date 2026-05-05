@@ -555,7 +555,7 @@ async def test_pipeline_task_respects_interactive_validation_setting(monkeypatch
     config.writing.interactive_validation = False
 
     monkeypatch.setattr("src.web.load_config", lambda: config)
-    monkeypatch.setattr("src.web.create_async_client", lambda *args, **kwargs: object())
+    monkeypatch.setattr("src.agent.create_async_client", lambda *args, **kwargs: object())
 
     class _Question:
         question = "Need clarification?"
@@ -567,7 +567,7 @@ async def test_pipeline_task_respects_interactive_validation_setting(monkeypatch
         _write_assignment_brief(storage)
         await kwargs["on_questions"]([_Question()], storage)
 
-    monkeypatch.setattr("src.web.run_pipeline", fake_run_pipeline)
+    monkeypatch.setattr("src.pipeline.run_pipeline", fake_run_pipeline)
 
     await _run_pipeline_task(job, has_uploads=False, prompt="Test prompt")
 
@@ -595,7 +595,7 @@ async def test_pipeline_task_stops_after_question_timeout(monkeypatch):
     config.writing.interactive_validation = True
 
     monkeypatch.setattr("src.web.load_config", lambda: config)
-    monkeypatch.setattr("src.web.create_async_client", lambda *args, **kwargs: object())
+    monkeypatch.setattr("src.agent.create_async_client", lambda *args, **kwargs: object())
     monkeypatch.setattr("src.web_jobs.interaction_timeout_seconds", lambda: 0)
 
     class _Question:
@@ -607,7 +607,7 @@ async def test_pipeline_task_stops_after_question_timeout(monkeypatch):
         await kwargs["on_questions"]([_Question()], storage)
         captured["continued"] = True
 
-    monkeypatch.setattr("src.web.run_pipeline", fake_run_pipeline)
+    monkeypatch.setattr("src.pipeline.run_pipeline", fake_run_pipeline)
 
     await _run_pipeline_task(job, has_uploads=False, prompt="Test prompt")
 
@@ -631,7 +631,7 @@ async def test_pipeline_task_stops_after_source_shortfall_timeout(monkeypatch):
     config = EssayWriterConfig()
 
     monkeypatch.setattr("src.web.load_config", lambda: config)
-    monkeypatch.setattr("src.web.create_async_client", lambda *args, **kwargs: object())
+    monkeypatch.setattr("src.agent.create_async_client", lambda *args, **kwargs: object())
     monkeypatch.setattr("src.web_jobs.interaction_timeout_seconds", lambda: 0)
 
     async def fake_run_pipeline(*args, **kwargs):
@@ -648,7 +648,7 @@ async def test_pipeline_task_stops_after_source_shortfall_timeout(monkeypatch):
         )
         captured["continued"] = True
 
-    monkeypatch.setattr("src.web.run_pipeline", fake_run_pipeline)
+    monkeypatch.setattr("src.pipeline.run_pipeline", fake_run_pipeline)
 
     await _run_pipeline_task(job, has_uploads=False, prompt="Test prompt")
 
@@ -678,7 +678,7 @@ async def test_pipeline_task_syncs_extracted_input_before_pipeline_runs(monkeypa
     config = EssayWriterConfig()
 
     monkeypatch.setattr("src.web.load_config", lambda: config)
-    monkeypatch.setattr("src.web.create_async_client", lambda *args, **kwargs: object())
+    monkeypatch.setattr("src.agent.create_async_client", lambda *args, **kwargs: object())
 
     async def fake_run_pipeline(*args, **kwargs):
         captured["paths"] = {
@@ -686,7 +686,7 @@ async def test_pipeline_task_syncs_extracted_input_before_pipeline_runs(monkeypa
         }
         captured["summary"] = run_history.get_runtime_summary(job.job_id)
 
-    monkeypatch.setattr("src.web.run_pipeline", fake_run_pipeline)
+    monkeypatch.setattr("src.pipeline.run_pipeline", fake_run_pipeline)
 
     await _run_pipeline_task(job, has_uploads=False, prompt="Test prompt")
 
@@ -714,7 +714,7 @@ async def test_pipeline_task_syncs_selected_sources_before_source_shortfall_wait
     config = EssayWriterConfig()
 
     monkeypatch.setattr("src.web.load_config", lambda: config)
-    monkeypatch.setattr("src.web.create_async_client", lambda *args, **kwargs: object())
+    monkeypatch.setattr("src.agent.create_async_client", lambda *args, **kwargs: object())
 
     async def fake_wait(current_job, event, **kwargs):
         captured["status"] = current_job.status
@@ -743,7 +743,7 @@ async def test_pipeline_task_syncs_selected_sources_before_source_shortfall_wait
             },
         )
 
-    monkeypatch.setattr("src.web.run_pipeline", fake_run_pipeline)
+    monkeypatch.setattr("src.pipeline.run_pipeline", fake_run_pipeline)
 
     await _run_pipeline_task(job, has_uploads=False, prompt="Test prompt")
 
@@ -780,13 +780,13 @@ async def test_pipeline_task_passes_async_worker_without_storing_api_key(
         captured["async_api_key"] = kwargs.get("api_key")
         return async_client
 
-    monkeypatch.setattr("src.web.create_async_client", fake_create_async_client)
+    monkeypatch.setattr("src.agent.create_async_client", fake_create_async_client)
 
     async def fake_run_pipeline(*args, **kwargs):
         captured["async_worker"] = kwargs.get("async_worker")
         captured["job_api_key"] = job.api_key
 
-    monkeypatch.setattr("src.web.run_pipeline", fake_run_pipeline)
+    monkeypatch.setattr("src.pipeline.run_pipeline", fake_run_pipeline)
 
     await _run_pipeline_task(job, has_uploads=False, prompt="Test prompt")
 
@@ -940,7 +940,7 @@ def test_optional_pdf_url_updates_registry(monkeypatch):
         assert url.startswith("http")
         return mock_resp
 
-    monkeypatch.setattr("src.web_jobs.pdf_get", _fake_pdf_get)
+    monkeypatch.setattr("src.tools._http.pdf_get", _fake_pdf_get)
 
     data = {"source_id": "src_a", "pdf_url": "https://example.org/paper.pdf"}
     r = client.post(f"/optional-pdf/{jid}", data=data)

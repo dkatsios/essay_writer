@@ -89,8 +89,8 @@ class SourceReadState:
     scorable: list[dict] = field(default_factory=list)
 
 
-class SourceShortfallAbort(RuntimeError):
-    """Raised when the user declines to proceed after a source shortfall."""
+# Re-export for backward compatibility; canonical definition is in schemas.py.
+from src.schemas import SourceShortfallAbort as SourceShortfallAbort  # noqa: F401
 
 
 def _body_word_count(content: str) -> int:

@@ -78,7 +78,7 @@ def main() -> int:
         return 1
 
     _log(f"waiting for web port bind port={port_number}")
-    deadline = time.monotonic() + 30.0
+    deadline = time.monotonic() + 90.0
     while time.monotonic() < deadline:
         exit_code = web_process.poll()
         if exit_code is not None:

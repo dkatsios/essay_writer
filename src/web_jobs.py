@@ -18,16 +18,18 @@ from config.settings import load_config
 from src.job_store import JobStore
 from src.run_history_store import run_history
 from src.runtime import TokenTracker
-from src.schemas import AssignmentBrief, Clarification, ValidationQuestion
-from src.pipeline_sources import SourceShortfallAbort
+from src.schemas import (
+    AssignmentBrief,
+    Clarification,
+    SourceShortfallAbort,
+    ValidationQuestion,
+)
 from src.run_logging import (
     run_id_context,
     setup_run_logging,
     teardown_run_logging,
 )
 from src.storage import AnyStorage, create_run_storage
-from src.tools._http import pdf_get
-from src.tools.web_fetcher import extract_pdf_bytes_to_text
 
 logger = logging.getLogger(__name__)
 
@@ -748,6 +750,8 @@ def build_zip(storage: AnyStorage) -> BytesIO:
 
 
 def fetch_pdf_bytes_from_url(url: str) -> tuple[bytes | None, str | None]:
+    from src.tools._http import pdf_get
+
     parsed = urlparse(url)
     if parsed.scheme not in ("http", "https") or not parsed.netloc:
         return None, "Invalid URL (use http or https)"
@@ -772,6 +776,8 @@ def apply_optional_pdf_bytes(
     if not raw.startswith(b"%PDF"):
         return "Not a valid PDF"
     try:
+        from src.tools.web_fetcher import extract_pdf_bytes_to_text
+
         text = extract_pdf_bytes_to_text(raw)
     except Exception:
         logger.exception("PDF extract failed for job %s source %s", job_id, source_id)

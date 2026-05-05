@@ -6,8 +6,6 @@ import base64
 import mimetypes
 from pathlib import Path
 
-from src.tools.docx_reader import extract_docx_text
-
 # ---------------------------------------------------------------------------
 # File type classification
 # ---------------------------------------------------------------------------
@@ -131,6 +129,7 @@ def make_image_block(image_bytes: bytes, mime: str = "image/png") -> dict:
 
 def _extract_docx(path: Path) -> str:
     from docx import Document as DocxDocument
+    from src.tools.docx_reader import extract_docx_text
 
     return extract_docx_text(DocxDocument(str(path)))
 

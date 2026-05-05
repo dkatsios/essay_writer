@@ -15,14 +15,10 @@ from jinja2 import Environment, FileSystemLoader
 
 from config.settings import ModelsConfig, PROVIDER_PRESETS, load_config  # noqa: E402
 from src import web_jobs  # noqa: E402
-from src.agent import create_async_client  # noqa: E402
-from src.intake import build_extracted_text, scan  # noqa: E402
-from src.pipeline import run_pipeline  # noqa: E402
 from src.run_history_store import run_history  # noqa: E402
 from src.run_logging import configure_web_logging, run_id_context  # noqa: E402
 from src.runtime import parse_validation_answers  # noqa: E402
 from src.storage import create_run_storage  # noqa: E402
-from src.tools._http import close_http_clients  # noqa: E402
 
 logger = logging.getLogger(__name__)
 
@@ -48,6 +44,12 @@ async def _run_pipeline_task(
     min_sources: int | None = None,
     has_user_sources: bool = False,
 ) -> None:
+    # Defer heavy imports (instructor, google.genai, anthropic, openai, pymupdf)
+    # until job execution so they don't block port binding on slow hardware.
+    from src.agent import create_async_client
+    from src.intake import build_extracted_text, scan
+    from src.pipeline import run_pipeline
+
     await web_jobs.run_pipeline_task(
         job,
         has_uploads,
@@ -72,7 +74,12 @@ async def _lifespan(app: FastAPI):
     logger.info("Web application logging configured")
     web_jobs.start_job_ttl_sweeper()
     yield
-    close_http_clients()
+    try:
+        from src.tools._http import close_http_clients
+
+        close_http_clients()
+    except ImportError:
+        pass
 
 
 app = FastAPI(title="Essay Writer", lifespan=_lifespan)

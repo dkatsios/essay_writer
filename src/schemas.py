@@ -471,3 +471,7 @@ class EssayReconciliationPlan(BaseModel):
                 "reconciliation sections must have unique section_position values"
             )
         return self
+
+
+class SourceShortfallAbort(RuntimeError):
+    """Raised when the user declines to proceed after a source shortfall."""
