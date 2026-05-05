@@ -230,6 +230,8 @@ def _is_retryable(exc: Exception) -> bool:
         return True
     if "UNAVAILABLE" in message or "503" in message:
         return True
+    if "MALFORMED_FUNCTION_CALL" in message:
+        return True
     if "timeout" in message.lower() or "timed out" in message.lower():
         return True
     code = getattr(exc, "status_code", None)
@@ -253,6 +255,8 @@ def _compact_retry_error(exc: Exception) -> str:
         or lowered.startswith("503")
     ):
         return "503 UNAVAILABLE"
+    if "malformed_function_call" in lowered:
+        return "MALFORMED_FUNCTION_CALL"
     if "timed out" in lowered or "timeout" in lowered:
         return "timeout"
 

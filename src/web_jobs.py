@@ -731,9 +731,10 @@ async def run_pipeline_task(
             logger.warning("Job %s aborted after source shortfall: %s", job.job_id, exc)
             set_job_error(job, str(exc))
             _persist_terminal_run_history(job, status="error")
-        except Exception:
+        except Exception as exc:
             logger.exception("Pipeline failed for job %s", job.job_id)
-            set_job_error(job, "Pipeline failed. Check server logs for details.")
+            short_msg = str(exc)[:300] if str(exc) else type(exc).__name__
+            set_job_error(job, f"Pipeline failed: {short_msg}")
             _persist_terminal_run_history(job, status="error")
         finally:
             if log_handler is not None:
