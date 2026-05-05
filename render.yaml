@@ -8,6 +8,7 @@ services:
   - type: web
     name: essay-writer
     runtime: docker
+    branch: main
     plan: free
     region: frankfurt
     healthCheckPath: /health
