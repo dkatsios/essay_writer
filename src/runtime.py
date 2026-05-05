@@ -128,6 +128,9 @@ class TokenTracker:
         with self._lock:
             self.step_index = index
             self.step_count = count
+        cb = self._on_progress
+        if cb is not None:
+            cb()
 
     def set_sub_total(self, total: int) -> None:
         """Set the sub-step total and reset sub_done to 0."""
