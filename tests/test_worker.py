@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+import asyncio
+
+import pytest
+
 
 def test_claim_next_job_claims_oldest_pending_job():
     from src.web_jobs import Job, jobs
@@ -64,3 +68,44 @@ async def test_run_worker_once_claims_and_releases_job(monkeypatch):
     assert refreshed.worker_id == ""
     assert refreshed.leased_at is None
     assert refreshed.lease_expires_at is None
+
+
+@pytest.mark.asyncio
+async def test_worker_loop_retries_after_operational_error(monkeypatch):
+    from config.settings import load_config
+    from sqlalchemy.exc import OperationalError
+
+    from src import worker
+
+    disposed: list[str] = []
+    sleep_calls: list[int] = []
+    attempts = 0
+
+    async def fake_run_worker_once(*, worker_id: str | None = None) -> bool:
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise OperationalError("SELECT 1", {}, Exception("timeout"))
+        raise asyncio.CancelledError()
+
+    async def fake_sleep(seconds: int) -> None:
+        sleep_calls.append(seconds)
+        raise asyncio.CancelledError()
+
+    monkeypatch.setattr(worker, "run_worker_once", fake_run_worker_once)
+    monkeypatch.setattr(worker.asyncio, "sleep", fake_sleep)
+    monkeypatch.setattr(
+        worker.web_jobs.jobs, "dispose_engine", lambda: disposed.append("jobs")
+    )
+    monkeypatch.setattr(
+        worker.run_history, "dispose_engine", lambda: disposed.append("history")
+    )
+    monkeypatch.setattr(worker, "close_http_clients", lambda: None)
+    monkeypatch.setattr(worker.web_jobs, "worker_identity", lambda: "worker-a")
+
+    with pytest.raises(asyncio.CancelledError):
+        await worker.worker_loop(worker_id="worker-a")
+
+    assert attempts == 1
+    assert sleep_calls == [load_config().worker_poll_interval_seconds]
+    assert disposed == ["jobs", "history"]

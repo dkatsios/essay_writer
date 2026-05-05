@@ -7,9 +7,11 @@ import contextlib
 import logging
 
 from config.settings import ModelsConfig, load_config
+from sqlalchemy.exc import OperationalError
 from src.agent import create_async_client
 from src.intake import build_extracted_text, scan
 from src.pipeline import run_pipeline
+from src.run_history_store import run_history
 from src.runtime import parse_validation_answers
 from src.tools._http import close_http_clients
 from src import web_jobs
@@ -81,7 +83,14 @@ async def worker_loop(*, worker_id: str | None = None) -> None:
     logger.info("Worker started as %s", resolved_worker_id)
     try:
         while True:
-            claimed = await run_worker_once(worker_id=resolved_worker_id)
+            try:
+                claimed = await run_worker_once(worker_id=resolved_worker_id)
+            except OperationalError as exc:
+                logger.warning("Worker database operation failed: %s", exc)
+                web_jobs.jobs.dispose_engine()
+                run_history.dispose_engine()
+                await asyncio.sleep(config.worker_poll_interval_seconds)
+                continue
             if not claimed:
                 await asyncio.sleep(config.worker_poll_interval_seconds)
     finally:

@@ -147,15 +147,19 @@ class RunHistoryStore:
             self._engine.dispose()
 
         connect_args: dict[str, Any] = {}
+        engine_kwargs: dict[str, Any] = {
+            "future": True,
+            "echo": config.database.echo,
+            "connect_args": connect_args,
+        }
         if url.startswith("sqlite"):
             connect_args["check_same_thread"] = False
+        else:
+            connect_args["connect_timeout"] = 10
+            engine_kwargs["pool_pre_ping"] = True
+            engine_kwargs["pool_recycle"] = 300
 
-        self._engine = create_engine(
-            url,
-            future=True,
-            echo=config.database.echo,
-            connect_args=connect_args,
-        )
+        self._engine = create_engine(url, **engine_kwargs)
         self._engine_url = url
         self._session_factory = sessionmaker(
             bind=self._engine,
@@ -163,6 +167,13 @@ class RunHistoryStore:
             future=True,
         )
         return self._session_factory
+
+    def dispose_engine(self) -> None:
+        if self._engine is not None:
+            self._engine.dispose()
+        self._engine = None
+        self._session_factory = None
+        self._engine_url = None
 
     def _session(self) -> Session:
         return self._ensure_session_factory()()
