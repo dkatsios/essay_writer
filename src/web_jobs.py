@@ -8,6 +8,7 @@ import logging
 import os
 import socket
 import time
+import traceback
 import unicodedata
 import zipfile
 from dataclasses import dataclass, field
@@ -733,8 +734,10 @@ async def run_pipeline_task(
             _persist_terminal_run_history(job, status="error")
         except Exception as exc:
             logger.exception("Pipeline failed for job %s", job.job_id)
-            short_msg = str(exc)[:300] if str(exc) else type(exc).__name__
-            set_job_error(job, f"Pipeline failed: {short_msg}")
+            tb = traceback.format_exception(type(exc), exc, exc.__traceback__)
+            tb_str = "".join(tb)[-1000:]
+            short_msg = f"{type(exc).__name__}: {exc}"[:300]
+            set_job_error(job, f"{short_msg}\n\n{tb_str}")
             _persist_terminal_run_history(job, status="error")
         finally:
             if log_handler is not None:

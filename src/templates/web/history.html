@@ -459,6 +459,10 @@
         ? `<div class="detail-inline"><span class="detail-subtext">Live status</span>${statusPill(liveStatus.status)}</div>`
         : '';
 
+      const errorMarkup = (liveStatus && liveStatus.error)
+        ? `<div class="error-state" style="margin-top:1rem;white-space:pre-wrap;font-size:0.82rem;max-height:300px;overflow:auto;">${escapeHtml(liveStatus.error)}</div>`
+        : '';
+
       return `
         <div class="detail-header">
           <div>
@@ -475,6 +479,7 @@
           <div class="metric-card"><span class="label">Duration</span><div class="value">${escapeHtml(formatSeconds(summary.total_duration_seconds))}</div></div>
           <div class="metric-card"><span class="label">Final Words</span><div class="value">${escapeHtml(formatInteger(summary.final_words || summary.draft_words || 0))}</div></div>
         </div>
+        ${errorMarkup}
       `;
     }
 
@@ -536,7 +541,7 @@
                   <td>${escapeHtml(artifact.relative_path)}</td>
                   <td>${escapeHtml(artifact.artifact_type)}</td>
                   <td>${escapeHtml(formatInteger(artifact.size_bytes))} B</td>
-                  <td>${artifact.is_available ? 'Available' : '<span class="artifact-unavailable">Deleted locally</span>'}</td>
+                  <td>${artifact.is_available ? 'Available' : '<span class="artifact-unavailable">Deleted</span>'}</td>
                   <td>${escapeHtml(formatDateTime(artifact.updated_at))}</td>
                 </tr>
               `).join('')}
