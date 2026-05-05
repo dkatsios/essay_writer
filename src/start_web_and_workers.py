@@ -57,6 +57,7 @@ def main() -> int:
     web_process = subprocess.Popen(
         [
             sys.executable,
+            "-u",
             "-m",
             "uvicorn",
             "src.web:app",
@@ -77,7 +78,15 @@ def main() -> int:
         return 1
 
     _log(f"waiting for web port bind port={port_number}")
-    if not _wait_for_port(port_number):
+    deadline = time.monotonic() + 30.0
+    while time.monotonic() < deadline:
+        exit_code = web_process.poll()
+        if exit_code is not None:
+            _log(f"web process exited before bind exit_code={exit_code}")
+            return exit_code if exit_code != 0 else 1
+        if _wait_for_port(port_number, timeout_seconds=0.2):
+            break
+    else:
         _log("web port did not bind before timeout")
         _terminate(processes)
         try:
