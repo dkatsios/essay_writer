@@ -318,20 +318,6 @@ class RunHistoryStore:
                         .values(**values)
                     )
 
-            for relative_path, existing in existing_by_path.items():
-                if relative_path in discovered_by_path or not existing["is_available"]:
-                    continue
-                session.execute(
-                    update(_artifacts_table)
-                    .where(_artifacts_table.c.job_id == job_id)
-                    .where(_artifacts_table.c.relative_path == relative_path)
-                    .values(
-                        is_available=False,
-                        updated_at=synced_at,
-                        deleted_at=synced_at,
-                    )
-                )
-
             session.commit()
 
         return self.list_artifacts(job_id)

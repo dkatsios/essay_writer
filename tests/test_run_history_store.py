@@ -105,7 +105,7 @@ def test_step_metrics_upsert_by_job_and_step_name():
     assert rows[1]["status"] == "failed"
 
 
-def test_sync_artifacts_upserts_and_marks_missing_files_unavailable():
+def test_sync_artifacts_upserts_and_does_not_mark_missing_files():
     from src.run_history_store import RunHistoryStore
     from src.storage import MemoryRunStorage
 
@@ -126,12 +126,13 @@ def test_sync_artifacts_upserts_and_marks_missing_files_unavailable():
     assert by_path["sources/notes/s1.json"]["artifact_type"] == "source_note"
     assert all(row["is_available"] for row in artifacts)
 
+    # After deleting a file, sync should NOT mark it as unavailable
+    # (only mark_artifacts_deleted does that during explicit cleanup)
     storage.delete("essay/draft.md")
 
     artifacts = store.sync_artifacts("job123", storage, current_time=20.0)
     by_path = {row["relative_path"]: row for row in artifacts}
-    assert by_path["essay/draft.md"]["is_available"] is False
-    assert by_path["essay/draft.md"]["deleted_at"] == 20.0
+    assert by_path["essay/draft.md"]["is_available"] is True
     assert by_path["brief/assignment.json"]["is_available"] is True
 
 

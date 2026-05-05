@@ -411,8 +411,11 @@ class JobStore:
             )
         return [self._hydrate_job(row) for row in rows]
 
-    def mark_stale_active_jobs(self, message: str) -> int:
-        """Fail active jobs left behind by a previous process restart."""
+    def mark_stale_active_jobs(self, message: str) -> list[str]:
+        """Fail active jobs left behind by a previous process restart.
+
+        Returns the list of job IDs that were marked as failed.
+        """
         stale_statuses = ("running", "questions", "optional_pdfs", "source_shortfall")
         finished_at = time.time()
         with self._session() as session:
@@ -422,7 +425,7 @@ class JobStore:
                 )
             ).all()
             if not rows:
-                return 0
+                return []
             stale_job_ids = [str(row[0]) for row in rows]
             session.execute(
                 update(_jobs_table)
@@ -442,7 +445,7 @@ class JobStore:
             session.commit()
         for job_id in stale_job_ids:
             self._live_jobs.pop(job_id, None)
-        return len(stale_job_ids)
+        return stale_job_ids
 
     def reset_for_tests(self) -> None:
         if self._engine is not None:

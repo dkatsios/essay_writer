@@ -51,7 +51,9 @@ def _essay_console_handlers() -> list[logging.Handler]:
 def test_health():
     response = client.get("/health")
     assert response.status_code == 200
-    assert response.json() == {"status": "ok"}
+    data = response.json()
+    assert data["status"] == "ok"
+    assert "version" in data
 
 
 def test_index_links_to_history_page():
@@ -555,7 +557,9 @@ async def test_pipeline_task_respects_interactive_validation_setting(monkeypatch
     config.writing.interactive_validation = False
 
     monkeypatch.setattr("src.web.load_config", lambda: config)
-    monkeypatch.setattr("src.agent.create_async_client", lambda *args, **kwargs: object())
+    monkeypatch.setattr(
+        "src.agent.create_async_client", lambda *args, **kwargs: object()
+    )
 
     class _Question:
         question = "Need clarification?"
@@ -595,7 +599,9 @@ async def test_pipeline_task_stops_after_question_timeout(monkeypatch):
     config.writing.interactive_validation = True
 
     monkeypatch.setattr("src.web.load_config", lambda: config)
-    monkeypatch.setattr("src.agent.create_async_client", lambda *args, **kwargs: object())
+    monkeypatch.setattr(
+        "src.agent.create_async_client", lambda *args, **kwargs: object()
+    )
     monkeypatch.setattr("src.web_jobs.interaction_timeout_seconds", lambda: 0)
 
     class _Question:
@@ -631,7 +637,9 @@ async def test_pipeline_task_stops_after_source_shortfall_timeout(monkeypatch):
     config = EssayWriterConfig()
 
     monkeypatch.setattr("src.web.load_config", lambda: config)
-    monkeypatch.setattr("src.agent.create_async_client", lambda *args, **kwargs: object())
+    monkeypatch.setattr(
+        "src.agent.create_async_client", lambda *args, **kwargs: object()
+    )
     monkeypatch.setattr("src.web_jobs.interaction_timeout_seconds", lambda: 0)
 
     async def fake_run_pipeline(*args, **kwargs):
@@ -678,7 +686,9 @@ async def test_pipeline_task_syncs_extracted_input_before_pipeline_runs(monkeypa
     config = EssayWriterConfig()
 
     monkeypatch.setattr("src.web.load_config", lambda: config)
-    monkeypatch.setattr("src.agent.create_async_client", lambda *args, **kwargs: object())
+    monkeypatch.setattr(
+        "src.agent.create_async_client", lambda *args, **kwargs: object()
+    )
 
     async def fake_run_pipeline(*args, **kwargs):
         captured["paths"] = {
@@ -714,7 +724,9 @@ async def test_pipeline_task_syncs_selected_sources_before_source_shortfall_wait
     config = EssayWriterConfig()
 
     monkeypatch.setattr("src.web.load_config", lambda: config)
-    monkeypatch.setattr("src.agent.create_async_client", lambda *args, **kwargs: object())
+    monkeypatch.setattr(
+        "src.agent.create_async_client", lambda *args, **kwargs: object()
+    )
 
     async def fake_wait(current_job, event, **kwargs):
         captured["status"] = current_job.status

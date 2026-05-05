@@ -115,23 +115,18 @@ def _persist_run_history_snapshot(job: Job) -> None:
             status=job.status,
             provider=job.provider,
         )
-    else:
-        payload = {
-            "status": job.status,
-            "provider": job.provider,
-            "total_cost_usd": 0.0,
-            "total_input_tokens": 0,
-            "total_output_tokens": 0,
-            "total_thinking_tokens": 0,
-            "total_duration_seconds": 0.0,
-            "step_count": 0,
-            "target_words": job.target_words,
-            "draft_words": 0,
-            "final_words": 0,
-        }
-    if job.target_words is not None and not payload.get("target_words"):
-        payload["target_words"] = job.target_words
-    run_history.save_runtime_summary(job.job_id, **payload)
+        if job.target_words is not None and not payload.get("target_words"):
+            payload["target_words"] = job.target_words
+        run_history.save_runtime_summary(job.job_id, **payload)
+    elif job.status in ("pending", "error"):
+        # No tracker yet — persist only lightweight status metadata so the job
+        # appears in history immediately. Avoid overwriting accumulated metrics.
+        run_history.save_runtime_summary(
+            job.job_id,
+            status=job.status,
+            provider=job.provider,
+            target_words=job.target_words,
+        )
 
 
 def _persist_terminal_run_history(job: Job, *, status: str) -> None:
@@ -406,12 +401,16 @@ def mark_stale_jobs_on_startup() -> int:
     config = load_config()
     if not config.database.mark_stale_jobs_on_startup:
         return 0
-    count = jobs.mark_stale_active_jobs(
+    stale_job_ids = jobs.mark_stale_active_jobs(
         "Server restarted while this job was active. Please submit it again."
     )
-    if count:
-        logger.warning("Marked %d stale active job(s) as failed on startup", count)
-    return count
+    for job_id in stale_job_ids:
+        run_history.save_runtime_summary(job_id, status="error")
+    if stale_job_ids:
+        logger.warning(
+            "Marked %d stale active job(s) as failed on startup", len(stale_job_ids)
+        )
+    return len(stale_job_ids)
 
 
 def build_job_extra_prompt(job: Job) -> str | None:
