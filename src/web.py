@@ -93,7 +93,7 @@ def _download_basename(job: Job) -> str:
 @app.get("/health")
 async def health():
     """Liveness probe for platforms (e.g. Render) — no API keys required."""
-    return JSONResponse({"status": "ok"})
+    return JSONResponse({"status": "ok", "version": "2026-05-05a"})
 
 
 @app.get("/history", response_class=HTMLResponse)
