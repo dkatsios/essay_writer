@@ -840,8 +840,6 @@
           <div class="metric-card"><span class="label">Status</span><div class="value">${escapeHtml(effectiveStatus || 'unknown')}</div></div>
           <div class="metric-card"><span class="label">Current Step</span><div class="value compact">${escapeHtml(stepText || '—')}</div></div>
           <div class="metric-card"><span class="label">Total Cost</span><div class="value">${escapeHtml(formatUsd(summary.total_cost_usd))}</div></div>
-          <div class="metric-card"><span class="label">Input Tokens</span><div class="value">${escapeHtml(formatInteger(summary.total_input_tokens))}</div></div>
-          <div class="metric-card"><span class="label">Output Tokens</span><div class="value">${escapeHtml(formatInteger(summary.total_output_tokens))}</div></div>
           <div class="metric-card"><span class="label">Duration</span><div class="value">${escapeHtml(formatSeconds(summary.total_duration_seconds))}</div></div>
           <div class="metric-card"><span class="label">Final Words</span><div class="value">${escapeHtml(formatInteger(summary.final_words || summary.draft_words || 0))}</div></div>
         </div>
@@ -864,7 +862,6 @@
                 <th>Status</th>
                 <th>Model</th>
                 <th>Cost</th>
-                <th>Tokens</th>
                 <th>Duration</th>
               </tr>
             </thead>
@@ -875,7 +872,6 @@
                   <td>${statusPill(step.status)}</td>
                   <td>${escapeHtml(step.model || 'n/a')}</td>
                   <td>${escapeHtml(formatUsd(step.cost_usd))}</td>
-                  <td>${escapeHtml(formatInteger(step.input_tokens + step.output_tokens + step.thinking_tokens))}</td>
                   <td>${escapeHtml(formatSeconds(step.duration_seconds))}</td>
                 </tr>
               `).join('')}
