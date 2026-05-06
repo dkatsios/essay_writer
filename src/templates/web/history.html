@@ -905,7 +905,9 @@
         return;
       }
       historyRefreshInFlight = true;
-      historyMetaEl.textContent = historyLoaded ? 'Refreshing history…' : 'Loading history…';
+      if (!historyLoaded) {
+        historyMetaEl.textContent = 'Loading history…';
+      }
       if (showLoading || !historyLoaded) {
         jobListEl.innerHTML = '<div class="loading-state">Loading persisted run summaries…</div>';
       }
