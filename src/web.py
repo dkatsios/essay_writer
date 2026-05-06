@@ -129,7 +129,7 @@ async def history_jobs(
 async def history_job_detail(
     job_id: str,
     include_artifacts: bool = Query(True),
-    available_artifacts_only: bool = Query(False),
+    available_artifacts_only: bool = Query(True),
 ):
     """Return persisted run history for one job, plus live status when available."""
     summary = run_history.get_runtime_summary(job_id)
@@ -137,11 +137,12 @@ async def history_job_detail(
     artifacts: list[dict[str, object]] = []
     if include_artifacts:
         artifacts = run_history.list_artifacts(job_id)
+    has_any_artifacts = bool(artifacts)
     if include_artifacts and available_artifacts_only:
         artifacts = [item for item in artifacts if item["is_available"]]
 
     live_job = _refresh_job(job_id)
-    if summary is None and not steps and not artifacts and live_job is None:
+    if summary is None and not steps and not has_any_artifacts and live_job is None:
         return JSONResponse({"error": "Job not found"}, status_code=404)
 
     payload: dict[str, object] = {
@@ -159,15 +160,16 @@ async def history_job_detail(
 @app.get("/history/jobs/{job_id}/artifacts")
 async def history_job_artifacts(
     job_id: str,
-    available_artifacts_only: bool = Query(False),
+    available_artifacts_only: bool = Query(True),
 ):
     """Return persisted artifact metadata for one job on demand."""
     summary = run_history.get_runtime_summary(job_id)
     live_job = _refresh_job(job_id)
     artifacts = run_history.list_artifacts(job_id)
+    has_any_artifacts = bool(artifacts)
     if available_artifacts_only:
         artifacts = [item for item in artifacts if item["is_available"]]
-    if summary is None and not artifacts and live_job is None:
+    if summary is None and not has_any_artifacts and live_job is None:
         return JSONResponse({"error": "Job not found"}, status_code=404)
     return JSONResponse({"job_id": job_id, "artifacts": artifacts})
 

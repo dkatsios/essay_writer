@@ -261,14 +261,44 @@ def test_history_job_detail_can_filter_unavailable_artifacts():
     run_history.sync_artifacts("jobfilter001", storage, current_time=12.0)
     run_history.mark_artifacts_deleted("jobfilter001", current_time=13.0)
 
-    response = client.get(
-        "/history/jobs/jobfilter001",
-        params={"available_artifacts_only": "true"},
-    )
+    response = client.get("/history/jobs/jobfilter001")
 
     assert response.status_code == 200
     body = response.json()
     assert body["artifacts"] == []
+
+
+def test_history_job_detail_can_include_unavailable_artifacts_explicitly():
+    from src.run_history_store import run_history
+    from src.storage import MemoryRunStorage
+
+    storage = MemoryRunStorage("runs/jobfilter002/")
+    storage.write_text("report.md", "# Report")
+
+    run_history.save_runtime_summary(
+        "jobfilter002",
+        status="done",
+        provider="google",
+        total_cost_usd=1.5,
+        total_input_tokens=300,
+        total_output_tokens=120,
+        total_thinking_tokens=15,
+        total_duration_seconds=30.0,
+        step_count=5,
+        updated_at=10.0,
+    )
+    run_history.sync_artifacts("jobfilter002", storage, current_time=12.0)
+    run_history.mark_artifacts_deleted("jobfilter002", current_time=13.0)
+
+    response = client.get(
+        "/history/jobs/jobfilter002",
+        params={"available_artifacts_only": "false"},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["artifacts"][0]["relative_path"] == "report.md"
+    assert body["artifacts"][0]["is_available"] is False
 
 
 def test_history_job_detail_can_skip_artifacts_for_background_refreshes():
@@ -346,6 +376,41 @@ def test_history_job_artifacts_returns_artifacts_on_demand():
     body = response.json()
     assert body["job_id"] == "jobartifacts1"
     assert body["artifacts"][0]["relative_path"] == "report.md"
+
+
+def test_history_job_artifacts_hides_unavailable_by_default_but_can_include_them():
+    from src.run_history_store import run_history
+    from src.storage import MemoryRunStorage
+
+    storage = MemoryRunStorage("runs/jobartifacts2/")
+    storage.write_text("report.md", "# Report")
+
+    run_history.save_runtime_summary(
+        "jobartifacts2",
+        status="done",
+        provider="google",
+        total_cost_usd=1.5,
+        total_input_tokens=300,
+        total_output_tokens=120,
+        total_thinking_tokens=15,
+        total_duration_seconds=30.0,
+        step_count=5,
+        updated_at=10.0,
+    )
+    run_history.sync_artifacts("jobartifacts2", storage, current_time=12.0)
+    run_history.mark_artifacts_deleted("jobartifacts2", current_time=13.0)
+
+    filtered = client.get("/history/jobs/jobartifacts2/artifacts")
+    assert filtered.status_code == 200
+    assert filtered.json()["artifacts"] == []
+
+    unfiltered = client.get(
+        "/history/jobs/jobartifacts2/artifacts",
+        params={"available_artifacts_only": "false"},
+    )
+    assert unfiltered.status_code == 200
+    assert unfiltered.json()["artifacts"][0]["relative_path"] == "report.md"
+    assert unfiltered.json()["artifacts"][0]["is_available"] is False
 
 
 def test_history_job_detail_404_when_job_is_unknown():

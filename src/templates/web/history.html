@@ -351,6 +351,11 @@
       color: var(--bad-text);
       background: #fff7f7;
     }
+    .detail-actions button.primary {
+      border-color: rgba(37, 99, 235, 0.18);
+      color: #1d4ed8;
+      background: #eff6ff;
+    }
     .detail-actions button:disabled {
       opacity: .6;
       cursor: not-allowed;
@@ -382,6 +387,27 @@
     .action-strip-copy span {
       color: var(--text-muted);
       font-size: .9rem;
+    }
+    .action-groups {
+      display: flex;
+      align-items: center;
+      justify-content: flex-end;
+      gap: .75rem 1rem;
+      flex-wrap: wrap;
+    }
+    .action-group {
+      display: flex;
+      align-items: center;
+      gap: .55rem;
+      flex-wrap: wrap;
+    }
+    .action-group-label {
+      font-size: .76rem;
+      font-weight: 700;
+      letter-spacing: .05em;
+      text-transform: uppercase;
+      color: var(--text-muted);
+      margin-right: .15rem;
     }
     .artifact-unavailable { color: var(--bad-text); font-weight: 600; }
     @media (max-width: 900px) {
@@ -464,6 +490,7 @@
     let historyLoaded = false;
     let historyRefreshInFlight = false;
     let currentDetail = null;
+    let downloadInProgress = false;
     let artifactsState = {
       jobId: null,
       visible: false,
@@ -629,25 +656,91 @@
       const cancelRequested = Boolean(liveStatus?.cancel_requested);
       const deleteRequested = Boolean(liveStatus?.delete_requested);
       const terminal = isTerminalStatus(effectiveStatus);
+      const done = effectiveStatus === 'done';
       const removeLabel = deleteRequested
         ? 'Removing…'
         : (terminal ? 'Remove' : 'Cancel + Remove');
       const helperText = terminal
         ? 'This job is finished. You can remove it from history and storage.'
         : 'Stop this job now, or stop it and remove all persisted data.';
+      const downloadHelperText = done
+        ? 'Download the essay directly from history as a docx or the full zip.'
+        : helperText;
 
       return `
         <div class="action-strip">
           <div class="action-strip-copy">
-            <strong>Actions</strong>
-            <span>${escapeHtml(helperText)}</span>
+            <strong>${escapeHtml(done ? 'Downloads & Actions' : 'Actions')}</strong>
+            <span>${escapeHtml(downloadHelperText)}</span>
           </div>
-          <div class="detail-actions">
-            ${terminal ? '' : `<button type="button" data-action="cancel" ${cancelRequested || deleteRequested ? 'disabled' : ''}>${escapeHtml(cancelRequested ? 'Cancelling…' : 'Cancel')}</button>`}
-            <button type="button" class="danger" data-action="remove" ${deleteRequested ? 'disabled' : ''}>${escapeHtml(removeLabel)}</button>
+          <div class="action-groups">
+            ${done ? `
+              <div class="action-group">
+                <span class="action-group-label">Download</span>
+                <div class="detail-actions">
+                  <button type="button" class="primary" data-action="download-docx" ${downloadInProgress ? 'disabled' : ''}>${escapeHtml(downloadInProgress ? 'Preparing…' : 'DOCX')}</button>
+                  <button type="button" class="primary" data-action="download-zip" ${downloadInProgress ? 'disabled' : ''}>${escapeHtml(downloadInProgress ? 'Preparing…' : 'ZIP')}</button>
+                </div>
+              </div>
+            ` : ''}
+            <div class="action-group">
+              <span class="action-group-label">Manage</span>
+              <div class="detail-actions">
+                ${terminal ? '' : `<button type="button" data-action="cancel" ${cancelRequested || deleteRequested ? 'disabled' : ''}>${escapeHtml(cancelRequested ? 'Cancelling…' : 'Cancel')}</button>`}
+                <button type="button" class="danger" data-action="remove" ${deleteRequested ? 'disabled' : ''}>${escapeHtml(removeLabel)}</button>
+              </div>
+            </div>
           </div>
         </div>
       `;
+    }
+
+    function filenameFromDisposition(headerValue) {
+      if (!headerValue) return null;
+      const utf8Match = headerValue.match(/filename\*=UTF-8''([^;]+)/i);
+      if (utf8Match) {
+        try {
+          return decodeURIComponent(utf8Match[1]);
+        } catch {
+          return utf8Match[1];
+        }
+      }
+      const plainMatch = headerValue.match(/filename="?([^";]+)"?/i);
+      return plainMatch ? plainMatch[1] : null;
+    }
+
+    async function downloadHistoryJob(format) {
+      if (!selectedJobId || downloadInProgress) {
+        return;
+      }
+      downloadInProgress = true;
+      renderDetailPanel();
+      try {
+        const url = format === 'docx'
+          ? `/download/${encodeURIComponent(selectedJobId)}?format=docx`
+          : `/download/${encodeURIComponent(selectedJobId)}`;
+        const res = await fetch(url);
+        if (!res.ok) {
+          throw new Error(`Download failed (${res.status})`);
+        }
+        const blob = await res.blob();
+        const blobUrl = URL.createObjectURL(blob);
+        const anchor = document.createElement('a');
+        anchor.href = blobUrl;
+        anchor.download =
+          filenameFromDisposition(res.headers.get('Content-Disposition')) ||
+          `${selectedJobId}.${format === 'docx' ? 'docx' : 'zip'}`;
+        anchor.rel = 'noopener';
+        document.body.appendChild(anchor);
+        anchor.click();
+        anchor.remove();
+        URL.revokeObjectURL(blobUrl);
+      } catch (error) {
+        historyMetaEl.textContent = error.message;
+      } finally {
+        downloadInProgress = false;
+        renderDetailPanel();
+      }
     }
 
     function renderArtifactsSection() {
@@ -854,6 +947,14 @@
     }
 
     async function handleDetailAction(action) {
+      if (action === 'download-docx') {
+        await downloadHistoryJob('docx');
+        return;
+      }
+      if (action === 'download-zip') {
+        await downloadHistoryJob('zip');
+        return;
+      }
       if (action === 'show-artifacts') {
         await loadArtifacts(selectedJobId);
         return;
