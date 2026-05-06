@@ -9,6 +9,7 @@ from typing import Any
 from sqlalchemy import Boolean, Column, Float, Integer, String, Table, Text
 from sqlalchemy import create_engine, insert, select, update
 from sqlalchemy.engine import Engine
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, sessionmaker
 
 from config.settings import load_config
@@ -308,7 +309,19 @@ class RunHistoryStore:
                 existing = existing_by_path.get(relative_path)
                 values = {"job_id": job_id, **payload}
                 if existing is None:
-                    session.execute(insert(_artifacts_table).values(**values))
+                    try:
+                        session.execute(insert(_artifacts_table).values(**values))
+                        session.flush()
+                    except IntegrityError:
+                        session.rollback()
+                        # Row was inserted concurrently; update instead.
+                        values["created_at"] = synced_at
+                        session.execute(
+                            update(_artifacts_table)
+                            .where(_artifacts_table.c.job_id == job_id)
+                            .where(_artifacts_table.c.relative_path == relative_path)
+                            .values(**values)
+                        )
                 else:
                     values["created_at"] = float(existing["created_at"])
                     session.execute(

@@ -58,6 +58,8 @@ _jobs_table = Table(
     Column("current_step", Text, nullable=False, default=""),
     Column("step_index", Integer, nullable=True),
     Column("step_count", Integer, nullable=True),
+    Column("retry_count", Integer, nullable=False, default=0),
+    Column("not_before", Float, nullable=True),
 )
 
 
@@ -163,6 +165,8 @@ class JobStore:
             "current_step": job.current_step,
             "step_index": job.step_index,
             "step_count": job.step_count,
+            "retry_count": job.retry_count,
+            "not_before": job.not_before,
         }
 
     def _hydrate_job(self, row: RowMapping) -> Job:
@@ -212,15 +216,48 @@ class JobStore:
             current_step=row.get("current_step") or "",
             step_index=row.get("step_index"),
             step_count=row.get("step_count"),
+            retry_count=int(row.get("retry_count") or 0),
+            not_before=(
+                float(row["not_before"]) if row.get("not_before") is not None else None
+            ),
             _sse_event=transient.sse_event,
         )
 
     def save(self, job: Job) -> Job:
         payload = self._serialize_job(job)
         with self._session() as session:
-            existing = session.execute(
-                select(_jobs_table.c.job_id).where(_jobs_table.c.job_id == job.job_id)
-            ).scalar_one_or_none()
+            existing = (
+                session.execute(
+                    select(
+                        _jobs_table.c.job_id,
+                        _jobs_table.c.worker_id,
+                        _jobs_table.c.leased_at,
+                        _jobs_table.c.lease_expires_at,
+                    ).where(_jobs_table.c.job_id == job.job_id)
+                )
+                .mappings()
+                .one_or_none()
+            )
+            if (
+                existing is not None
+                and existing["worker_id"]
+                and payload["worker_id"] == existing["worker_id"]
+                and existing["lease_expires_at"] is not None
+                and (
+                    payload["lease_expires_at"] is None
+                    or payload["lease_expires_at"] < existing["lease_expires_at"]
+                )
+            ):
+                # Preserve a fresher lease written by the heartbeat task when
+                # routine job-state saves are still holding older in-memory data.
+                payload["leased_at"] = existing["leased_at"]
+                payload["lease_expires_at"] = existing["lease_expires_at"]
+                job.leased_at = (
+                    float(existing["leased_at"])
+                    if existing["leased_at"] is not None
+                    else None
+                )
+                job.lease_expires_at = float(existing["lease_expires_at"])
             if existing is None:
                 session.execute(insert(_jobs_table).values(**payload))
             else:
@@ -274,7 +311,13 @@ class JobStore:
                 session.execute(
                     select(_jobs_table.c.job_id)
                     .where(
-                        (_jobs_table.c.status == "pending")
+                        (
+                            (_jobs_table.c.status == "pending")
+                            & (
+                                _jobs_table.c.not_before.is_(None)
+                                | (_jobs_table.c.not_before <= now)
+                            )
+                        )
                         | (
                             _jobs_table.c.status.in_(reclaimable_statuses)
                             & (
@@ -296,6 +339,10 @@ class JobStore:
                     .where(
                         (
                             (_jobs_table.c.status == "pending")
+                            & (
+                                _jobs_table.c.not_before.is_(None)
+                                | (_jobs_table.c.not_before <= now)
+                            )
                             & (
                                 _jobs_table.c.worker_id.is_(None)
                                 | _jobs_table.c.lease_expires_at.is_(None)

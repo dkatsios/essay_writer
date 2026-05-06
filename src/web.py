@@ -72,6 +72,7 @@ async def _run_pipeline_task(
 async def _lifespan(app: FastAPI):
     configure_web_logging()
     logger.info("Web application logging configured")
+    web_jobs.mark_stale_jobs_on_startup()
     web_jobs.start_job_ttl_sweeper()
     yield
     try:
@@ -93,7 +94,7 @@ def _download_basename(job: Job) -> str:
 @app.get("/health")
 async def health():
     """Liveness probe for platforms (e.g. Render) — no API keys required."""
-    return JSONResponse({"status": "ok", "version": "2026-05-05a"})
+    return JSONResponse({"status": "ok", "version": "2026-05-05b"})
 
 
 @app.get("/history", response_class=HTMLResponse)

@@ -38,6 +38,8 @@ _DEFAULT_JOB_TTL_SECONDS = 86_400
 _DEFAULT_SWEEP_INTERVAL_SECONDS = 300
 _DEFAULT_INTERACTION_TIMEOUT_SECONDS = 1_800
 _MAX_OPTIONAL_PDF_BYTES = 30 * 1024 * 1024
+_MAX_JOB_RETRIES = 3
+_RETRY_BACKOFF_SECONDS = 60
 
 _LEVEL_KEYWORDS = {
     "ακαδημαϊκό επίπεδο",
@@ -92,6 +94,8 @@ class Job:
     current_step: str = ""
     step_index: int | None = None
     step_count: int | None = None
+    retry_count: int = 0
+    not_before: float | None = None
     api_key: str = ""
     _sse_event: asyncio.Event = field(default_factory=asyncio.Event)
 
@@ -104,7 +108,10 @@ jobs = JobStore()
 
 
 def _sync_job_artifacts(job: Job) -> None:
-    run_history.sync_artifacts(job.job_id, job.get_storage())
+    try:
+        run_history.sync_artifacts(job.job_id, job.get_storage())
+    except Exception:
+        logger.warning("Failed to sync artifacts for job %s", job.job_id, exc_info=True)
 
 
 def _persist_run_history_snapshot(job: Job) -> None:
@@ -138,27 +145,34 @@ def _persist_terminal_run_history(job: Job, *, status: str) -> None:
             provider=job.provider,
         )
     else:
+        # No tracker — persist only status without overwriting accumulated metrics.
         payload = {
             "status": status,
             "provider": job.provider,
-            "total_cost_usd": 0.0,
-            "total_input_tokens": 0,
-            "total_output_tokens": 0,
-            "total_thinking_tokens": 0,
-            "total_duration_seconds": 0.0,
-            "step_count": 0,
             "target_words": job.target_words,
-            "draft_words": 0,
-            "final_words": 0,
         }
-    run_history.save_runtime_summary(job.job_id, **payload)
-    _sync_job_artifacts(job)
+    try:
+        run_history.save_runtime_summary(job.job_id, **payload)
+        _sync_job_artifacts(job)
+    except Exception:
+        logger.warning(
+            "Failed to persist terminal run history for job %s",
+            job.job_id,
+            exc_info=True,
+        )
 
 
 def save_job(job: Job) -> Job:
     """Persist the current durable view of *job* and remember local transients."""
     saved = jobs.save(job)
-    _persist_run_history_snapshot(saved)
+    try:
+        _persist_run_history_snapshot(saved)
+    except Exception:
+        logger.warning(
+            "Failed to persist run history snapshot for job %s",
+            job.job_id,
+            exc_info=True,
+        )
     return saved
 
 
@@ -200,6 +214,8 @@ def build_status_payload(job: Job) -> dict:
         payload["source_shortfall"] = job.source_shortfall
     if job.status == "error":
         payload["error"] = job.error
+    if job.retry_count > 0:
+        payload["retry_count"] = job.retry_count
     payload["clarification_rounds"] = job.clarification_rounds
     payload["optional_pdf_rounds"] = job.optional_pdf_rounds
     payload["submit"] = {
@@ -282,6 +298,47 @@ def set_job_error(job: Job, message: str) -> None:
     notify_job(job)
 
 
+def is_retryable_error(exc: Exception) -> bool:
+    """Return True for transient API errors that justify a job-level retry."""
+    from src.agent import _is_retryable
+
+    return _is_retryable(exc)
+
+
+def requeue_for_retry(job: Job) -> bool:
+    """Requeue a failed job for retry if below max retries.
+
+    Returns True if the job was requeued, False if max retries exceeded.
+    """
+    if job.retry_count >= _MAX_JOB_RETRIES:
+        return False
+    job.retry_count += 1
+    job.status = "pending"
+    job.error = ""
+    job.questions = None
+    job.optional_pdf_items = None
+    job.optional_pdf_allowed_ids = None
+    job.source_shortfall = None
+    job.source_shortfall_decision = ""
+    job.worker_id = ""
+    job.leased_at = None
+    job.lease_expires_at = None
+    job.current_step = ""
+    job.step_index = None
+    job.step_count = None
+    job.not_before = time.time() + _RETRY_BACKOFF_SECONDS * job.retry_count
+    save_job(job)
+    logger.warning(
+        "Job %s requeued for retry %d/%d (not_before=%.0fs from now)",
+        job.job_id,
+        job.retry_count,
+        _MAX_JOB_RETRIES,
+        _RETRY_BACKOFF_SECONDS * job.retry_count,
+    )
+    notify_job(job)
+    return True
+
+
 class JobInteractionTimeout(Exception):
     """Raised when a web job waits too long for user interaction."""
 
@@ -306,6 +363,8 @@ def _copy_job_state(target: Job, latest: Job) -> None:
     target.current_step = latest.current_step
     target.step_index = latest.step_index
     target.step_count = latest.step_count
+    target.retry_count = latest.retry_count
+    target.not_before = latest.not_before
 
 
 async def async_wait_for_job_signal(
@@ -711,6 +770,7 @@ async def run_pipeline_task(
                 async_reviewer=async_reviewer,
                 job_id=job.job_id,
                 run_history_store=run_history,
+                resume=job.retry_count > 0,
             )
 
             tracker.write_report(storage)
@@ -733,6 +793,14 @@ async def run_pipeline_task(
             _persist_terminal_run_history(job, status="error")
         except Exception as exc:
             logger.exception("Pipeline failed for job %s", job.job_id)
+            if is_retryable_error(exc) and requeue_for_retry(job):
+                logger.info(
+                    "Job %s will be retried (retry %d/%d)",
+                    job.job_id,
+                    job.retry_count,
+                    _MAX_JOB_RETRIES,
+                )
+                return
             tb = traceback.format_exception(type(exc), exc, exc.__traceback__)
             tb_str = "".join(tb)[-1000:]
             short_msg = f"{type(exc).__name__}: {exc}"[:300]
