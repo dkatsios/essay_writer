@@ -7,7 +7,7 @@ import time
 from typing import Any
 
 from sqlalchemy import Boolean, Column, Float, Integer, String, Table, Text
-from sqlalchemy import create_engine, insert, select, update
+from sqlalchemy import create_engine, delete, insert, select, update
 from sqlalchemy.engine import Engine
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, sessionmaker
@@ -364,6 +364,23 @@ class RunHistoryStore:
                 .all()
             )
         return [dict(row) for row in rows]
+
+    def purge_job(self, job_id: str) -> None:
+        with self._session() as session:
+            session.execute(
+                delete(_runtime_summaries_table).where(
+                    _runtime_summaries_table.c.job_id == job_id
+                )
+            )
+            session.execute(
+                delete(_step_metrics_table).where(
+                    _step_metrics_table.c.job_id == job_id
+                )
+            )
+            session.execute(
+                delete(_artifacts_table).where(_artifacts_table.c.job_id == job_id)
+            )
+            session.commit()
 
     def reset_for_tests(self) -> None:
         if self._engine is not None:

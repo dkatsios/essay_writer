@@ -101,6 +101,31 @@ async def test_run_worker_once_claims_and_releases_job(monkeypatch):
     assert refreshed.lease_expires_at is None
 
 
+async def test_run_worker_once_purges_job_after_delete_request(monkeypatch):
+    from src.run_history_store import run_history
+    from src.web_jobs import Job, jobs, save_job
+    from src.worker import run_worker_once
+
+    job = Job(job_id="workerpurge01", status="pending", run_dir="runs/workerpurge01")
+    save_job(job)
+
+    async def fake_run_pipeline_task(job, *args, **kwargs):
+        job.status = "cancelled"
+        job.delete_requested = True
+        save_job(job)
+
+    monkeypatch.setattr("src.worker.web_jobs.run_pipeline_task", fake_run_pipeline_task)
+    monkeypatch.setattr(
+        "src.worker.web_jobs.infer_job_has_uploads", lambda j: (False, False)
+    )
+
+    claimed = await run_worker_once(worker_id="worker-a")
+
+    assert claimed is True
+    assert jobs.refresh("workerpurge01") is None
+    assert run_history.get_runtime_summary("workerpurge01") is None
+
+
 @pytest.mark.asyncio
 async def test_worker_loop_retries_after_operational_error(monkeypatch):
     from config.settings import load_config

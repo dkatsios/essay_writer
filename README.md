@@ -14,6 +14,7 @@ AI-powered academic essay generator for Greek university students. Uses a determ
 - Deterministic academic source research via Semantic Scholar, OpenAlex, and Crossref
 - Staged source filtering: cheap metadata pretrim first, then batch-triages title+abstract candidates, then extracts only the final selected sources
 - Downloaded run ZIPs include source triage and scoring metadata for auditability alongside the selected-source outputs
+- The `/history` page shows the current pipeline step for active jobs and can cancel a job or cancel-and-remove it entirely
 - If usable selected sources fall below the target, runs one broader recovery search pass before asking whether to continue with fewer sources
 - Long essays draft most body sections in parallel, defer introduction/synthesis/conclusion sections until full context is available, then run a reconciliation pass before review
 - Input extraction writes a single `input/extracted.md` artifact directly into each run directory
@@ -125,7 +126,7 @@ Worker process count lives in `EssayWriterConfig.worker_count` with a default of
 
 Combined Docker startup diagnostics live in `EssayWriterConfig.combined_web_only` (default `False`). Set `ESSAY_WEB_ONLY=true` or `ESSAY_WRITER_WEB_ONLY=true` to skip workers and run the container in web-only mode for deployment debugging.
 
-For inspection/debugging, the web server exposes a browser history page at `GET /history` plus JSON history endpoints: `GET /history/jobs` lists persisted run summaries, including active jobs immediately after submission, and `GET /history/jobs/{job_id}` returns the summary, step metrics, artifact manifest, and live status (when the job is still active).
+For inspection/debugging, the web server exposes a browser history page at `GET /history` plus JSON history endpoints: `GET /history/jobs` lists persisted run summaries, including active jobs immediately after submission and their current step when available, and `GET /history/jobs/{job_id}` returns the summary, step metrics, artifact manifest, and live status (when the job is still active). The history surface also supports `POST /history/jobs/{job_id}/cancel` to stop a queued or active job while preserving history, and `POST /history/jobs/{job_id}/remove` to cancel the job if needed and then delete its DB history plus stored artifacts.
 
 Database schema changes are managed through Alembic. Run `uv run alembic upgrade head` before starting the app in a fresh environment or after pulling schema changes.
 

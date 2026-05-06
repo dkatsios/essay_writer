@@ -151,3 +151,38 @@ def test_mark_artifacts_deleted_marks_all_available_rows():
     assert len(artifacts) == 1
     assert artifacts[0]["is_available"] is False
     assert artifacts[0]["deleted_at"] == 30.0
+
+
+def test_purge_job_removes_summary_steps_and_artifacts():
+    from src.run_history_store import RunHistoryStore
+    from src.storage import MemoryRunStorage
+
+    store = RunHistoryStore()
+    storage = MemoryRunStorage("test/")
+    storage.write_text("run.log", "hello")
+
+    store.save_runtime_summary(
+        "job123", status="done", provider="google", updated_at=10.0
+    )
+    store.save_step_metric(
+        "job123",
+        "plan",
+        status="completed",
+        model="gpt-5.4",
+        cost_usd=0.1,
+        call_count=1,
+        input_tokens=1,
+        output_tokens=1,
+        thinking_tokens=0,
+        duration_seconds=1.0,
+        step_index=0,
+        step_count=1,
+        updated_at=11.0,
+    )
+    store.sync_artifacts("job123", storage, current_time=12.0)
+
+    store.purge_job("job123")
+
+    assert store.get_runtime_summary("job123") is None
+    assert store.list_step_metrics("job123") == []
+    assert store.list_artifacts("job123") == []

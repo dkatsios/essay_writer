@@ -146,6 +146,46 @@ def test_history_jobs_can_filter_by_status():
     assert body["jobs"][0]["job_id"] == "jobdone001"
 
 
+def test_history_jobs_include_live_step_overlay():
+    from src.run_history_store import run_history
+
+    run_history.save_runtime_summary(
+        "joblive001",
+        status="running",
+        provider="google",
+        total_cost_usd=0.5,
+        total_input_tokens=10,
+        total_output_tokens=5,
+        total_thinking_tokens=0,
+        total_duration_seconds=2.0,
+        step_count=8,
+        updated_at=10.0,
+    )
+
+    _jobs["joblive001"] = Job(
+        job_id="joblive001",
+        run_dir="runs/joblive001",
+        status="running",
+        current_step="plan",
+        step_index=1,
+        step_count=8,
+    )
+
+    try:
+        response = client.get("/history/jobs")
+    finally:
+        _jobs.pop("joblive001", None)
+
+    assert response.status_code == 200
+    job = next(
+        item for item in response.json()["jobs"] if item["job_id"] == "joblive001"
+    )
+    assert job["current_step"] == "plan"
+    assert job["step_index"] == 1
+    assert job["step_count"] == 8
+    assert job["live_status"]["stage"] == "plan"
+
+
 def test_history_job_detail_returns_summary_steps_artifacts_and_live_status():
     from src.run_history_store import run_history
     from src.storage import MemoryRunStorage
@@ -231,11 +271,192 @@ def test_history_job_detail_can_filter_unavailable_artifacts():
     assert body["artifacts"] == []
 
 
+def test_history_job_detail_can_skip_artifacts_for_background_refreshes():
+    from src.run_history_store import run_history
+    from src.storage import MemoryRunStorage
+
+    storage = MemoryRunStorage("runs/jobdetail002/")
+    storage.write_text("report.md", "# Report")
+
+    run_history.save_runtime_summary(
+        "jobdetail002",
+        status="done",
+        provider="google",
+        total_cost_usd=1.5,
+        total_input_tokens=300,
+        total_output_tokens=120,
+        total_thinking_tokens=15,
+        total_duration_seconds=30.0,
+        step_count=5,
+        updated_at=10.0,
+    )
+    run_history.save_step_metric(
+        "jobdetail002",
+        "plan",
+        status="completed",
+        model="gpt-5.4",
+        cost_usd=0.25,
+        call_count=1,
+        input_tokens=120,
+        output_tokens=60,
+        thinking_tokens=5,
+        duration_seconds=3.5,
+        step_index=2,
+        step_count=7,
+        updated_at=11.0,
+    )
+    run_history.sync_artifacts("jobdetail002", storage, current_time=12.0)
+
+    response = client.get(
+        "/history/jobs/jobdetail002",
+        params={"include_artifacts": "false"},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["summary"]["provider"] == "google"
+    assert body["steps"][0]["step_name"] == "plan"
+    assert body["artifacts"] == []
+
+
+def test_history_job_artifacts_returns_artifacts_on_demand():
+    from src.run_history_store import run_history
+    from src.storage import MemoryRunStorage
+
+    storage = MemoryRunStorage("runs/jobartifacts1/")
+    storage.write_text("report.md", "# Report")
+
+    run_history.save_runtime_summary(
+        "jobartifacts1",
+        status="done",
+        provider="google",
+        total_cost_usd=1.5,
+        total_input_tokens=300,
+        total_output_tokens=120,
+        total_thinking_tokens=15,
+        total_duration_seconds=30.0,
+        step_count=5,
+        updated_at=10.0,
+    )
+    run_history.sync_artifacts("jobartifacts1", storage, current_time=12.0)
+
+    response = client.get("/history/jobs/jobartifacts1/artifacts")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["job_id"] == "jobartifacts1"
+    assert body["artifacts"][0]["relative_path"] == "report.md"
+
+
 def test_history_job_detail_404_when_job_is_unknown():
     response = client.get("/history/jobs/missingjob001")
 
     assert response.status_code == 404
     assert response.json() == {"error": "Job not found"}
+
+
+def test_cancel_history_job_marks_pending_job_cancelled():
+    from src.run_history_store import run_history
+
+    job = Job(job_id="cancelpending1", status="pending", run_dir="runs/cancelpending1")
+    _save_job(job)
+
+    response = client.post("/history/jobs/cancelpending1/cancel")
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "cancelled"
+
+    refreshed = _jobs.refresh("cancelpending1")
+    summary = run_history.get_runtime_summary("cancelpending1")
+    assert refreshed is not None
+    assert refreshed.status == "cancelled"
+    assert summary is not None
+    assert summary["status"] == "cancelled"
+
+
+def test_cancel_history_job_marks_active_job_for_cancellation():
+    job = Job(
+        job_id="cancelactive1",
+        status="running",
+        run_dir="runs/cancelactive1",
+        worker_id="worker-a",
+    )
+    _save_job(job)
+
+    response = client.post("/history/jobs/cancelactive1/cancel")
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "cancelling"
+
+    refreshed = _jobs.refresh("cancelactive1")
+    assert refreshed is not None
+    assert refreshed.cancel_requested is True
+    assert refreshed.delete_requested is False
+
+
+def test_remove_history_job_purges_terminal_job_records_and_storage(monkeypatch):
+    from src.run_history_store import run_history
+    from src.storage import MemoryRunStorage
+
+    storages: dict[str, MemoryRunStorage] = {}
+
+    def fake_create(job_id, config=None):
+        return storages[job_id]
+
+    monkeypatch.setattr("src.web_jobs.create_run_storage", fake_create)
+
+    storage = MemoryRunStorage("runs/removeterminal1/")
+    storage.write_text("run.log", "hello")
+    storages["removeterminal1"] = storage
+
+    job = Job(job_id="removeterminal1", status="done", run_dir="runs/removeterminal1")
+    _save_job(job)
+    run_history.save_step_metric(
+        "removeterminal1",
+        "plan",
+        status="completed",
+        model="gpt-5.4",
+        cost_usd=0.1,
+        call_count=1,
+        input_tokens=1,
+        output_tokens=1,
+        thinking_tokens=0,
+        duration_seconds=1.0,
+        step_index=0,
+        step_count=1,
+        updated_at=11.0,
+    )
+    run_history.sync_artifacts("removeterminal1", storage, current_time=12.0)
+
+    response = client.post("/history/jobs/removeterminal1/remove")
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "deleted"
+    assert _jobs.refresh("removeterminal1") is None
+    assert run_history.get_runtime_summary("removeterminal1") is None
+    assert run_history.list_step_metrics("removeterminal1") == []
+    assert run_history.list_artifacts("removeterminal1") == []
+    assert storage.list_files() == []
+
+
+def test_remove_history_job_marks_active_job_for_deletion():
+    job = Job(
+        job_id="removeactive1",
+        status="running",
+        run_dir="runs/removeactive1",
+        worker_id="worker-a",
+    )
+    _save_job(job)
+
+    response = client.post("/history/jobs/removeactive1/remove")
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "deleting"
+
+    refreshed = _jobs.refresh("removeactive1")
+    assert refreshed is not None
+    assert refreshed.cancel_requested is True
+    assert refreshed.delete_requested is True
 
 
 def test_submit_creates_storage_and_queues_job(monkeypatch):

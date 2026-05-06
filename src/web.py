@@ -111,19 +111,33 @@ async def history_jobs(
 ):
     """List persisted run summaries for inspection/debugging."""
     summaries = run_history.list_runtime_summaries(limit=limit, status=status)
-    return JSONResponse({"jobs": summaries, "count": len(summaries)})
+    live_jobs = _jobs.refresh_many([str(summary["job_id"]) for summary in summaries])
+    jobs_payload: list[dict[str, object]] = []
+    for summary in summaries:
+        item = dict(summary)
+        live_job = live_jobs.get(str(summary["job_id"]))
+        if live_job is not None:
+            item["live_status"] = _build_status_payload(live_job)
+            item["current_step"] = live_job.current_step or None
+            item["step_index"] = live_job.step_index
+            item["step_count"] = live_job.step_count
+        jobs_payload.append(item)
+    return JSONResponse({"jobs": jobs_payload, "count": len(jobs_payload)})
 
 
 @app.get("/history/jobs/{job_id}")
 async def history_job_detail(
     job_id: str,
+    include_artifacts: bool = Query(True),
     available_artifacts_only: bool = Query(False),
 ):
     """Return persisted run history for one job, plus live status when available."""
     summary = run_history.get_runtime_summary(job_id)
     steps = run_history.list_step_metrics(job_id)
-    artifacts = run_history.list_artifacts(job_id)
-    if available_artifacts_only:
+    artifacts: list[dict[str, object]] = []
+    if include_artifacts:
+        artifacts = run_history.list_artifacts(job_id)
+    if include_artifacts and available_artifacts_only:
         artifacts = [item for item in artifacts if item["is_available"]]
 
     live_job = _refresh_job(job_id)
@@ -140,6 +154,75 @@ async def history_job_detail(
         payload["live_status"] = _build_status_payload(live_job)
 
     return JSONResponse(payload)
+
+
+@app.get("/history/jobs/{job_id}/artifacts")
+async def history_job_artifacts(
+    job_id: str,
+    available_artifacts_only: bool = Query(False),
+):
+    """Return persisted artifact metadata for one job on demand."""
+    summary = run_history.get_runtime_summary(job_id)
+    live_job = _refresh_job(job_id)
+    artifacts = run_history.list_artifacts(job_id)
+    if available_artifacts_only:
+        artifacts = [item for item in artifacts if item["is_available"]]
+    if summary is None and not artifacts and live_job is None:
+        return JSONResponse({"error": "Job not found"}, status_code=404)
+    return JSONResponse({"job_id": job_id, "artifacts": artifacts})
+
+
+def _job_is_active(job: Job) -> bool:
+    return bool(job.worker_id) or job.status in {
+        "running",
+        "questions",
+        "optional_pdfs",
+        "source_shortfall",
+    }
+
+
+@app.post("/history/jobs/{job_id}/cancel")
+async def cancel_history_job(job_id: str):
+    """Cancel a queued or active job while preserving its history."""
+    job = _refresh_job(job_id)
+    if job is None:
+        return JSONResponse({"error": "Job not found"}, status_code=404)
+    if job.status in {"done", "error", "cancelled"}:
+        return JSONResponse(
+            {"error": f"Job is already terminal ({job.status})"}, status_code=400
+        )
+
+    with run_id_context(job_id):
+        if _job_is_active(job):
+            updated = web_jobs.request_job_cancellation(job_id)
+            if updated is None:
+                return JSONResponse({"error": "Job not found"}, status_code=404)
+            logger.info("Job %s cancellation requested", job_id)
+            return JSONResponse({"status": "cancelling", "job_id": job_id})
+
+        web_jobs.set_job_cancelled(job)
+        logger.info("Job %s cancelled before execution started", job_id)
+        return JSONResponse({"status": "cancelled", "job_id": job_id})
+
+
+@app.post("/history/jobs/{job_id}/remove")
+async def remove_history_job(job_id: str):
+    """Cancel a job if needed and remove all DB history plus storage artifacts."""
+    job = _refresh_job(job_id)
+    if job is None:
+        return JSONResponse({"error": "Job not found"}, status_code=404)
+
+    with run_id_context(job_id):
+        if _job_is_active(job):
+            updated = web_jobs.request_job_cancellation(job_id, delete_requested=True)
+            if updated is None:
+                return JSONResponse({"error": "Job not found"}, status_code=404)
+            logger.info("Job %s cancellation and purge requested", job_id)
+            return JSONResponse({"status": "deleting", "job_id": job_id})
+
+        logger.info("Job %s purged from history and storage", job_id)
+        web_jobs.purge_job(job_id)
+        return JSONResponse({"status": "deleted", "job_id": job_id})
 
 
 @app.get("/", response_class=HTMLResponse)

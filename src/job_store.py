@@ -60,6 +60,8 @@ _jobs_table = Table(
     Column("step_count", Integer, nullable=True),
     Column("retry_count", Integer, nullable=False, default=0),
     Column("not_before", Float, nullable=True),
+    Column("cancel_requested", Boolean, nullable=False, default=False),
+    Column("delete_requested", Boolean, nullable=False, default=False),
 )
 
 
@@ -167,6 +169,8 @@ class JobStore:
             "step_count": job.step_count,
             "retry_count": job.retry_count,
             "not_before": job.not_before,
+            "cancel_requested": job.cancel_requested,
+            "delete_requested": job.delete_requested,
         }
 
     def _hydrate_job(self, row: RowMapping) -> Job:
@@ -220,6 +224,8 @@ class JobStore:
             not_before=(
                 float(row["not_before"]) if row.get("not_before") is not None else None
             ),
+            cancel_requested=bool(row.get("cancel_requested")),
+            delete_requested=bool(row.get("delete_requested")),
             _sse_event=transient.sse_event,
         )
 
@@ -289,6 +295,24 @@ class JobStore:
         job = self._hydrate_job(row)
         self._live_jobs[job_id] = job
         return job
+
+    def refresh_many(self, job_ids: list[str]) -> dict[str, Job]:
+        if not job_ids:
+            return {}
+        with self._session() as session:
+            rows = (
+                session.execute(
+                    select(_jobs_table).where(_jobs_table.c.job_id.in_(job_ids))
+                )
+                .mappings()
+                .all()
+            )
+        jobs_by_id: dict[str, Job] = {}
+        for row in rows:
+            job = self._hydrate_job(row)
+            jobs_by_id[job.job_id] = job
+            self._live_jobs[job.job_id] = job
+        return jobs_by_id
 
     def claim_next_job(
         self,
@@ -428,6 +452,35 @@ class JobStore:
         self._transients.pop(job_id, None)
         self._live_jobs.pop(job_id, None)
         return job
+
+    def request_cancel(
+        self,
+        job_id: str,
+        *,
+        delete_requested: bool = False,
+    ) -> Job | None:
+        with self._session() as session:
+            row = (
+                session.execute(
+                    select(_jobs_table.c.delete_requested).where(
+                        _jobs_table.c.job_id == job_id
+                    )
+                )
+                .mappings()
+                .one_or_none()
+            )
+            if row is None:
+                return None
+            session.execute(
+                update(_jobs_table)
+                .where(_jobs_table.c.job_id == job_id)
+                .values(
+                    cancel_requested=True,
+                    delete_requested=bool(row["delete_requested"]) or delete_requested,
+                )
+            )
+            session.commit()
+        return self.refresh(job_id)
 
     def __contains__(self, job_id: object) -> bool:
         if not isinstance(job_id, str):

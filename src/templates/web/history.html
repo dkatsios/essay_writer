@@ -191,6 +191,7 @@
     }
     .status-pill.pending { background: #dbeafe; color: #1d4ed8; }
     .status-pill.done { background: var(--ok-bg); color: var(--ok-text); }
+    .status-pill.cancelled { background: #e2e8f0; color: #334155; }
     .status-pill.running,
     .status-pill.questions,
     .status-pill.optional_pdfs,
@@ -201,6 +202,12 @@
     .muted {
       color: var(--text-muted);
       font-size: .88rem;
+    }
+    .job-stage {
+      margin: .45rem 0 0;
+      color: var(--text);
+      font-size: .86rem;
+      font-weight: 600;
     }
     .summary-grid {
       display: grid;
@@ -228,12 +235,48 @@
       font-weight: 700;
       letter-spacing: -0.03em;
     }
+    .metric-card .value.compact {
+      font-size: 1rem;
+      line-height: 1.35;
+    }
     .detail-section {
       margin-top: 1rem;
     }
     .detail-section h3 {
       margin: 0 0 .65rem;
       font-size: .95rem;
+    }
+    .artifact-controls {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: .75rem;
+      flex-wrap: wrap;
+      margin-bottom: .75rem;
+    }
+    .artifact-actions {
+      display: flex;
+      gap: .6rem;
+      flex-wrap: wrap;
+    }
+    .artifact-actions button {
+      border: 1px solid var(--border);
+      border-radius: 999px;
+      background: #fff;
+      color: var(--text);
+      padding: .5rem .85rem;
+      font: inherit;
+      font-weight: 700;
+      cursor: pointer;
+    }
+    .artifact-actions button:hover:not(:disabled) {
+      border-color: #93c5fd;
+      box-shadow: 0 8px 24px rgba(37, 99, 235, 0.08);
+    }
+    .artifact-actions button:disabled {
+      opacity: .6;
+      cursor: not-allowed;
+      box-shadow: none;
     }
     table {
       width: 100%;
@@ -276,6 +319,36 @@
     }
     .detail-header h2 { margin: 0 0 .35rem; }
     .detail-subtext { color: var(--text-muted); font-size: .9rem; }
+    .detail-actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: .6rem;
+      justify-content: flex-end;
+    }
+    .detail-actions button {
+      border: 1px solid var(--border);
+      border-radius: 999px;
+      background: #fff;
+      color: var(--text);
+      padding: .55rem .9rem;
+      font: inherit;
+      font-weight: 700;
+      cursor: pointer;
+    }
+    .detail-actions button:hover:not(:disabled) {
+      border-color: #93c5fd;
+      box-shadow: 0 8px 24px rgba(37, 99, 235, 0.08);
+    }
+    .detail-actions button.danger {
+      border-color: #fecaca;
+      color: var(--bad-text);
+      background: #fff7f7;
+    }
+    .detail-actions button:disabled {
+      opacity: .6;
+      cursor: not-allowed;
+      box-shadow: none;
+    }
     .artifact-unavailable { color: var(--bad-text); font-weight: 600; }
     @media (max-width: 900px) {
       .layout { grid-template-columns: 1fr; }
@@ -307,6 +380,7 @@
           <option value="pending">Pending</option>
           <option value="done">Done</option>
           <option value="running">Running</option>
+          <option value="cancelled">Cancelled</option>
           <option value="error">Error</option>
           <option value="questions">Questions</option>
           <option value="optional_pdfs">Optional PDFs</option>
@@ -352,6 +426,17 @@
     const refreshBtnEl = document.getElementById('refresh-btn');
 
     let selectedJobId = null;
+    let scheduledRefresh = null;
+    let historyLoaded = false;
+    let historyRefreshInFlight = false;
+    let currentDetail = null;
+    let artifactsState = {
+      jobId: null,
+      visible: false,
+      loading: false,
+      items: null,
+      error: '',
+    };
 
     function formatDateTime(value) {
       if (!value) return 'Unknown';
@@ -413,13 +498,54 @@
       window.history.replaceState({}, '', url);
     }
 
-    async function fetchJson(url) {
-      const response = await fetch(url, { headers: { 'Accept': 'application/json' } });
+    async function fetchJson(url, options = {}) {
+      const response = await fetch(url, {
+        ...options,
+        headers: {
+          'Accept': 'application/json',
+          ...(options.headers || {}),
+        },
+      });
       if (!response.ok) {
         const payload = await response.json().catch(() => ({}));
         throw new Error(payload.error || `Request failed with ${response.status}`);
       }
       return response.json();
+    }
+
+    function isTerminalStatus(status) {
+      return ['done', 'error', 'cancelled'].includes(status || '');
+    }
+
+    function formatStepStatus(stage, stepIndex, stepCount) {
+      if (!stage) return '';
+      if (Number.isInteger(stepIndex) && Number.isInteger(stepCount) && stepCount > 0) {
+        return `${stage} (${stepIndex + 1}/${stepCount})`;
+      }
+      return stage;
+    }
+
+    function scheduleHistoryRefresh(delayMs = 1500) {
+      if (scheduledRefresh) {
+        window.clearTimeout(scheduledRefresh);
+      }
+      scheduledRefresh = window.setTimeout(() => {
+        scheduledRefresh = null;
+        loadHistoryList({ showLoading: false, refreshSelected: true });
+      }, delayMs);
+    }
+
+    function ensureArtifactsState(jobId) {
+      if (artifactsState.jobId === jobId) {
+        return;
+      }
+      artifactsState = {
+        jobId,
+        visible: false,
+        loading: false,
+        items: null,
+        error: '',
+      };
     }
 
     function renderJobList(jobs) {
@@ -429,6 +555,14 @@
       }
       jobListEl.innerHTML = jobs.map((job) => {
         const activeClass = job.job_id === selectedJobId ? ' active' : '';
+        const stageText = formatStepStatus(
+          job.current_step || job.live_status?.stage,
+          job.step_index ?? job.live_status?.step_index,
+          job.step_count ?? job.live_status?.step_count,
+        );
+        const stageMarkup = stageText
+          ? `<p class="job-stage">Current: ${escapeHtml(stageText)}</p>`
+          : '';
         return `
           <button type="button" class="job-item${activeClass}" data-job-id="${escapeHtml(job.job_id)}">
             <div class="job-topline">
@@ -436,6 +570,7 @@
               ${statusPill(job.status)}
             </div>
             <p class="job-meta">${escapeHtml(job.provider || 'default provider')} · updated ${escapeHtml(formatDateTime(job.updated_at))}</p>
+            ${stageMarkup}
             <div class="detail-inline muted">
               <span>${escapeHtml(formatUsd(job.total_cost_usd))}</span>
               <span>${escapeHtml(formatInteger(job.final_words || job.draft_words || 0))} words</span>
@@ -450,10 +585,95 @@
       }
     }
 
+    function renderDetailActions(summary, liveStatus) {
+      if (!summary) return '';
+      const effectiveStatus = liveStatus?.status || summary.status;
+      const cancelRequested = Boolean(liveStatus?.cancel_requested);
+      const deleteRequested = Boolean(liveStatus?.delete_requested);
+      const terminal = isTerminalStatus(effectiveStatus);
+
+      return `
+        <div class="detail-actions">
+          ${terminal ? '' : `<button type="button" data-action="cancel" ${cancelRequested || deleteRequested ? 'disabled' : ''}>${escapeHtml(cancelRequested ? 'Cancelling…' : 'Cancel')}</button>`}
+          <button type="button" class="danger" data-action="remove" ${deleteRequested ? 'disabled' : ''}>${escapeHtml(deleteRequested ? 'Removing…' : 'Cancel + Remove')}</button>
+        </div>
+      `;
+    }
+
+    function renderArtifactsSection() {
+      if (!selectedJobId) {
+        return '';
+      }
+      ensureArtifactsState(selectedJobId);
+
+      if (!artifactsState.visible) {
+        return `
+          <div class="detail-section">
+            <div class="artifact-controls">
+              <div>
+                <h3>Files</h3>
+                <div class="muted">Artifact availability is loaded on demand.</div>
+              </div>
+              <div class="artifact-actions">
+                <button type="button" data-action="show-artifacts">Show files</button>
+              </div>
+            </div>
+          </div>
+        `;
+      }
+
+      let bodyMarkup = '<div class="empty-state">No artifact metadata persisted yet.</div>';
+      if (artifactsState.loading) {
+        bodyMarkup = '<div class="loading-state">Loading file status…</div>';
+      } else if (artifactsState.error) {
+        bodyMarkup = `<div class="error-state">${escapeHtml(artifactsState.error)}</div>`;
+      } else if (Array.isArray(artifactsState.items)) {
+        bodyMarkup = renderArtifacts(artifactsState.items);
+      }
+
+      return `
+        <div class="detail-section">
+          <div class="artifact-controls">
+            <div>
+              <h3>Files</h3>
+              <div class="muted">Use the refresh button to reload file availability for this job.</div>
+            </div>
+            <div class="artifact-actions">
+              <button type="button" data-action="refresh-artifacts" ${artifactsState.loading ? 'disabled' : ''}>${escapeHtml(artifactsState.loading ? 'Refreshing…' : 'Refresh files')}</button>
+              <button type="button" data-action="hide-artifacts">Hide files</button>
+            </div>
+          </div>
+          ${bodyMarkup}
+        </div>
+      `;
+    }
+
+    function renderDetailPanel() {
+      if (!currentDetail) {
+        detailPanelEl.innerHTML = 'Select a job to inspect its summary, steps, and artifacts.';
+        return;
+      }
+      detailPanelEl.innerHTML = [
+        renderSummary(currentDetail.summary, currentDetail.live_status),
+        renderSteps(currentDetail.steps || []),
+        renderArtifactsSection(),
+      ].join('');
+      for (const button of detailPanelEl.querySelectorAll('[data-action]')) {
+        button.addEventListener('click', () => handleDetailAction(button.dataset.action));
+      }
+    }
+
     function renderSummary(summary, liveStatus) {
       if (!summary) {
         return '<div class="empty-state">No persisted runtime summary is available yet for this job.</div>';
       }
+
+      const effectiveStatus = liveStatus?.status || summary.status;
+      const stepText = formatStepStatus(
+        liveStatus?.stage,
+        liveStatus?.step_index,
+        liveStatus?.step_count,
+      );
 
       const liveMarkup = liveStatus
         ? `<div class="detail-inline"><span class="detail-subtext">Live status</span>${statusPill(liveStatus.status)}</div>`
@@ -469,10 +689,14 @@
             <h2>${escapeHtml(summary.job_id || selectedJobId)}</h2>
             <div class="detail-subtext">${escapeHtml(summary.provider || 'default provider')} · updated ${escapeHtml(formatDateTime(summary.updated_at))}</div>
           </div>
-          ${liveMarkup}
+          <div>
+            ${liveMarkup}
+            ${renderDetailActions(summary, liveStatus)}
+          </div>
         </div>
         <div class="summary-grid">
-          <div class="metric-card"><span class="label">Status</span><div class="value">${escapeHtml(summary.status || 'unknown')}</div></div>
+          <div class="metric-card"><span class="label">Status</span><div class="value">${escapeHtml(effectiveStatus || 'unknown')}</div></div>
+          <div class="metric-card"><span class="label">Current Step</span><div class="value compact">${escapeHtml(stepText || '—')}</div></div>
           <div class="metric-card"><span class="label">Total Cost</span><div class="value">${escapeHtml(formatUsd(summary.total_cost_usd))}</div></div>
           <div class="metric-card"><span class="label">Input Tokens</span><div class="value">${escapeHtml(formatInteger(summary.total_input_tokens))}</div></div>
           <div class="metric-card"><span class="label">Output Tokens</span><div class="value">${escapeHtml(formatInteger(summary.total_output_tokens))}</div></div>
@@ -523,58 +747,150 @@
         return '<div class="empty-state">No artifact metadata persisted yet.</div>';
       }
       return `
-        <div class="detail-section">
-          <h3>Artifacts</h3>
-          <table>
-            <thead>
+        <table>
+          <thead>
+            <tr>
+              <th>Path</th>
+              <th>Type</th>
+              <th>Size</th>
+              <th>Availability</th>
+              <th>Updated</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${artifacts.map((artifact) => `
               <tr>
-                <th>Path</th>
-                <th>Type</th>
-                <th>Size</th>
-                <th>Availability</th>
-                <th>Updated</th>
+                <td>${escapeHtml(artifact.relative_path)}</td>
+                <td>${escapeHtml(artifact.artifact_type)}</td>
+                <td>${escapeHtml(formatInteger(artifact.size_bytes))} B</td>
+                <td>${artifact.is_available ? 'Available' : '<span class="artifact-unavailable">Deleted</span>'}</td>
+                <td>${escapeHtml(formatDateTime(artifact.updated_at))}</td>
               </tr>
-            </thead>
-            <tbody>
-              ${artifacts.map((artifact) => `
-                <tr>
-                  <td>${escapeHtml(artifact.relative_path)}</td>
-                  <td>${escapeHtml(artifact.artifact_type)}</td>
-                  <td>${escapeHtml(formatInteger(artifact.size_bytes))} B</td>
-                  <td>${artifact.is_available ? 'Available' : '<span class="artifact-unavailable">Deleted</span>'}</td>
-                  <td>${escapeHtml(formatDateTime(artifact.updated_at))}</td>
-                </tr>
-              `).join('')}
-            </tbody>
-          </table>
-        </div>
+            `).join('')}
+          </tbody>
+        </table>
       `;
     }
 
-    async function loadJobDetail(jobId, { pushUrl } = { pushUrl: false }) {
-      if (!jobId) {
-        selectedJobId = null;
-        updateJobQuery(null);
-        detailPanelEl.innerHTML = 'Select a job to inspect its summary, steps, and artifacts.';
+    async function loadArtifacts(jobId, { force = false } = {}) {
+      if (!jobId) return;
+      ensureArtifactsState(jobId);
+      artifactsState.visible = true;
+      if (!force && Array.isArray(artifactsState.items)) {
+        renderDetailPanel();
         return;
       }
 
+      artifactsState.loading = true;
+      artifactsState.error = '';
+      renderDetailPanel();
+
+      try {
+        const payload = await fetchJson(`/history/jobs/${encodeURIComponent(jobId)}/artifacts`);
+        if (selectedJobId !== jobId) {
+          return;
+        }
+        artifactsState.items = payload.artifacts || [];
+        artifactsState.loading = false;
+        artifactsState.error = '';
+      } catch (error) {
+        if (selectedJobId !== jobId) {
+          return;
+        }
+        artifactsState.loading = false;
+        artifactsState.error = error.message;
+      }
+      renderDetailPanel();
+    }
+
+    async function handleDetailAction(action) {
+      if (action === 'show-artifacts') {
+        await loadArtifacts(selectedJobId);
+        return;
+      }
+      if (action === 'refresh-artifacts') {
+        await loadArtifacts(selectedJobId, { force: true });
+        return;
+      }
+      if (action === 'hide-artifacts') {
+        ensureArtifactsState(selectedJobId);
+        artifactsState.visible = false;
+        renderDetailPanel();
+        return;
+      }
+      await handleJobAction(action);
+    }
+
+    async function handleJobAction(action) {
+      if (!selectedJobId) return;
+      if (action === 'remove' && !window.confirm('Remove this job from the DB and delete all stored artifacts?')) {
+        return;
+      }
+
+      const endpoint = action === 'remove'
+        ? `/history/jobs/${encodeURIComponent(selectedJobId)}/remove`
+        : `/history/jobs/${encodeURIComponent(selectedJobId)}/cancel`;
+
+      try {
+        const result = await fetchJson(endpoint, { method: 'POST' });
+        if (result.status === 'deleted') {
+          selectedJobId = null;
+          updateJobQuery(null);
+          currentDetail = null;
+          ensureArtifactsState(null);
+          await loadHistoryList({ showLoading: false, refreshSelected: false });
+          return;
+        }
+        historyMetaEl.textContent = `Job ${selectedJobId} ${result.status}`;
+        await loadJobDetail(selectedJobId, { pushUrl: false, showLoading: false, includeArtifacts: false });
+        scheduleHistoryRefresh();
+      } catch (error) {
+        historyMetaEl.textContent = error.message;
+      }
+    }
+
+    async function loadJobDetail(jobId, { pushUrl = false, showLoading = true, includeArtifacts = false } = {}) {
+      if (!jobId) {
+        selectedJobId = null;
+        updateJobQuery(null);
+        currentDetail = null;
+        renderDetailPanel();
+        return false;
+      }
+
+      const jobChanged = selectedJobId !== jobId;
       selectedJobId = jobId;
       if (pushUrl) {
         updateJobQuery(jobId);
       }
-      detailPanelEl.innerHTML = '<div class="loading-state">Loading run detail…</div>';
+      if (jobChanged) {
+        ensureArtifactsState(jobId);
+      }
+      if (showLoading && !currentDetail) {
+        detailPanelEl.innerHTML = '<div class="loading-state">Loading run detail…</div>';
+      }
       renderSelectionState();
 
       try {
-        const detail = await fetchJson(`/history/jobs/${encodeURIComponent(jobId)}`);
-        detailPanelEl.innerHTML = [
-          renderSummary(detail.summary, detail.live_status),
-          renderSteps(detail.steps || []),
-          renderArtifacts(detail.artifacts || []),
-        ].join('');
+        const detail = await fetchJson(`/history/jobs/${encodeURIComponent(jobId)}?include_artifacts=${includeArtifacts ? 'true' : 'false'}`);
+        if (selectedJobId !== jobId) {
+          return false;
+        }
+        currentDetail = detail;
+        if (includeArtifacts) {
+          ensureArtifactsState(jobId);
+          artifactsState.visible = true;
+          artifactsState.loading = false;
+          artifactsState.items = detail.artifacts || [];
+          artifactsState.error = '';
+        }
+        renderDetailPanel();
+        return true;
       } catch (error) {
-        detailPanelEl.innerHTML = `<div class="error-state">${escapeHtml(error.message)}</div>`;
+        if (selectedJobId === jobId) {
+          detailPanelEl.innerHTML = `<div class="error-state">${escapeHtml(error.message)}</div>`;
+        }
+        return false;
       }
     }
 
@@ -584,42 +900,75 @@
       }
     }
 
-    async function loadHistoryList() {
-      historyMetaEl.textContent = 'Loading history…';
-      jobListEl.innerHTML = '<div class="loading-state">Loading persisted run summaries…</div>';
+    async function loadHistoryList({ showLoading = false, refreshSelected = true } = {}) {
+      if (historyRefreshInFlight) {
+        return;
+      }
+      historyRefreshInFlight = true;
+      historyMetaEl.textContent = historyLoaded ? 'Refreshing history…' : 'Loading history…';
+      if (showLoading || !historyLoaded) {
+        jobListEl.innerHTML = '<div class="loading-state">Loading persisted run summaries…</div>';
+      }
       try {
         const params = currentFilters();
         const payload = await fetchJson(`/history/jobs?${params.toString()}`);
+        historyLoaded = true;
         historyMetaEl.textContent = `${payload.count} job${payload.count === 1 ? '' : 's'} loaded`;
         renderJobList(payload.jobs || []);
 
-        const requestedJobId = new URL(window.location.href).searchParams.get('job');
-        if (requestedJobId) {
-          await loadJobDetail(requestedJobId, { pushUrl: false });
-          return;
+        const jobIds = new Set((payload.jobs || []).map((job) => job.job_id));
+        if (selectedJobId && !jobIds.has(selectedJobId)) {
+          selectedJobId = null;
+          updateJobQuery(null);
+          currentDetail = null;
+          ensureArtifactsState(null);
+          renderDetailPanel();
         }
 
-        if (!selectedJobId && payload.jobs && payload.jobs.length) {
-          await loadJobDetail(payload.jobs[0].job_id, { pushUrl: true });
-          return;
+        const requestedJobId = new URL(window.location.href).searchParams.get('job');
+        const targetJobId = requestedJobId || selectedJobId || payload.jobs?.[0]?.job_id || null;
+        if (targetJobId) {
+          const shouldPushUrl = !requestedJobId && !selectedJobId;
+          const shouldShowLoading = !currentDetail || currentDetail.job_id !== targetJobId;
+          const loaded = await loadJobDetail(targetJobId, {
+            pushUrl: shouldPushUrl,
+            showLoading: shouldShowLoading,
+            includeArtifacts: false,
+          }).catch(() => false);
+          if (!loaded && requestedJobId) {
+            selectedJobId = null;
+            updateJobQuery(null);
+            currentDetail = null;
+            ensureArtifactsState(null);
+            renderDetailPanel();
+          }
+        } else if (!refreshSelected && !currentDetail) {
+          renderDetailPanel();
         }
 
         renderSelectionState();
       } catch (error) {
         historyMetaEl.textContent = 'History failed to load';
-        jobListEl.innerHTML = `<div class="error-state">${escapeHtml(error.message)}</div>`;
+        if (!historyLoaded) {
+          jobListEl.innerHTML = `<div class="error-state">${escapeHtml(error.message)}</div>`;
+        }
+      } finally {
+        historyRefreshInFlight = false;
       }
     }
 
     statusFilterEl.addEventListener('change', () => {
       selectedJobId = null;
       updateJobQuery(null);
-      loadHistoryList();
+      currentDetail = null;
+      ensureArtifactsState(null);
+      loadHistoryList({ showLoading: true, refreshSelected: true });
     });
-    limitFilterEl.addEventListener('change', () => loadHistoryList());
-    refreshBtnEl.addEventListener('click', () => loadHistoryList());
+    limitFilterEl.addEventListener('change', () => loadHistoryList({ showLoading: false, refreshSelected: true }));
+    refreshBtnEl.addEventListener('click', () => loadHistoryList({ showLoading: false, refreshSelected: true }));
 
-    loadHistoryList();
+    loadHistoryList({ showLoading: true, refreshSelected: true });
+    window.setInterval(() => loadHistoryList({ showLoading: false, refreshSelected: true }), 5000);
   </script>
 </body>
 </html>

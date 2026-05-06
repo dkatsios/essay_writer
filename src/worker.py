@@ -62,6 +62,9 @@ async def run_claimed_job(job: web_jobs.Job, *, worker_id: str) -> None:
         with contextlib.suppress(asyncio.CancelledError):
             await heartbeat_task
         web_jobs.jobs.release_claim(job.job_id, worker_id=worker_id)
+        latest = web_jobs.jobs.refresh(job.job_id)
+        if latest is not None and latest.delete_requested:
+            web_jobs.purge_job(job.job_id)
 
 
 async def run_worker_once(*, worker_id: str | None = None) -> bool:

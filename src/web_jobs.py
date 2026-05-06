@@ -96,6 +96,8 @@ class Job:
     step_count: int | None = None
     retry_count: int = 0
     not_before: float | None = None
+    cancel_requested: bool = False
+    delete_requested: bool = False
     api_key: str = ""
     _sse_event: asyncio.Event = field(default_factory=asyncio.Event)
 
@@ -125,7 +127,7 @@ def _persist_run_history_snapshot(job: Job) -> None:
         if job.target_words is not None and not payload.get("target_words"):
             payload["target_words"] = job.target_words
         run_history.save_runtime_summary(job.job_id, **payload)
-    elif job.status in ("pending", "error"):
+    elif job.status in ("pending", "error", "cancelled"):
         # No tracker yet — persist only lightweight status metadata so the job
         # appears in history immediately. Avoid overwriting accumulated metrics.
         run_history.save_runtime_summary(
@@ -182,13 +184,13 @@ def notify_job(job: Job) -> None:
 
 def build_status_payload(job: Job) -> dict:
     payload: dict = {"status": job.status}
-    if job.status == "running":
-        stage = job.current_step
-        if not stage and job.tracker is not None:
-            stage = job.tracker.get_current_step()
-        if stage:
-            payload["stage"] = stage
+    stage = job.current_step
+    if not stage and job.tracker is not None:
+        stage = job.tracker.get_current_step()
+    if stage:
+        payload["stage"] = stage
 
+    if job.status == "running":
         if job.step_index is not None:
             payload["step_index"] = job.step_index
         elif job.tracker is not None:
@@ -214,6 +216,10 @@ def build_status_payload(job: Job) -> dict:
         payload["source_shortfall"] = job.source_shortfall
     if job.status == "error":
         payload["error"] = job.error
+    if job.cancel_requested:
+        payload["cancel_requested"] = True
+    if job.delete_requested:
+        payload["delete_requested"] = True
     if job.retry_count > 0:
         payload["retry_count"] = job.retry_count
     payload["clarification_rounds"] = job.clarification_rounds
@@ -327,6 +333,8 @@ def requeue_for_retry(job: Job) -> bool:
     job.step_index = None
     job.step_count = None
     job.not_before = time.time() + _RETRY_BACKOFF_SECONDS * job.retry_count
+    job.cancel_requested = False
+    job.delete_requested = False
     save_job(job)
     logger.warning(
         "Job %s requeued for retry %d/%d (not_before=%.0fs from now)",
@@ -341,6 +349,14 @@ def requeue_for_retry(job: Job) -> bool:
 
 class JobInteractionTimeout(Exception):
     """Raised when a web job waits too long for user interaction."""
+
+
+class JobCancelled(Exception):
+    """Raised when a job is cancelled through the web control surface."""
+
+    def __init__(self, *, delete_requested: bool = False) -> None:
+        super().__init__("Job cancelled")
+        self.delete_requested = delete_requested
 
 
 def _copy_job_state(target: Job, latest: Job) -> None:
@@ -365,6 +381,49 @@ def _copy_job_state(target: Job, latest: Job) -> None:
     target.step_count = latest.step_count
     target.retry_count = latest.retry_count
     target.not_before = latest.not_before
+    target.cancel_requested = latest.cancel_requested
+    target.delete_requested = latest.delete_requested
+
+
+def request_job_cancellation(
+    job_id: str, *, delete_requested: bool = False
+) -> Job | None:
+    job = jobs.request_cancel(job_id, delete_requested=delete_requested)
+    if job is None:
+        return None
+    job.answers_event.set()
+    job.optional_pdf_event.set()
+    job.source_shortfall_event.set()
+    notify_job(job)
+    return job
+
+
+def _raise_if_cancel_requested(job: Job) -> None:
+    latest = jobs.refresh(job.job_id)
+    if latest is None:
+        raise JobCancelled(delete_requested=True)
+    _copy_job_state(job, latest)
+    if latest.cancel_requested:
+        raise JobCancelled(delete_requested=latest.delete_requested)
+
+
+def set_job_cancelled(job: Job) -> None:
+    logger.info("Job %s cancelled", job.job_id)
+    job.questions = None
+    job.optional_pdf_items = None
+    job.optional_pdf_allowed_ids = None
+    job.source_shortfall = None
+    job.source_shortfall_decision = ""
+    job.status = "cancelled"
+    job.error = ""
+    job.finished_at = time.time()
+    job.current_step = ""
+    job.step_index = None
+    job.step_count = None
+    job.cancel_requested = False
+    save_job(job)
+    _persist_terminal_run_history(job, status="cancelled")
+    notify_job(job)
 
 
 async def async_wait_for_job_signal(
@@ -385,6 +444,8 @@ async def async_wait_for_job_signal(
         latest = jobs.refresh(job.job_id)
         if latest is not None:
             _copy_job_state(job, latest)
+            if latest.cancel_requested:
+                raise JobCancelled(delete_requested=latest.delete_requested)
             if latest.status != expected_status:
                 return True
 
@@ -409,6 +470,19 @@ def delete_job_artifacts(job_id: str) -> bool:
         storage.delete_all()
     except Exception:
         logger.warning("Failed to delete R2 artifacts for job %s", job_id)
+    return True
+
+
+def purge_job(job_id: str) -> bool:
+    job = jobs.pop(job_id, None)
+    if job is None:
+        return False
+    run_history.purge_job(job_id)
+    try:
+        storage = job.get_storage()
+        storage.delete_all()
+    except Exception:
+        logger.warning("Failed to delete artifacts for job %s during purge", job_id)
     return True
 
 
@@ -521,6 +595,9 @@ async def run_pipeline_task(
     with run_id_context(job.job_id):
         try:
             log_handler = setup_run_logging(None, job.job_id)
+            if jobs.refresh(job.job_id) is None:
+                save_job(job)
+            _raise_if_cancel_requested(job)
             logger.info(
                 "Job %s started (provider=%s, target_words=%s, min_sources=%s)",
                 job.job_id,
@@ -582,6 +659,7 @@ async def run_pipeline_task(
                     job.step_count = tracker.step_count
                 save_job(job)
                 notify_job(job)
+                _raise_if_cancel_requested(job)
 
             tracker.set_on_progress(_on_progress)
             save_job(job)
@@ -772,6 +850,7 @@ async def run_pipeline_task(
                 run_history_store=run_history,
                 resume=job.retry_count > 0,
             )
+            _raise_if_cancel_requested(job)
 
             tracker.write_report(storage)
             _persist_terminal_run_history(job, status="done")
@@ -780,10 +859,22 @@ async def run_pipeline_task(
             job.step_index = None
             job.step_count = None
             job.finished_at = time.time()
+            job.cancel_requested = False
             save_job(job)
             logger.info("Job %s completed successfully", job.job_id)
             notify_job(job)
 
+        except JobCancelled as exc:
+            logger.info(
+                "Job %s cancellation acknowledged%s",
+                job.job_id,
+                " with purge requested" if exc.delete_requested else "",
+            )
+            latest = jobs.refresh(job.job_id)
+            if latest is not None:
+                _copy_job_state(job, latest)
+            set_job_cancelled(job)
+            return
         except JobInteractionTimeout:
             _persist_terminal_run_history(job, status="error")
             return

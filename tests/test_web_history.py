@@ -73,6 +73,21 @@ def test_status_payload_includes_source_shortfall() -> None:
     assert body["source_shortfall"] == {"usable_sources": 8, "target_sources": 12}
 
 
+def test_status_payload_includes_cancel_and_delete_requests() -> None:
+    job = Job(
+        job_id="cancelpayload",
+        run_dir=Path("/tmp"),
+        status="running",
+        cancel_requested=True,
+        delete_requested=True,
+    )
+
+    body = build_status_payload(job)
+
+    assert body["cancel_requested"] is True
+    assert body["delete_requested"] is True
+
+
 def test_append_optional_pdf_round_from_choices() -> None:
     job = Job(job_id="abc123456789", run_dir=Path("/tmp"))
     job.optional_pdf_items = [
