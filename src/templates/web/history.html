@@ -319,6 +319,13 @@
     }
     .detail-header h2 { margin: 0 0 .35rem; }
     .detail-subtext { color: var(--text-muted); font-size: .9rem; }
+    .detail-header-side {
+      display: flex;
+      flex-direction: column;
+      align-items: flex-end;
+      gap: .65rem;
+      min-width: 11rem;
+    }
     .detail-actions {
       display: flex;
       flex-wrap: wrap;
@@ -327,10 +334,10 @@
     }
     .detail-actions button {
       border: 1px solid var(--border);
-      border-radius: 999px;
+      border-radius: 12px;
       background: #fff;
       color: var(--text);
-      padding: .55rem .9rem;
+      padding: .65rem 1rem;
       font: inherit;
       font-weight: 700;
       cursor: pointer;
@@ -348,6 +355,33 @@
       opacity: .6;
       cursor: not-allowed;
       box-shadow: none;
+    }
+    .action-strip {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 1rem;
+      flex-wrap: wrap;
+      margin-bottom: 1rem;
+      padding: .9rem 1rem;
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      background: linear-gradient(180deg, rgba(255,255,255,.96), rgba(248,250,252,.95));
+    }
+    .action-strip-copy {
+      min-width: 14rem;
+    }
+    .action-strip-copy strong {
+      display: block;
+      margin-bottom: .2rem;
+      font-size: .82rem;
+      letter-spacing: .05em;
+      text-transform: uppercase;
+      color: var(--text-muted);
+    }
+    .action-strip-copy span {
+      color: var(--text-muted);
+      font-size: .9rem;
     }
     .artifact-unavailable { color: var(--bad-text); font-weight: 600; }
     @media (max-width: 900px) {
@@ -598,11 +632,20 @@
       const removeLabel = deleteRequested
         ? 'Removing…'
         : (terminal ? 'Remove' : 'Cancel + Remove');
+      const helperText = terminal
+        ? 'This job is finished. You can remove it from history and storage.'
+        : 'Stop this job now, or stop it and remove all persisted data.';
 
       return `
-        <div class="detail-actions">
-          ${terminal ? '' : `<button type="button" data-action="cancel" ${cancelRequested || deleteRequested ? 'disabled' : ''}>${escapeHtml(cancelRequested ? 'Cancelling…' : 'Cancel')}</button>`}
-          <button type="button" class="danger" data-action="remove" ${deleteRequested ? 'disabled' : ''}>${escapeHtml(removeLabel)}</button>
+        <div class="action-strip">
+          <div class="action-strip-copy">
+            <strong>Actions</strong>
+            <span>${escapeHtml(helperText)}</span>
+          </div>
+          <div class="detail-actions">
+            ${terminal ? '' : `<button type="button" data-action="cancel" ${cancelRequested || deleteRequested ? 'disabled' : ''}>${escapeHtml(cancelRequested ? 'Cancelling…' : 'Cancel')}</button>`}
+            <button type="button" class="danger" data-action="remove" ${deleteRequested ? 'disabled' : ''}>${escapeHtml(removeLabel)}</button>
+          </div>
         </div>
       `;
     }
@@ -696,9 +739,8 @@
             <h2>${escapeHtml(summary.job_id || selectedJobId)}</h2>
             <div class="detail-subtext">${escapeHtml(summary.provider || 'default provider')} · updated ${escapeHtml(formatDateTime(summary.updated_at))}</div>
           </div>
-          <div>
+          <div class="detail-header-side">
             ${liveMarkup}
-            ${renderDetailActions(summary, liveStatus)}
           </div>
         </div>
         <div class="summary-grid">
@@ -710,6 +752,7 @@
           <div class="metric-card"><span class="label">Duration</span><div class="value">${escapeHtml(formatSeconds(summary.total_duration_seconds))}</div></div>
           <div class="metric-card"><span class="label">Final Words</span><div class="value">${escapeHtml(formatInteger(summary.final_words || summary.draft_words || 0))}</div></div>
         </div>
+        ${renderDetailActions(summary, liveStatus)}
         ${errorMarkup}
       `;
     }
