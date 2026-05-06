@@ -535,6 +535,10 @@
       }, delayMs);
     }
 
+    function shouldAutoRefreshHistory() {
+      return document.visibilityState === 'visible';
+    }
+
     function ensureArtifactsState(jobId) {
       if (artifactsState.jobId === jobId) {
         return;
@@ -972,8 +976,19 @@
     limitFilterEl.addEventListener('change', () => loadHistoryList({ showLoading: false, refreshSelected: true }));
     refreshBtnEl.addEventListener('click', () => loadHistoryList({ showLoading: false, refreshSelected: true }));
 
+    document.addEventListener('visibilitychange', () => {
+      if (shouldAutoRefreshHistory()) {
+        loadHistoryList({ showLoading: false, refreshSelected: true });
+      }
+    });
+
     loadHistoryList({ showLoading: true, refreshSelected: true });
-    window.setInterval(() => loadHistoryList({ showLoading: false, refreshSelected: true }), 5000);
+    window.setInterval(() => {
+      if (!shouldAutoRefreshHistory()) {
+        return;
+      }
+      loadHistoryList({ showLoading: false, refreshSelected: true });
+    }, 5000);
   </script>
 </body>
 </html>
