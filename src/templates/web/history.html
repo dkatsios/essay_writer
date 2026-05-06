@@ -591,11 +591,14 @@
       const cancelRequested = Boolean(liveStatus?.cancel_requested);
       const deleteRequested = Boolean(liveStatus?.delete_requested);
       const terminal = isTerminalStatus(effectiveStatus);
+      const removeLabel = deleteRequested
+        ? 'Removing…'
+        : (terminal ? 'Remove' : 'Cancel + Remove');
 
       return `
         <div class="detail-actions">
           ${terminal ? '' : `<button type="button" data-action="cancel" ${cancelRequested || deleteRequested ? 'disabled' : ''}>${escapeHtml(cancelRequested ? 'Cancelling…' : 'Cancel')}</button>`}
-          <button type="button" class="danger" data-action="remove" ${deleteRequested ? 'disabled' : ''}>${escapeHtml(deleteRequested ? 'Removing…' : 'Cancel + Remove')}</button>
+          <button type="button" class="danger" data-action="remove" ${deleteRequested ? 'disabled' : ''}>${escapeHtml(removeLabel)}</button>
         </div>
       `;
     }
