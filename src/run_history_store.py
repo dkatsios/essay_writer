@@ -6,7 +6,7 @@ import mimetypes
 import time
 from typing import Any
 
-from sqlalchemy import Boolean, Column, Float, Integer, String, Table, Text, case
+from sqlalchemy import Boolean, Column, Float, Integer, String, Table, Text
 from sqlalchemy import create_engine, delete, insert, select, update
 from sqlalchemy.engine import Engine
 from sqlalchemy.exc import IntegrityError
@@ -261,15 +261,7 @@ class RunHistoryStore:
                 session.execute(
                     select(_step_metrics_table)
                     .where(_step_metrics_table.c.job_id == job_id)
-                    .order_by(
-                        case(
-                            (_step_metrics_table.c.step_index.is_(None), 1),
-                            else_=0,
-                        ),
-                        _step_metrics_table.c.step_index.asc(),
-                        _step_metrics_table.c.updated_at.asc(),
-                        _step_metrics_table.c.step_name.asc(),
-                    )
+                    .order_by(_step_metrics_table.c.step_name.asc())
                 )
                 .mappings()
                 .all()

@@ -105,61 +105,6 @@ def test_step_metrics_upsert_by_job_and_step_name():
     assert rows[1]["status"] == "failed"
 
 
-def test_step_metrics_listed_in_chronological_step_order():
-    from src.run_history_store import RunHistoryStore
-
-    store = RunHistoryStore()
-    store.save_step_metric(
-        "job-chronology",
-        "write",
-        status="completed",
-        model="gpt-5.4",
-        cost_usd=0.2,
-        call_count=1,
-        input_tokens=100,
-        output_tokens=50,
-        thinking_tokens=10,
-        duration_seconds=6.0,
-        step_index=6,
-        step_count=8,
-        updated_at=16.0,
-    )
-    store.save_step_metric(
-        "job-chronology",
-        "intake",
-        status="completed",
-        model="gpt-5.4-nano",
-        cost_usd=0.05,
-        call_count=1,
-        input_tokens=25,
-        output_tokens=10,
-        thinking_tokens=0,
-        duration_seconds=1.0,
-        step_index=1,
-        step_count=8,
-        updated_at=11.0,
-    )
-    store.save_step_metric(
-        "job-chronology",
-        "plan",
-        status="completed",
-        model="gpt-5.4-nano",
-        cost_usd=0.08,
-        call_count=1,
-        input_tokens=60,
-        output_tokens=20,
-        thinking_tokens=2,
-        duration_seconds=2.0,
-        step_index=3,
-        step_count=8,
-        updated_at=13.0,
-    )
-
-    rows = store.list_step_metrics("job-chronology")
-
-    assert [row["step_name"] for row in rows] == ["intake", "plan", "write"]
-
-
 def test_sync_artifacts_marks_missing_files_unavailable():
     from src.run_history_store import RunHistoryStore
     from src.storage import MemoryRunStorage
