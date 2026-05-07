@@ -79,7 +79,7 @@ docker run -p 8000:8000 --env-file .env -e ESSAY_WORKER_COUNT=4 essay-writer
 
 ## Local Git Hook
 
-This repo includes a tracked pre-push hook at `.githooks/pre-push` that runs the test suite locally before `git push`.
+This repo includes a tracked pre-push hook at `.githooks/pre-push` that runs a fast local smoke gate before `git push`.
 
 Enable it once per clone:
 
@@ -90,7 +90,10 @@ git config core.hooksPath .githooks
 After that, each push runs:
 
 ```bash
+uv run ruff check src/ tests/
 uv run python -m pytest tests/ -v
+
+The pre-push hook intentionally does not run the full suite, because that is too slow for the VS Code push flow. It runs lint plus a small smoke set (`test_settings`, `test_run_history_store`, `test_web_history`, `test_web_fetcher`). Run the full suite manually before larger merges.
 ```
 
 ## Deployment

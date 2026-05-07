@@ -15,7 +15,6 @@ from typing import TYPE_CHECKING, Any
 from sqlalchemy import JSON, Boolean, Float, Integer, MetaData, String, Table, Text
 from sqlalchemy import Column, create_engine, delete, insert, select, update
 from sqlalchemy.engine import Engine, RowMapping
-from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session, sessionmaker
 
 from config.settings import load_config

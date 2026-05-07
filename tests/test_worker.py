@@ -168,7 +168,7 @@ async def test_worker_loop_retries_after_operational_error(monkeypatch):
 
 
 def test_requeue_for_retry_requeues_below_max():
-    from src.web_jobs import Job, _MAX_JOB_RETRIES, requeue_for_retry, jobs
+    from src.web_jobs import Job, requeue_for_retry, jobs
 
     job = Job(
         job_id="retryjob0001", status="error", run_dir="runs/retry", retry_count=0

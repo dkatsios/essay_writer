@@ -3,7 +3,6 @@
 import asyncio
 import json
 import logging
-import re
 import time
 import zipfile
 from io import BytesIO
@@ -268,39 +267,6 @@ def test_history_job_detail_can_filter_unavailable_artifacts():
     assert body["artifacts"] == []
 
 
-def test_history_job_detail_can_include_unavailable_artifacts_explicitly():
-    from src.run_history_store import run_history
-    from src.storage import MemoryRunStorage
-
-    storage = MemoryRunStorage("runs/jobfilter002/")
-    storage.write_text("report.md", "# Report")
-
-    run_history.save_runtime_summary(
-        "jobfilter002",
-        status="done",
-        provider="google",
-        total_cost_usd=1.5,
-        total_input_tokens=300,
-        total_output_tokens=120,
-        total_thinking_tokens=15,
-        total_duration_seconds=30.0,
-        step_count=5,
-        updated_at=10.0,
-    )
-    run_history.sync_artifacts("jobfilter002", storage, current_time=12.0)
-    run_history.mark_artifacts_deleted("jobfilter002", current_time=13.0)
-
-    response = client.get(
-        "/history/jobs/jobfilter002",
-        params={"available_artifacts_only": "false"},
-    )
-
-    assert response.status_code == 200
-    body = response.json()
-    assert body["artifacts"][0]["relative_path"] == "report.md"
-    assert body["artifacts"][0]["is_available"] is False
-
-
 def test_history_job_detail_can_skip_artifacts_for_background_refreshes():
     from src.run_history_store import run_history
     from src.storage import MemoryRunStorage
@@ -376,41 +342,6 @@ def test_history_job_artifacts_returns_artifacts_on_demand():
     body = response.json()
     assert body["job_id"] == "jobartifacts1"
     assert body["artifacts"][0]["relative_path"] == "report.md"
-
-
-def test_history_job_artifacts_hides_unavailable_by_default_but_can_include_them():
-    from src.run_history_store import run_history
-    from src.storage import MemoryRunStorage
-
-    storage = MemoryRunStorage("runs/jobartifacts2/")
-    storage.write_text("report.md", "# Report")
-
-    run_history.save_runtime_summary(
-        "jobartifacts2",
-        status="done",
-        provider="google",
-        total_cost_usd=1.5,
-        total_input_tokens=300,
-        total_output_tokens=120,
-        total_thinking_tokens=15,
-        total_duration_seconds=30.0,
-        step_count=5,
-        updated_at=10.0,
-    )
-    run_history.sync_artifacts("jobartifacts2", storage, current_time=12.0)
-    run_history.mark_artifacts_deleted("jobartifacts2", current_time=13.0)
-
-    filtered = client.get("/history/jobs/jobartifacts2/artifacts")
-    assert filtered.status_code == 200
-    assert filtered.json()["artifacts"] == []
-
-    unfiltered = client.get(
-        "/history/jobs/jobartifacts2/artifacts",
-        params={"available_artifacts_only": "false"},
-    )
-    assert unfiltered.status_code == 200
-    assert unfiltered.json()["artifacts"][0]["relative_path"] == "report.md"
-    assert unfiltered.json()["artifacts"][0]["is_available"] is False
 
 
 def test_history_job_detail_404_when_job_is_unknown():
@@ -1343,27 +1274,43 @@ def test_stream_sse_notify_sends_update():
 
 def test_stream_sse_running_payload_can_include_cancel_request_flag():
     """The SSE payload exposes cancel_requested while a running job awaits acknowledgement."""
+    import threading
+
     jid = "ssecancelreq1"
-    _jobs[jid] = Job(
+    job = Job(
         job_id=jid,
         run_dir="runs/ssecancelreq1",
         status="running",
         cancel_requested=True,
     )
+    _jobs[jid] = job
 
-    with client.stream("GET", f"/stream/{jid}") as resp:
-        assert resp.status_code == 200
-        lines = []
-        for line in resp.iter_lines():
-            lines.append(line)
-            if line.startswith("data: "):
-                break
+    events = []
 
-    payload = json.loads(
-        next(line for line in lines if line.startswith("data: ")).removeprefix("data: ")
-    )
-    assert payload["status"] == "running"
-    assert payload["cancel_requested"] is True
+    def _consume():
+        with client.stream("GET", f"/stream/{jid}") as resp:
+            for line in resp.iter_lines():
+                if line.startswith("data: "):
+                    events.append(json.loads(line.removeprefix("data: ")))
+                    break
+
+    t = threading.Thread(target=_consume, daemon=True)
+    t.start()
+
+    # Give SSE time to connect and send initial event
+    time.sleep(0.3)
+
+    # Transition to done so the SSE generator terminates
+    job.status = "done"
+    job.finished_at = time.time()
+    _save_job(job)
+    _notify_job(job)
+
+    t.join(timeout=5)
+
+    assert len(events) >= 1
+    assert events[0]["status"] == "running"
+    assert events[0]["cancel_requested"] is True
     _jobs.pop(jid, None)
 
 

@@ -19,6 +19,8 @@ uv run python scripts/db_upgrade_local.py
 
 # Enable the repo-managed pre-push hook once per clone
 git config core.hooksPath .githooks
+# The pre-push hook runs fast smoke checks only (ruff + a small pytest subset)
+# Run the full suite manually before larger merges
 
 # Run the web UI
 uv run uvicorn src.web:app --reload

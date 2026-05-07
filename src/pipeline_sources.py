@@ -23,6 +23,7 @@ from src.schemas import (
     SourceAssignmentPlan,
     SourceNote,
     SourceScoreBatch,
+    SourceShortfallAbort,
 )
 from src.tools.author_names import surname_from_author_string
 from src.tools.research_sources import run_research
@@ -87,10 +88,6 @@ class SourceReadState:
     above_threshold: int = 0
     initial_scorable_count: int = 0
     scorable: list[dict] = field(default_factory=list)
-
-
-# Re-export for backward compatibility; canonical definition is in schemas.py.
-from src.schemas import SourceShortfallAbort as SourceShortfallAbort  # noqa: F401
 
 
 def _body_word_count(content: str) -> int:
@@ -367,7 +364,7 @@ def _run_research_pass(
     prefer_fulltext: bool,
 ) -> None:
     plan = EssayPlan.model_validate_json(ctx.storage.read_text("plan/plan.json"))
-    registry = run_research(
+    run_research(
         queries=plan.research_queries,
         max_sources=fetch_sources,
         storage=ctx.storage,
