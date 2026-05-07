@@ -1269,6 +1269,28 @@ def test_stream_sse_returns_done_event():
     _jobs.pop(jid, None)
 
 
+def test_stream_sse_returns_cancelled_event():
+    """SSE endpoint treats cancelled as a terminal state and closes."""
+    jid = "ssecancel001"
+    _jobs[jid] = Job(
+        job_id=jid,
+        run_dir="runs/ssecancel001",
+        status="cancelled",
+        finished_at=time.time(),
+    )
+
+    with client.stream("GET", f"/stream/{jid}") as resp:
+        assert resp.status_code == 200
+        assert resp.headers["content-type"].startswith("text/event-stream")
+        lines = list(resp.iter_lines())
+
+    data_lines = [line for line in lines if line.startswith("data: ")]
+    assert len(data_lines) >= 1
+    payload = json.loads(data_lines[0].removeprefix("data: "))
+    assert payload["status"] == "cancelled"
+    _jobs.pop(jid, None)
+
+
 def test_stream_sse_gone_for_missing_job():
     """SSE endpoint returns a 'gone' event for unknown job IDs."""
     jid = "ssemissing01"
@@ -1317,6 +1339,32 @@ def test_stream_sse_notify_sends_update():
     assert len(events) >= 2
     assert events[0]["status"] == "running"
     assert events[-1]["status"] == "done"
+
+
+def test_stream_sse_running_payload_can_include_cancel_request_flag():
+    """The SSE payload exposes cancel_requested while a running job awaits acknowledgement."""
+    jid = "ssecancelreq1"
+    _jobs[jid] = Job(
+        job_id=jid,
+        run_dir="runs/ssecancelreq1",
+        status="running",
+        cancel_requested=True,
+    )
+
+    with client.stream("GET", f"/stream/{jid}") as resp:
+        assert resp.status_code == 200
+        lines = []
+        for line in resp.iter_lines():
+            lines.append(line)
+            if line.startswith("data: "):
+                break
+
+    payload = json.loads(
+        next(line for line in lines if line.startswith("data: ")).removeprefix("data: ")
+    )
+    assert payload["status"] == "running"
+    assert payload["cancel_requested"] is True
+    _jobs.pop(jid, None)
 
 
 def test_json_formatter_produces_valid_json_with_run_id():

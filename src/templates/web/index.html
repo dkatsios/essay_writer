@@ -552,7 +552,7 @@
       };
       eventSource.onerror = function() {
         // EventSource auto-reconnects on transient failures.
-        // Terminal states (done/error/gone) close via handleStatusUpdate.
+        // Terminal states (done/error/cancelled/gone) close via handleStatusUpdate.
       };
     }
 
@@ -572,6 +572,14 @@
         showJobGone(
           'This job is no longer on the server (expired timeout or already cleaned up). If you already downloaded your ZIP, that is expected.'
         );
+        return;
+      }
+
+      if (
+        data.cancel_requested &&
+        !['done', 'error', 'cancelled', 'gone'].includes(data.status || '')
+      ) {
+        statusArea.innerHTML = clarificationsHistoryHtml + cancellationStatusHtml(data);
         return;
       }
 
@@ -600,6 +608,13 @@
         submitBtn.disabled = false;
         const dl = document.getElementById('download-btn');
         if (dl) dl.addEventListener('click', () => { void downloadZip(); });
+      } else if (data.status === 'cancelled') {
+        stopSSE();
+        statusArea.innerHTML =
+          clarificationsHistoryHtml +
+          '<p>Job cancelled.</p>' +
+          '<p class="hint">The worker acknowledged the cancellation request and stopped this run.</p>';
+        submitBtn.disabled = false;
       } else if (data.status === 'error') {
         stopSSE();
         showError(data.error || 'Unknown error');
@@ -1160,6 +1175,17 @@
         var pct = computeProgressPct(data);
         html += '<div class="progress-bar-container"><div class="progress-bar-fill" style="width:' + pct + '%"></div></div>';
       }
+      return html;
+    }
+
+    function cancellationStatusHtml(data) {
+      var stage = data && data.stage ? formatStage(data.stage, data) : '';
+      var label = data && data.delete_requested ? 'Stopping and removing this run' : 'Cancelling this run';
+      var html = '<div class="pipeline-status"><span class="spinner"></span> ' + esc(label);
+      if (stage) {
+        html += ' <span class="step-counter">&mdash; currently at ' + esc(stage) + '</span>';
+      }
+      html += '&hellip;</div>';
       return html;
     }
   </script>

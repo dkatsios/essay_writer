@@ -338,7 +338,7 @@ async def stream(job_id: str):
         last_payload_json = json.dumps(payload, ensure_ascii=False)
         yield f"data: {last_payload_json}\n\n"
 
-        if job.status in ("done", "error"):
+        if job.status in ("done", "error", "cancelled"):
             return
 
         while True:
@@ -365,7 +365,7 @@ async def stream(job_id: str):
                 last_payload_json = payload_json
                 yield f"data: {payload_json}\n\n"
 
-            if job.status in ("done", "error"):
+            if job.status in ("done", "error", "cancelled"):
                 return
 
     return StreamingResponse(
