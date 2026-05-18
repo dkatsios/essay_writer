@@ -7,6 +7,7 @@ from sqlalchemy import engine_from_config, pool
 
 from config.settings import load_config
 import src.run_history_store  # noqa: F401
+import src.writer_store  # noqa: F401
 from src.job_store import _metadata
 
 config = context.config

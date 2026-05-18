@@ -38,6 +38,7 @@ _runtime_summaries_table = Table(
     Column("target_words", Integer, nullable=True),
     Column("draft_words", Integer, nullable=True),
     Column("final_words", Integer, nullable=True),
+    Column("writer_id", String(32), nullable=True),
     Column("updated_at", Float, nullable=False),
 )
 
@@ -216,6 +217,7 @@ class RunHistoryStore:
         *,
         limit: int = 50,
         status: str | None = None,
+        writer_ids: list[str] | None = None,
     ) -> list[dict[str, Any]]:
         query = select(_runtime_summaries_table).order_by(
             _runtime_summaries_table.c.updated_at.desc(),
@@ -223,6 +225,8 @@ class RunHistoryStore:
         )
         if status is not None:
             query = query.where(_runtime_summaries_table.c.status == status)
+        if writer_ids is not None:
+            query = query.where(_runtime_summaries_table.c.writer_id.in_(writer_ids))
         query = query.limit(limit)
 
         with self._session() as session:

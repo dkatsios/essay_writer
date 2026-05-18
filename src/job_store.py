@@ -61,6 +61,7 @@ _jobs_table = Table(
     Column("not_before", Float, nullable=True),
     Column("cancel_requested", Boolean, nullable=False, default=False),
     Column("delete_requested", Boolean, nullable=False, default=False),
+    Column("writer_id", String(32), nullable=True),
 )
 
 
@@ -170,6 +171,7 @@ class JobStore:
             "not_before": job.not_before,
             "cancel_requested": job.cancel_requested,
             "delete_requested": job.delete_requested,
+            "writer_id": job.writer_id or None,
         }
 
     def _hydrate_job(self, row: RowMapping) -> Job:
@@ -225,6 +227,7 @@ class JobStore:
             ),
             cancel_requested=bool(row.get("cancel_requested")),
             delete_requested=bool(row.get("delete_requested")),
+            writer_id=row.get("writer_id") or "",
             _sse_event=transient.sse_event,
         )
 

@@ -410,6 +410,99 @@
       margin-right: .15rem;
     }
     .artifact-unavailable { color: var(--bad-text); font-weight: 600; }
+    /* --- Writer badge & filter --- */
+    .writer-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: .3rem;
+      font-size: .72rem;
+      font-weight: 600;
+      border-radius: 6px;
+      padding: .15rem .45rem;
+      line-height: 1.3;
+    }
+    .writer-badge .dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      flex-shrink: 0;
+    }
+    .writer-filter-group {
+      display: flex;
+      flex-wrap: wrap;
+      gap: .4rem .7rem;
+      align-items: center;
+    }
+    .writer-filter-group label {
+      display: inline-flex;
+      align-items: center;
+      gap: .3rem;
+      font-size: .82rem;
+      cursor: pointer;
+      user-select: none;
+    }
+    .writer-filter-group input[type="checkbox"] { margin: 0; }
+    /* --- Login bar (history) --- */
+    .login-bar-h {
+      display: flex;
+      align-items: center;
+      gap: .6rem;
+      padding: .5rem .9rem;
+      margin-bottom: .75rem;
+      border-radius: var(--radius);
+      border: 1px solid var(--border);
+      background: var(--surface);
+      font-size: .82rem;
+    }
+    .login-bar-h input {
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: .35rem .55rem;
+      font: inherit;
+      min-width: 9rem;
+    }
+    .login-bar-h button {
+      border: none;
+      border-radius: 6px;
+      padding: .4rem .75rem;
+      background: var(--accent);
+      color: #fff;
+      font: inherit;
+      font-weight: 600;
+      cursor: pointer;
+      font-size: .8rem;
+    }
+    .login-bar-h button:hover { background: var(--accent-hover); }
+    .login-bar-h .logout-btn { background: #64748b; }
+    .login-bar-h .logout-btn:hover { background: #475569; }
+    .login-bar-h .writer-info { font-weight: 600; }
+    /* --- Transfer section --- */
+    .transfer-section {
+      margin-top: .75rem;
+      display: flex;
+      align-items: center;
+      gap: .6rem;
+      flex-wrap: wrap;
+    }
+    .transfer-section select {
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: .4rem .6rem;
+      font: inherit;
+      font-size: .85rem;
+    }
+    .transfer-section button {
+      border: none;
+      border-radius: 8px;
+      padding: .45rem .8rem;
+      background: var(--accent);
+      color: #fff;
+      font: inherit;
+      font-size: .82rem;
+      font-weight: 600;
+      cursor: pointer;
+    }
+    .transfer-section button:hover { background: var(--accent-hover); }
     @media (max-width: 900px) {
       .layout { grid-template-columns: 1fr; }
       .toolbar-actions { margin-left: 0; }
@@ -424,6 +517,19 @@
 </head>
 <body>
   <main class="page">
+    <!-- Login bar -->
+    <div class="login-bar-h" id="h-login-bar">
+      <span id="h-login-form-area">
+        <input type="email" id="h-login-email" placeholder="Email" autocomplete="email">
+        <input type="text" id="h-login-name" placeholder="Name" autocomplete="name">
+        <button type="button" id="h-login-btn">Log in</button>
+      </span>
+      <span id="h-logged-in-area" style="display:none">
+        <span class="writer-info" id="h-writer-display"></span>
+        <button type="button" class="logout-btn" id="h-logout-btn">Log out</button>
+      </span>
+    </div>
+
     <header class="page-header">
       <div class="page-title">
         <h1>Run History</h1>
@@ -457,6 +563,12 @@
           <option value="200">200</option>
         </select>
       </div>
+      <div class="field">
+        <label>Writers</label>
+        <div class="writer-filter-group" id="writer-filter-group">
+          <span class="muted">Loading…</span>
+        </div>
+      </div>
       <div class="toolbar-actions">
         <button type="button" id="refresh-btn">Refresh</button>
         <div class="toolbar-meta" id="history-meta">Loading history…</div>
@@ -484,6 +596,7 @@
     const statusFilterEl = document.getElementById('status-filter');
     const limitFilterEl = document.getElementById('limit-filter');
     const refreshBtnEl = document.getElementById('refresh-btn');
+    const writerFilterGroupEl = document.getElementById('writer-filter-group');
 
     let selectedJobId = null;
     let scheduledRefresh = null;
@@ -498,6 +611,110 @@
       items: null,
       error: '',
     };
+
+    /* --- Writer session (history page) --- */
+    let hCurrentWriter = null;
+    let allWriters = [];
+
+    function writerHue(writerId) {
+      let hash = 0;
+      for (let i = 0; i < writerId.length; i++) {
+        hash = ((hash << 5) - hash) + writerId.charCodeAt(i);
+        hash |= 0;
+      }
+      return Math.abs(hash) % 360;
+    }
+
+    function writerColor(writerId) {
+      return `hsl(${writerHue(writerId)}, 55%, 45%)`;
+    }
+
+    function writerBgColor(writerId) {
+      return `hsl(${writerHue(writerId)}, 55%, 92%)`;
+    }
+
+    function writerBadgeHtml(writerId, writerName) {
+      if (!writerId) return '';
+      const name = escapeHtml(writerName || writerId.slice(0, 6));
+      const color = writerColor(writerId);
+      const bg = writerBgColor(writerId);
+      return `<span class="writer-badge" style="color:${color};background:${bg}"><span class="dot" style="background:${color}"></span>${name}</span>`;
+    }
+
+    function updateHistoryLoginUI() {
+      const formArea = document.getElementById('h-login-form-area');
+      const loggedArea = document.getElementById('h-logged-in-area');
+      const writerDisplay = document.getElementById('h-writer-display');
+      if (hCurrentWriter) {
+        formArea.style.display = 'none';
+        loggedArea.style.display = '';
+        writerDisplay.textContent = `${hCurrentWriter.name} (${hCurrentWriter.email})`;
+      } else {
+        formArea.style.display = '';
+        loggedArea.style.display = 'none';
+      }
+    }
+
+    async function hCheckSession() {
+      try {
+        const res = await fetch('/me');
+        if (res.ok) hCurrentWriter = await res.json();
+        else hCurrentWriter = null;
+      } catch { hCurrentWriter = null; }
+      updateHistoryLoginUI();
+    }
+
+    document.getElementById('h-login-btn').addEventListener('click', async () => {
+      const email = document.getElementById('h-login-email').value.trim();
+      const name = document.getElementById('h-login-name').value.trim();
+      if (!email) { alert('Email is required'); return; }
+      const res = await fetch('/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email, name: name || email }),
+      });
+      if (res.ok) { hCurrentWriter = await res.json(); updateHistoryLoginUI(); }
+      else { const e = await res.json().catch(() => ({})); alert(e.error || 'Login failed'); }
+    });
+
+    document.getElementById('h-logout-btn').addEventListener('click', async () => {
+      await fetch('/logout', { method: 'POST' });
+      hCurrentWriter = null;
+      updateHistoryLoginUI();
+    });
+
+    async function loadWriterFilter() {
+      try {
+        const res = await fetch('/writers');
+        if (!res.ok) return;
+        const data = await res.json();
+        allWriters = data.writers || [];
+      } catch { allWriters = []; }
+      renderWriterFilter();
+    }
+
+    function renderWriterFilter() {
+      if (!allWriters.length) {
+        writerFilterGroupEl.innerHTML = '<span class="muted">No writers</span>';
+        return;
+      }
+      writerFilterGroupEl.innerHTML = allWriters.map(w => {
+        const color = writerColor(w.id);
+        return `<label><input type="checkbox" value="${escapeHtml(w.id)}" checked><span class="dot" style="background:${color};width:8px;height:8px;border-radius:50%;display:inline-block"></span> ${escapeHtml(w.name)}</label>`;
+      }).join('');
+      for (const cb of writerFilterGroupEl.querySelectorAll('input[type="checkbox"]')) {
+        cb.addEventListener('change', () => loadHistoryList({ showLoading: false, refreshSelected: true }));
+      }
+    }
+
+    function selectedWriterIds() {
+      const checked = writerFilterGroupEl.querySelectorAll('input[type="checkbox"]:checked');
+      if (checked.length === allWriters.length) return null; // all selected = no filter
+      return Array.from(checked).map(cb => cb.value);
+    }
+
+    hCheckSession();
+    loadWriterFilter();
 
     function formatDateTime(value) {
       if (!value) return 'Unknown';
@@ -545,6 +762,12 @@
       params.set('limit', limitFilterEl.value || '50');
       if (statusFilterEl.value) {
         params.set('status', statusFilterEl.value);
+      }
+      const wids = selectedWriterIds();
+      if (wids) {
+        for (const wid of wids) {
+          params.append('writer_id', wid);
+        }
       }
       return params;
     }
@@ -628,10 +851,12 @@
         const stageMarkup = stageText
           ? `<p class="job-stage">Current: ${escapeHtml(stageText)}</p>`
           : '';
+        const badge = writerBadgeHtml(job.writer_id, job.writer_name);
         return `
           <button type="button" class="job-item${activeClass}" data-job-id="${escapeHtml(job.job_id)}">
             <div class="job-topline">
               <span class="job-id">${escapeHtml(job.job_id)}</span>
+              ${badge}
               ${statusPill(job.status)}
             </div>
             <p class="job-meta">${escapeHtml(job.provider || 'default provider')} · updated ${escapeHtml(formatDateTime(job.updated_at))}</p>
@@ -791,6 +1016,26 @@
       `;
     }
 
+    function renderTransferSection() {
+      if (!currentDetail || !hCurrentWriter) return '';
+      const writerInfo = currentDetail.writer;
+      if (!writerInfo) return '';
+      // Only the assigned writer can transfer
+      if (writerInfo.id !== hCurrentWriter.id) return '';
+      const others = allWriters.filter(w => w.id !== hCurrentWriter.id);
+      if (!others.length) return '';
+      const options = others.map(w =>
+        `<option value="${escapeHtml(w.id)}">${escapeHtml(w.name)} (${escapeHtml(w.email)})</option>`
+      ).join('');
+      return `
+        <div class="transfer-section">
+          <strong style="font-size:.82rem">Transfer to:</strong>
+          <select id="transfer-target">${options}</select>
+          <button type="button" data-action="do-transfer">Transfer</button>
+        </div>
+      `;
+    }
+
     function renderDetailPanel() {
       if (!currentDetail) {
         detailPanelEl.innerHTML = 'Select a job to inspect its summary, steps, and artifacts.';
@@ -798,6 +1043,7 @@
       }
       detailPanelEl.innerHTML = [
         renderSummary(currentDetail.summary, currentDetail.live_status),
+        renderTransferSection(),
         renderSteps(currentDetail.steps || []),
         renderArtifactsSection(),
       ].join('');
@@ -965,7 +1211,33 @@
         renderDetailPanel();
         return;
       }
+      if (action === 'do-transfer') {
+        await handleTransfer();
+        return;
+      }
       await handleJobAction(action);
+    }
+
+    async function handleTransfer() {
+      if (!selectedJobId) return;
+      const select = document.getElementById('transfer-target');
+      if (!select) return;
+      const targetId = select.value;
+      if (!targetId) return;
+      const targetWriter = allWriters.find(w => w.id === targetId);
+      if (!window.confirm(`Transfer this job to ${targetWriter?.name || targetId}?`)) return;
+      try {
+        await fetchJson(`/history/jobs/${encodeURIComponent(selectedJobId)}/transfer`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ writer_id: targetId }),
+        });
+        historyMetaEl.textContent = 'Job transferred';
+        await loadJobDetail(selectedJobId, { pushUrl: false, showLoading: false });
+        await loadHistoryList({ showLoading: false, refreshSelected: false });
+      } catch (error) {
+        historyMetaEl.textContent = error.message;
+      }
     }
 
     async function handleJobAction(action) {

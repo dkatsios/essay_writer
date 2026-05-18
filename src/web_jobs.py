@@ -98,6 +98,7 @@ class Job:
     not_before: float | None = None
     cancel_requested: bool = False
     delete_requested: bool = False
+    writer_id: str = ""
     api_key: str = ""
     _sse_event: asyncio.Event = field(default_factory=asyncio.Event)
 
@@ -126,6 +127,8 @@ def _persist_run_history_snapshot(job: Job) -> None:
         )
         if job.target_words is not None and not payload.get("target_words"):
             payload["target_words"] = job.target_words
+        if job.writer_id:
+            payload["writer_id"] = job.writer_id
         run_history.save_runtime_summary(job.job_id, **payload)
     elif job.status in ("pending", "error", "cancelled"):
         # No tracker yet — persist only lightweight status metadata so the job
@@ -135,6 +138,7 @@ def _persist_run_history_snapshot(job: Job) -> None:
             status=job.status,
             provider=job.provider,
             target_words=job.target_words,
+            writer_id=job.writer_id or None,
         )
 
 
@@ -231,6 +235,8 @@ def build_status_payload(job: Job) -> dict:
         "min_sources": job.min_sources,
         "provider": job.provider,
     }
+    if job.writer_id:
+        payload["writer_id"] = job.writer_id
     return payload
 
 

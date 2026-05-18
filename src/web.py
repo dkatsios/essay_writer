@@ -3,14 +3,16 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import logging
 import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI, Form, Query, UploadFile
+from fastapi import FastAPI, Form, Query, Request, UploadFile
 from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
+from itsdangerous import BadSignature, URLSafeSerializer
 from jinja2 import Environment, FileSystemLoader
 
 from config.settings import ModelsConfig, PROVIDER_PRESETS, load_config  # noqa: E402
@@ -19,6 +21,7 @@ from src.run_history_store import run_history  # noqa: E402
 from src.run_logging import configure_web_logging, run_id_context  # noqa: E402
 from src.runtime import parse_validation_answers  # noqa: E402
 from src.storage import create_run_storage  # noqa: E402
+from src.writer_store import Writer, writer_store  # noqa: E402
 
 logger = logging.getLogger(__name__)
 
@@ -85,6 +88,88 @@ async def _lifespan(app: FastAPI):
 
 app = FastAPI(title="Essay Writer", lifespan=_lifespan)
 
+# --- Session / cookie helpers ---
+
+_COOKIE_NAME = "writer_session"
+_COOKIE_MAX_AGE = 30 * 24 * 60 * 60  # 30 days
+
+
+def _get_signer() -> URLSafeSerializer:
+    config = load_config()
+    # Use a stable secret derived from database URL (always available) so cookies
+    # survive restarts without requiring an extra env var.
+    secret = hashlib.sha256(
+        (config.database.url + "__writer_session__").encode()
+    ).hexdigest()
+    return URLSafeSerializer(secret)
+
+
+def _current_writer(request: Request) -> Writer | None:
+    """Read the session cookie and return the logged-in Writer, or None."""
+    raw = request.cookies.get(_COOKIE_NAME)
+    if not raw:
+        return None
+    try:
+        writer_id = _get_signer().loads(raw)
+    except BadSignature:
+        return None
+    if not isinstance(writer_id, str):
+        return None
+    return writer_store.get_by_id(writer_id)
+
+
+def _set_session_cookie(response: JSONResponse, writer: Writer) -> JSONResponse:
+    token = _get_signer().dumps(writer.id)
+    response.set_cookie(
+        _COOKIE_NAME,
+        token,
+        max_age=_COOKIE_MAX_AGE,
+        httponly=True,
+        samesite="lax",
+        path="/",
+    )
+    return response
+
+
+# --- Auth endpoints ---
+
+
+@app.post("/login")
+async def login(request: Request):
+    """Log in (or auto-create) a writer by email. Returns writer JSON."""
+    body = await request.json()
+    email = (body.get("email") or "").strip()
+    name = (body.get("name") or "").strip()
+    if not email:
+        return JSONResponse({"error": "Email is required"}, status_code=400)
+    writer = writer_store.find_or_create(email, name or email)
+    response = JSONResponse(writer.to_dict())
+    return _set_session_cookie(response, writer)
+
+
+@app.post("/logout")
+async def logout():
+    """Clear the session cookie."""
+    response = JSONResponse({"ok": True})
+    response.delete_cookie(_COOKIE_NAME, path="/")
+    return response
+
+
+@app.get("/me")
+async def me(request: Request):
+    """Return the currently logged-in writer or 401."""
+    writer = _current_writer(request)
+    if writer is None:
+        return JSONResponse({"error": "Not logged in"}, status_code=401)
+    return JSONResponse(writer.to_dict())
+
+
+@app.get("/writers")
+async def list_writers():
+    """Return all active writers (for filter UI)."""
+    writers = writer_store.list_all(active_only=True)
+    return JSONResponse({"writers": [w.to_dict() for w in writers]})
+
 
 def _download_basename(job: Job) -> str:
     name = job.run_dir.rstrip("/").rsplit("/", 1)[-1].strip()
@@ -106,15 +191,29 @@ async def history_page():
 
 @app.get("/history/jobs")
 async def history_jobs(
+    request: Request,
     limit: int = Query(50, ge=1, le=200),
     status: str | None = Query(None),
+    writer_id: list[str] | None = Query(None),
 ):
     """List persisted run summaries for inspection/debugging."""
-    summaries = run_history.list_runtime_summaries(limit=limit, status=status)
+    summaries = run_history.list_runtime_summaries(
+        limit=limit, status=status, writer_ids=writer_id
+    )
     live_jobs = _jobs.refresh_many([str(summary["job_id"]) for summary in summaries])
+    # Build a writer name lookup for writer_ids present in results
+    writer_ids_in_results = {s["writer_id"] for s in summaries if s.get("writer_id")}
+    writer_names: dict[str, str] = {}
+    for wid in writer_ids_in_results:
+        w = writer_store.get_by_id(wid)
+        if w:
+            writer_names[wid] = w.name
     jobs_payload: list[dict[str, object]] = []
     for summary in summaries:
         item = dict(summary)
+        wid = item.get("writer_id")
+        if wid and wid in writer_names:
+            item["writer_name"] = writer_names[wid]
         live_job = live_jobs.get(str(summary["job_id"]))
         if live_job is not None:
             item["live_status"] = _build_status_payload(live_job)
@@ -153,6 +252,13 @@ async def history_job_detail(
     }
     if live_job is not None:
         payload["live_status"] = _build_status_payload(live_job)
+
+    # Include writer info
+    wid = (summary or {}).get("writer_id") or (live_job.writer_id if live_job else None)
+    if wid:
+        w = writer_store.get_by_id(wid)
+        if w:
+            payload["writer"] = w.to_dict()
 
     return JSONResponse(payload)
 
@@ -227,6 +333,49 @@ async def remove_history_job(job_id: str):
         return JSONResponse({"status": "deleted", "job_id": job_id})
 
 
+@app.post("/history/jobs/{job_id}/transfer")
+async def transfer_job(job_id: str, request: Request):
+    """Transfer a job to another writer. Only the assigned writer may transfer."""
+    writer = _current_writer(request)
+    if writer is None:
+        return JSONResponse({"error": "Login required"}, status_code=401)
+
+    job = _refresh_job(job_id)
+    if job is None:
+        return JSONResponse({"error": "Job not found"}, status_code=404)
+
+    if job.writer_id != writer.id:
+        return JSONResponse(
+            {"error": "Only the assigned writer can transfer this job"},
+            status_code=403,
+        )
+
+    body = await request.json()
+    target_writer_id = (body.get("writer_id") or "").strip()
+    if not target_writer_id:
+        return JSONResponse({"error": "Target writer_id is required"}, status_code=400)
+
+    target_writer = writer_store.get_by_id(target_writer_id)
+    if target_writer is None:
+        return JSONResponse({"error": "Target writer not found"}, status_code=404)
+
+    # Update job ownership
+    job.writer_id = target_writer.id
+    _save_job(job)
+
+    # Update denormalized runtime summary
+    run_history.save_runtime_summary(job_id, writer_id=target_writer.id)
+
+    logger.info("Job %s transferred from %s to %s", job_id, writer.id, target_writer.id)
+    return JSONResponse(
+        {
+            "status": "transferred",
+            "job_id": job_id,
+            "writer": target_writer.to_dict(),
+        }
+    )
+
+
 @app.get("/", response_class=HTMLResponse)
 async def index():
     """Serve the single-page form."""
@@ -236,6 +385,7 @@ async def index():
 
 @app.post("/submit")
 async def submit(
+    request: Request,
     prompt: str = Form(""),
     target_words: int | None = Form(None),
     min_sources: int | None = Form(None),
@@ -247,6 +397,12 @@ async def submit(
     sources: list[UploadFile] = [],  # noqa: B006
 ):
     """Accept form data, persist a queued job, and return immediately."""
+    writer = _current_writer(request)
+    if writer is None:
+        return JSONResponse(
+            {"error": "Login required to submit a job"}, status_code=401
+        )
+
     job_id = uuid.uuid4().hex[:12]
 
     storage = create_run_storage(job_id)
@@ -278,6 +434,7 @@ async def submit(
         ),
         provider=provider_value,
         api_key=api_key.strip(),
+        writer_id=writer.id,
     )
     _save_job(job)
 

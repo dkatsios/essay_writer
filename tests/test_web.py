@@ -471,6 +471,7 @@ def test_submit_creates_storage_and_queues_job(monkeypatch):
     monkeypatch.setattr("src.web.uuid.uuid4", lambda: _Uuid())
     monkeypatch.setattr("src.web.create_run_storage", fake_create)
 
+    client.post("/login", json={"email": "test_submit@test.com", "name": "T"})
     response = client.post("/submit", data={"prompt": "Test prompt"})
 
     assert response.status_code == 200
@@ -495,6 +496,7 @@ def test_submit_adds_pending_job_to_history_before_worker_claims_it(monkeypatch)
     monkeypatch.setattr("src.web.uuid.uuid4", lambda: _Uuid())
     monkeypatch.setattr("src.web.create_run_storage", fake_create)
 
+    client.post("/login", json={"email": "test_submit@test.com", "name": "T"})
     response = client.post(
         "/submit",
         data={"prompt": "Test prompt", "target_words": 1200, "provider": "openai"},
@@ -534,6 +536,7 @@ def test_submit_tracks_uploaded_artifacts_before_background_finishes(monkeypatch
     monkeypatch.setattr("src.web.uuid.uuid4", lambda: _Uuid())
     monkeypatch.setattr("src.web.create_run_storage", fake_create)
 
+    client.post("/login", json={"email": "test_submit@test.com", "name": "T"})
     response = client.post(
         "/submit",
         data={"prompt": "Test prompt"},

@@ -298,9 +298,67 @@
     }
     .job-session-bar button.secondary-link:hover:not(:disabled) { background: #475569; }
     .resume-hint { margin-bottom: .65rem !important; }
+    /* --- Login bar --- */
+    .login-bar {
+      display: flex;
+      align-items: center;
+      gap: .75rem;
+      padding: .65rem 1rem;
+      margin-bottom: 1rem;
+      border-radius: var(--radius);
+      border: 1px solid var(--border);
+      background: var(--surface);
+      font-size: .875rem;
+    }
+    .login-bar input {
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: .45rem .65rem;
+      font: inherit;
+      min-width: 10rem;
+    }
+    .login-bar input:focus {
+      outline: none;
+      border-color: var(--accent);
+      box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.14);
+    }
+    .login-bar button {
+      border: none;
+      border-radius: 8px;
+      padding: .5rem .9rem;
+      background: var(--accent);
+      color: #fff;
+      font: inherit;
+      font-weight: 600;
+      cursor: pointer;
+    }
+    .login-bar button:hover { background: var(--accent-hover); }
+    .login-bar .writer-info {
+      font-weight: 600;
+      color: var(--text);
+    }
+    .login-bar .logout-btn {
+      background: #64748b;
+      font-size: .8rem;
+      padding: .4rem .7rem;
+    }
+    .login-bar .logout-btn:hover { background: #475569; }
   </style>
 </head>
 <body>
+  <!-- Login bar -->
+  <div class="login-bar" id="login-bar">
+    <span id="login-form-area">
+      <input type="email" id="login-email" placeholder="Email" autocomplete="email">
+      <input type="text" id="login-name" placeholder="Name" autocomplete="name">
+      <button type="button" id="login-btn">Log in</button>
+    </span>
+    <span id="logged-in-area" style="display:none">
+      <span class="writer-info" id="writer-display"></span>
+      <button type="button" class="logout-btn" id="logout-btn">Log out</button>
+    </span>
+  </div>
+
   <header class="page-header">
     <div class="page-header-bar">
       <h1>📝 Essay Writer</h1>
@@ -383,6 +441,70 @@
     const form = document.getElementById('form');
     const statusArea = document.getElementById('status-area');
     const submitBtn = document.getElementById('submit-btn');
+
+    /* --- Writer session management --- */
+    let currentWriter = null;
+
+    function updateLoginUI() {
+      const formArea = document.getElementById('login-form-area');
+      const loggedArea = document.getElementById('logged-in-area');
+      const writerDisplay = document.getElementById('writer-display');
+      if (currentWriter) {
+        formArea.style.display = 'none';
+        loggedArea.style.display = '';
+        writerDisplay.textContent = `${currentWriter.name} (${currentWriter.email})`;
+        submitBtn.disabled = false;
+      } else {
+        formArea.style.display = '';
+        loggedArea.style.display = 'none';
+        writerDisplay.textContent = '';
+        submitBtn.disabled = true;
+      }
+    }
+
+    async function checkSession() {
+      try {
+        const res = await fetch('/me');
+        if (res.ok) {
+          currentWriter = await res.json();
+        } else {
+          currentWriter = null;
+        }
+      } catch {
+        currentWriter = null;
+      }
+      updateLoginUI();
+    }
+
+    document.getElementById('login-btn').addEventListener('click', async () => {
+      const email = document.getElementById('login-email').value.trim();
+      const name = document.getElementById('login-name').value.trim();
+      if (!email) { alert('Email is required'); return; }
+      try {
+        const res = await fetch('/login', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ email, name: name || email }),
+        });
+        if (res.ok) {
+          currentWriter = await res.json();
+          updateLoginUI();
+        } else {
+          const err = await res.json().catch(() => ({}));
+          alert(err.error || 'Login failed');
+        }
+      } catch (e) {
+        alert('Login failed: ' + e.message);
+      }
+    });
+
+    document.getElementById('logout-btn').addEventListener('click', async () => {
+      await fetch('/logout', { method: 'POST' });
+      currentWriter = null;
+      updateLoginUI();
+    });
+
+    checkSession();
 
     /* --- Provider / API key show-hide --- */
     (function initProviderToggle() {
